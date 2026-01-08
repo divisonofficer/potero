@@ -1,7 +1,9 @@
 package com.potero.server.routes
 
 import com.potero.server.di.ServiceLocator
+import com.potero.service.genai.GenAIFileResponse
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -14,7 +16,15 @@ data class ChatRequest(
     val sessionId: String? = null,
     val paperId: String? = null,
     val message: String,
-    val includeFullText: Boolean = false
+    val includeFullText: Boolean = false,
+    val files: List<ChatFileAttachment> = emptyList()
+)
+
+@Serializable
+data class ChatFileAttachment(
+    val id: String,
+    val name: String,
+    val url: String
 )
 
 @Serializable
@@ -102,8 +112,20 @@ fun Route.chatRoutes() {
                 request.message
             }
 
-            // Call LLM service
-            val llmResult = llmService.chat(prompt)
+            // Call LLM service (with files if provided)
+            val llmResult = if (request.files.isNotEmpty()) {
+                // Convert ChatFileAttachment to FileAttachment for LLM service
+                val fileAttachments = request.files.map { file ->
+                    com.potero.service.llm.FileAttachment(
+                        id = file.id,
+                        name = file.name,
+                        url = file.url
+                    )
+                }
+                llmService.chatWithFiles(prompt, fileAttachments)
+            } else {
+                llmService.chat(prompt)
+            }
 
             llmResult.fold(
                 onSuccess = { responseContent ->
@@ -216,5 +238,71 @@ fun Route.chatRoutes() {
 
             call.respond(ApiResponse(data = mapOf("deletedSessionId" to sessionId)))
         }
+
+        // POST /api/chat/upload - Upload file to GenAI for chat attachment
+        post("/upload") {
+            val genAIService = ServiceLocator.genAIFileUploadService
+
+            val multipart = call.receiveMultipart()
+
+            var fileName: String? = null
+            var fileBytes: ByteArray? = null
+            var contentType: String = "application/octet-stream"
+
+            multipart.forEachPart { part ->
+                when (part) {
+                    is PartData.FileItem -> {
+                        fileName = part.originalFileName ?: "file"
+                        contentType = part.contentType?.toString() ?: "application/octet-stream"
+                        fileBytes = part.streamProvider().readBytes()
+                    }
+                    else -> {}
+                }
+                part.dispose()
+            }
+
+            if (fileName == null || fileBytes == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<ChatUploadResponse>(
+                        success = false,
+                        error = "No file uploaded"
+                    )
+                )
+                return@post
+            }
+
+            // Upload file to GenAI using SSO token
+            val result = genAIService.uploadFile(fileName!!, fileBytes!!, contentType)
+
+            result.fold(
+                onSuccess = { response: com.potero.service.genai.GenAIFileResponse ->
+                    // Convert GenAI response to ChatFileAttachment
+                    val attachments = response.files.map { file ->
+                        ChatFileAttachment(
+                            id = file.id,
+                            name = file.name,
+                            url = genAIService.buildFileUrl(file.id)
+                        )
+                    }
+                    call.respond(ApiResponse(data = ChatUploadResponse(files = attachments)))
+                },
+                onFailure = { error: Throwable ->
+                    println("[Chat] File upload failed: ${error.message}")
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<ChatUploadResponse>(
+                            success = false,
+                            error = error.message ?: "File upload failed"
+                        )
+                    )
+                }
+            )
+        }
     }
 }
+
+@Serializable
+data class ChatUploadResponse(
+    val files: List<ChatFileAttachment>
+)

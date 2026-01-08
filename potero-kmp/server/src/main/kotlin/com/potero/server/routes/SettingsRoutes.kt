@@ -14,7 +14,11 @@ data class SettingsDto(
     val llmProvider: String = "gpt",
     val pdfStoragePath: String? = null,
     val theme: String = "system",
-    val semanticScholarApiKey: String? = null
+    val semanticScholarApiKey: String? = null,
+    // SSO Authentication for POSTECH GenAI file upload
+    val ssoConfigured: Boolean = false,
+    val ssoTokenExpiresAt: Long? = null,
+    val ssoSiteName: String = "robi-gpt-dev"
 )
 
 @Serializable
@@ -23,7 +27,11 @@ data class UpdateSettingsRequest(
     val llmProvider: String? = null,
     val pdfStoragePath: String? = null,
     val theme: String? = null,
-    val semanticScholarApiKey: String? = null
+    val semanticScholarApiKey: String? = null,
+    // SSO Authentication fields
+    val ssoAccessToken: String? = null,
+    val ssoTokenExpiry: Long? = null,
+    val ssoSiteName: String? = null
 )
 
 fun Route.settingsRoutes() {
@@ -35,6 +43,11 @@ fun Route.settingsRoutes() {
             val result = settingsRepository.getAll()
             result.fold(
                 onSuccess = { settings ->
+                    val ssoToken = settings[SettingsKeys.SSO_ACCESS_TOKEN]
+                    val ssoExpiry = settings[SettingsKeys.SSO_TOKEN_EXPIRY]?.toLongOrNull()
+                    val currentTime = System.currentTimeMillis()
+                    val ssoConfigured = ssoToken != null && (ssoExpiry == null || ssoExpiry > currentTime)
+
                     val dto = SettingsDto(
                         llmApiKey = settings[SettingsKeys.LLM_API_KEY]?.let {
                             // Mask API key for security
@@ -46,7 +59,10 @@ fun Route.settingsRoutes() {
                         semanticScholarApiKey = settings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
                             // Mask API key for security
                             if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
-                        }
+                        },
+                        ssoConfigured = ssoConfigured,
+                        ssoTokenExpiresAt = ssoExpiry,
+                        ssoSiteName = settings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev"
                     )
                     call.respond(ApiResponse(data = dto))
                 },
@@ -84,8 +100,24 @@ fun Route.settingsRoutes() {
                     settingsRepository.set(SettingsKeys.SEMANTIC_SCHOLAR_API_KEY, it)
                 }
 
+                // SSO fields
+                request.ssoAccessToken?.let {
+                    settingsRepository.set(SettingsKeys.SSO_ACCESS_TOKEN, it)
+                }
+                request.ssoTokenExpiry?.let {
+                    settingsRepository.set(SettingsKeys.SSO_TOKEN_EXPIRY, it.toString())
+                }
+                request.ssoSiteName?.let {
+                    settingsRepository.set(SettingsKeys.SSO_SITE_NAME, it)
+                }
+
                 // Return updated settings
                 val allSettings = settingsRepository.getAll().getOrDefault(emptyMap())
+                val ssoToken = allSettings[SettingsKeys.SSO_ACCESS_TOKEN]
+                val ssoExpiry = allSettings[SettingsKeys.SSO_TOKEN_EXPIRY]?.toLongOrNull()
+                val currentTime = System.currentTimeMillis()
+                val ssoConfigured = ssoToken != null && (ssoExpiry == null || ssoExpiry > currentTime)
+
                 val dto = SettingsDto(
                     llmApiKey = allSettings[SettingsKeys.LLM_API_KEY]?.let {
                         if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
@@ -95,7 +127,10 @@ fun Route.settingsRoutes() {
                     theme = allSettings[SettingsKeys.THEME] ?: "system",
                     semanticScholarApiKey = allSettings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
                         if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
-                    }
+                    },
+                    ssoConfigured = ssoConfigured,
+                    ssoTokenExpiresAt = ssoExpiry,
+                    ssoSiteName = allSettings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev"
                 )
                 call.respond(ApiResponse(data = dto))
             } catch (e: Exception) {

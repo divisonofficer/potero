@@ -144,7 +144,10 @@
 	});
 	let newApiKey = $state('');
 	let newSemanticScholarApiKey = $state('');
+	let ssoAccessToken = $state('');
+	let ssoSiteName = $state('robi-gpt-dev');
 	let isSavingSettings = $state(false);
+	let isSavingSSO = $state(false);
 
 	// Bulk reanalyze state
 	let isBulkReanalyzing = $state(false);
@@ -224,6 +227,63 @@
 			newSemanticScholarApiKey = '';
 		}
 		isSavingSettings = false;
+	}
+
+	async function saveSSO() {
+		if (!ssoAccessToken.trim()) {
+			toast.error('Please enter an SSO access token');
+			return;
+		}
+
+		isSavingSSO = true;
+		const result = await api.saveSSOToken(
+			ssoAccessToken,
+			ssoSiteName || 'robi-gpt-dev'
+		);
+
+		if (result.success && result.data) {
+			settings = result.data;
+			ssoAccessToken = '';
+			toast.success('SSO token saved successfully');
+		} else {
+			toast.error('Failed to save SSO token');
+		}
+		isSavingSSO = false;
+	}
+
+	/**
+	 * Handle SSO login flow
+	 * - In Electron: Opens modal window with auto token extraction
+	 * - In Browser: Redirects to SSO login page
+	 */
+	async function handleSSOLogin() {
+		isSavingSSO = true;
+		const result = await api.loginSSO();
+
+		if (result.success && result.accessToken) {
+			// In Electron: Token was extracted automatically
+			const expiresAt = result.expiresIn
+				? Date.now() + result.expiresIn * 1000
+				: undefined;
+
+			const saveResult = await api.saveSSOToken(
+				result.accessToken,
+				ssoSiteName || 'robi-gpt-dev',
+				expiresAt
+			);
+
+			if (saveResult.success && saveResult.data) {
+				settings = saveResult.data;
+				toast.success('SSO login successful!');
+			} else {
+				toast.error('Failed to save SSO token');
+			}
+		} else if (result.error) {
+			toast.error(`SSO login failed: ${result.error}`);
+		}
+		// If browser redirect, this code won't execute
+
+		isSavingSSO = false;
 	}
 
 	async function handleImport() {
@@ -688,12 +748,12 @@
 																onclick={(e) => {
 																	e.stopPropagation();
 																	import('$lib/stores/tabs').then(({ openTagProfile }) => {
-																		const papers = $papers.filter(p => p.subject.includes(tag));
+																		const _papers = $papers.filter(p => p.subject.includes(tag));
 																		openTagProfile({
 																			name: tag,
 																			color: '#6366f1',
-																			paperCount: papers.length,
-																			papers,
+																			paperCount: _papers.length,
+																			papers: _papers,
 																			relatedTags: []
 																		});
 																	});
@@ -712,7 +772,24 @@
 											<td class="p-3 hidden md:table-cell">
 												{#if paper.conference}
 													{@const venueInfo = formatVenue(paper.conference)}
-													<span class="rounded bg-muted px-2 py-0.5 text-xs" title={venueInfo.full ?? undefined}>{venueInfo.display}</span>
+													<button
+														class="rounded bg-muted px-2 py-0.5 text-xs hover:bg-muted/80 transition-colors"
+														title={venueInfo.full ?? undefined}
+														onclick={(e) => {
+															e.stopPropagation();
+															import('$lib/stores/tabs').then(({ openJournalProfile }) => {
+																const conferencePapers = $papers.filter(p => p.conference === paper.conference);
+																const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
+																openJournalProfile({
+																	name: venueInfo.full ?? paper.conference ?? '',
+																	abbreviation: venueInfo.display ?? null,
+																	paperCount: conferencePapers.length,
+																	papers: conferencePapers,
+																	years
+																});
+															});
+														}}
+													>{venueInfo.display}</button>
 												{:else}
 													<span class="text-muted-foreground">-</span>
 												{/if}
@@ -748,7 +825,7 @@
 						<!-- Paper grid/list -->
 						<div
 							class={$viewStyle === 'grid'
-								? 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'
+								? 'grid grid-cols-3 gap-4 md:grid-cols-4 lg:grid-cols-5'
 								: 'flex flex-col gap-3'}
 						>
 						{#each $filteredPapers as paper (paper.id)}
@@ -819,12 +896,26 @@
 											{/if}
 											{#if paper.conference}
 												{@const venueInfo = formatVenue(paper.conference)}
-												<span
-													class="rounded bg-muted px-2 py-0.5"
+												<button
+													class="rounded bg-muted px-2 py-0.5 hover:bg-muted/80 transition-colors"
 													title={venueInfo.full ?? undefined}
+													onclick={(e) => {
+														e.stopPropagation();
+														import('$lib/stores/tabs').then(({ openJournalProfile }) => {
+															const conferencePapers = $papers.filter(p => p.conference === paper.conference);
+															const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
+															openJournalProfile({
+																name: venueInfo.full ?? paper.conference ?? '',
+																abbreviation: venueInfo.display ?? null,
+																paperCount: conferencePapers.length,
+																papers: conferencePapers,
+																years
+															});
+														});
+													}}
 												>
 													{venueInfo.display}
-												</span>
+												</button>
 											{/if}
 											{#if paper.pdfUrl}
 												<span class="ml-auto text-primary">PDF</span>
@@ -835,9 +926,24 @@
 										{#if paper.subject.length > 0}
 											<div class="mt-2 flex flex-wrap gap-1">
 												{#each paper.subject.slice(0, 3) as tag}
-													<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+													<button
+														class="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20 transition-colors"
+														onclick={(e) => {
+															e.stopPropagation();
+															import('$lib/stores/tabs').then(({ openTagProfile }) => {
+																const tagPapers = $papers.filter(p => p.subject.includes(tag));
+																openTagProfile({
+																	name: tag,
+																	color: '#6366f1',
+																	paperCount: tagPapers.length,
+																	papers: tagPapers,
+																	relatedTags: []
+																});
+															});
+														}}
+													>
 														{tag}
-													</span>
+													</button>
 												{/each}
 											</div>
 										{/if}
@@ -888,7 +994,24 @@
 										{/if}
 										{#if paper.conference}
 											{@const venueInfo = formatVenue(paper.conference)}
-											<span class="rounded bg-muted px-2 py-0.5" title={venueInfo.full ?? undefined}>{venueInfo.display}</span>
+											<button
+												class="rounded bg-muted px-2 py-0.5 hover:bg-muted/80 transition-colors"
+												title={venueInfo.full ?? undefined}
+												onclick={(e) => {
+													e.stopPropagation();
+													import('$lib/stores/tabs').then(({ openJournalProfile }) => {
+														const conferencePapers = $papers.filter(p => p.conference === paper.conference);
+														const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
+														openJournalProfile({
+															name: venueInfo.full ?? paper.conference ?? '',
+															abbreviation: venueInfo.display ?? null,
+															paperCount: conferencePapers.length,
+															papers: conferencePapers,
+															years
+														});
+													});
+												}}
+											>{venueInfo.display}</button>
 										{/if}
 										{#if paper.pdfUrl}
 											<span class="text-primary">PDF</span>
@@ -1079,6 +1202,114 @@
 			</div>
 		{/each}
 
+		<!-- Tag profile tabs -->
+		{#each $tabs.filter(t => t.type === 'tag') as tab (tab.id)}
+			<div class="h-full overflow-auto p-6 {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.tag}
+					<div class="mb-6">
+						<div class="flex items-center gap-3 mb-2">
+							<Tag class="h-6 w-6 text-primary" />
+							<h1 class="text-2xl font-bold">{tab.tag.name}</h1>
+							<span class="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+								{tab.tag.paperCount} papers
+							</span>
+						</div>
+					</div>
+
+					<!-- Papers with this tag -->
+					<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+						{#each tab.tag.papers as paper (paper.id)}
+							<div
+								class="cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+								onclick={() => {
+									import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
+								}}
+							>
+								<h3 class="font-medium line-clamp-2">{paper.title}</h3>
+								<p class="mt-1 text-sm text-muted-foreground line-clamp-1">
+									{paper.authors.join(', ')}
+								</p>
+								<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+									{#if paper.year}
+										<span>{paper.year}</span>
+									{/if}
+									{#if paper.conference}
+										<span class="rounded bg-muted px-1.5 py-0.5">{paper.conference}</span>
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+
+					{#if tab.tag.papers.length === 0}
+						<div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
+							<Tag class="h-12 w-12 mb-4" />
+							<p>No papers with this tag yet</p>
+						</div>
+					{/if}
+				{/if}
+			</div>
+		{/each}
+
+		<!-- Journal/Conference profile tabs -->
+		{#each $tabs.filter(t => t.type === 'journal') as tab (tab.id)}
+			<div class="h-full overflow-auto p-6 {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.journal}
+					<div class="mb-6">
+						<div class="flex items-center gap-3 mb-2">
+							<Building2 class="h-6 w-6 text-primary" />
+							<div>
+								<h1 class="text-2xl font-bold">{tab.journal.name}</h1>
+								{#if tab.journal.abbreviation && tab.journal.abbreviation !== tab.journal.name}
+									<p class="text-sm text-muted-foreground">{tab.journal.abbreviation}</p>
+								{/if}
+							</div>
+							<span class="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+								{tab.journal.paperCount} papers
+							</span>
+						</div>
+						{#if tab.journal.years.length > 0}
+							<p class="text-sm text-muted-foreground">
+								Years: {Math.min(...tab.journal.years)} - {Math.max(...tab.journal.years)}
+							</p>
+						{/if}
+					</div>
+
+					<!-- Papers from this venue -->
+					<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+						{#each tab.journal.papers as paper (paper.id)}
+							<div
+								class="cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+								onclick={() => {
+									import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
+								}}
+							>
+								<h3 class="font-medium line-clamp-2">{paper.title}</h3>
+								<p class="mt-1 text-sm text-muted-foreground line-clamp-1">
+									{paper.authors.join(', ')}
+								</p>
+								<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+									{#if paper.year}
+										<span>{paper.year}</span>
+									{/if}
+									{#if paper.citations}
+										<span>{paper.citations} citations</span>
+									{/if}
+								</div>
+							</div>
+						{/each}
+					</div>
+
+					{#if tab.journal.papers.length === 0}
+						<div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
+							<Building2 class="h-12 w-12 mb-4" />
+							<p>No papers from this venue yet</p>
+						</div>
+					{/if}
+				{/if}
+			</div>
+		{/each}
+
 		<!-- Settings tab -->
 		<div class="h-full overflow-auto p-6 {$activeTab?.type === 'settings' ? '' : 'hidden'}">
 			<h1 class="mb-6 text-2xl font-bold">Settings</h1>
@@ -1165,6 +1396,85 @@
 					>
 						{isSavingSettings ? 'Saving...' : 'Save Settings'}
 					</button>
+				</div>
+			</section>
+
+			<!-- POSTECH SSO Authentication -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">POSTECH SSO Authentication</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<p class="text-sm text-muted-foreground">
+						Authenticate with POSTECH SSO to enable file attachments in chat. Files will be uploaded directly to the GenAI server for better analysis.
+					</p>
+
+					{#if settings.ssoConfigured}
+						<div class="flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/20 dark:text-green-400">
+							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M5 13l4 4L19 7" />
+							</svg>
+							<span>SSO Connected</span>
+							{#if settings.ssoTokenExpiresAt}
+								<span class="text-xs opacity-75">
+									(expires {new Date(settings.ssoTokenExpiresAt).toLocaleDateString()})
+								</span>
+							{/if}
+						</div>
+					{:else}
+						<div class="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+							</svg>
+							<span>Not connected - file attachments disabled</span>
+						</div>
+					{/if}
+
+					<div>
+						<label for="sso-token" class="mb-2 block text-sm font-medium">Access Token</label>
+						<input
+							id="sso-token"
+							type="password"
+							placeholder="Paste your SSO access token here"
+							bind:value={ssoAccessToken}
+							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+						/>
+						<p class="mt-1 text-xs text-muted-foreground">
+							Get token from GenAI callback URL after SSO login (look for <code class="rounded bg-muted px-1">access_token=...</code> in the URL fragment)
+						</p>
+					</div>
+
+					<div>
+						<label for="sso-site-name" class="mb-2 block text-sm font-medium">Site Name</label>
+						<input
+							id="sso-site-name"
+							type="text"
+							placeholder="robi-gpt-dev"
+							bind:value={ssoSiteName}
+							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+						/>
+						<p class="mt-1 text-xs text-muted-foreground">
+							Site name for file upload API (default: robi-gpt-dev)
+						</p>
+					</div>
+
+					<div class="flex gap-2">
+						<button
+							class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+							disabled={isSavingSSO}
+							onclick={handleSSOLogin}
+						>
+							{isSavingSSO ? 'Logging in...' : 'Login with SSO'}
+						</button>
+						<button
+							class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+							disabled={isSavingSSO || !ssoAccessToken.trim()}
+							onclick={saveSSO}
+						>
+							{isSavingSSO ? 'Saving...' : 'Save Token Manually'}
+						</button>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						<strong>Tip:</strong> "Login with SSO" will open a popup window and automatically extract the token (Electron) or redirect to SSO login (browser).
+					</p>
 				</div>
 			</section>
 

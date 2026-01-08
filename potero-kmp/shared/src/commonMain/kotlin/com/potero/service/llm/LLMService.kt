@@ -58,6 +58,12 @@ interface LLMService {
     suspend fun chat(message: String): Result<String>
 
     /**
+     * Send a chat message with file attachments
+     * Requires SSO authentication for file upload
+     */
+    suspend fun chatWithFiles(message: String, files: List<FileAttachment>): Result<String>
+
+    /**
      * Send a chat message with streaming response
      * (If supported by the API)
      */

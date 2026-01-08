@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { api } from '$lib/api/client';
+	import { api, type ChatFileAttachment } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
 	import type { Paper } from '$lib/types';
+	import { Paperclip, X } from 'lucide-svelte';
 
 	interface Props {
 		paper: Paper | null;
@@ -22,6 +23,11 @@
 	let sessionId = $state<string | null>(null);
 	let messagesContainer: HTMLDivElement | null = $state(null);
 
+	// File attachment state
+	let attachedFiles: ChatFileAttachment[] = $state([]);
+	let isUploading = $state(false);
+	let fileInput: HTMLInputElement;
+
 	// Auto-scroll to bottom when new messages arrive
 	$effect(() => {
 		if (messages.length > 0 && messagesContainer) {
@@ -34,8 +40,32 @@
 		if (paper) {
 			messages = [];
 			sessionId = null;
+			attachedFiles = [];
 		}
 	});
+
+	async function handleFileSelect(event: Event) {
+		const target = event.target as HTMLInputElement;
+		const files = target.files;
+		if (!files || files.length === 0) return;
+
+		isUploading = true;
+		for (const file of Array.from(files)) {
+			const result = await api.uploadChatFile(file);
+			if (result.success && result.data) {
+				attachedFiles = [...attachedFiles, ...result.data.files];
+				toast.success(`Attached ${file.name}`);
+			} else {
+				toast.error(`Failed to upload ${file.name}`);
+			}
+		}
+		isUploading = false;
+		target.value = '';
+	}
+
+	function removeFile(index: number) {
+		attachedFiles = attachedFiles.filter((_, i) => i !== index);
+	}
 
 	async function sendMessage() {
 		const text = inputText.trim();
@@ -65,10 +95,18 @@
 		];
 
 		try {
-			const result = await api.sendMessage(text, paper?.id, sessionId ?? undefined);
+			const result = await api.sendMessage(
+				text,
+				paper?.id,
+				sessionId ?? undefined,
+				attachedFiles.length > 0 ? attachedFiles : undefined
+			);
 
 			if (result.success && result.data) {
 				sessionId = result.data.sessionId;
+
+				// Clear attached files after successful send
+				attachedFiles = [];
 
 				// Replace loading message with actual response
 				messages = messages.map((msg) =>
@@ -220,7 +258,54 @@
 
 	<!-- Input -->
 	<div class="border-t p-3">
+		<!-- Hidden file input -->
+		<input
+			type="file"
+			multiple
+			bind:this={fileInput}
+			onchange={handleFileSelect}
+			class="hidden"
+		/>
+
+		<!-- Attached files preview -->
+		{#if attachedFiles.length > 0}
+			<div class="mb-2 flex flex-wrap gap-1">
+				{#each attachedFiles as file, i}
+					<span class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-1 text-xs text-primary">
+						<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9l-7-7z" />
+							<path d="M13 2v7h7" />
+						</svg>
+						{file.name}
+						<button
+							onclick={() => removeFile(i)}
+							class="ml-0.5 rounded hover:bg-primary/20"
+							title="Remove file"
+						>
+							<X class="h-3 w-3" />
+						</button>
+					</span>
+				{/each}
+			</div>
+		{/if}
+
 		<div class="flex gap-2">
+			<!-- Attach button -->
+			<button
+				class="shrink-0 rounded-md border p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+				onclick={() => fileInput?.click()}
+				disabled={isUploading || isLoading}
+				title="Attach file"
+			>
+				{#if isUploading}
+					<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+					</svg>
+				{:else}
+					<Paperclip class="h-4 w-4" />
+				{/if}
+			</button>
+
 			<textarea
 				placeholder="Ask a question..."
 				bind:value={inputText}

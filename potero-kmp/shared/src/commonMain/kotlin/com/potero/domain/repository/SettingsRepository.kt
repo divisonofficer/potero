@@ -39,4 +39,9 @@ object SettingsKeys {
     const val PDF_STORAGE_PATH = "storage.pdfPath"
     const val THEME = "ui.theme"
     const val SEMANTIC_SCHOLAR_API_KEY = "semanticScholar.apiKey"
+
+    // SSO Authentication keys for POSTECH GenAI file upload
+    const val SSO_ACCESS_TOKEN = "sso.accessToken"
+    const val SSO_TOKEN_EXPIRY = "sso.tokenExpiry"
+    const val SSO_SITE_NAME = "sso.siteName"
 }

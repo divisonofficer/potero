@@ -98,13 +98,36 @@ class ApiClient {
 	async sendMessage(
 		message: string,
 		paperId?: string,
-		sessionId?: string
+		sessionId?: string,
+		files?: ChatFileAttachment[]
 	): Promise<ApiResponse<{ messageId: string; sessionId: string; content: string }>> {
 		return this.request('POST', '/chat/message', {
 			message,
 			paperId,
-			sessionId
+			sessionId,
+			files: files ?? []
 		});
+	}
+
+	async uploadChatFile(file: File): Promise<ApiResponse<{ files: ChatFileAttachment[] }>> {
+		const formData = new FormData();
+		formData.append('file', file);
+
+		try {
+			const response = await fetch(`${this.directUploadUrl}/chat/upload`, {
+				method: 'POST',
+				body: formData
+			});
+			return (await response.json()) as ApiResponse<{ files: ChatFileAttachment[] }>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'UPLOAD_ERROR',
+					message: error instanceof Error ? error.message : 'File upload failed'
+				}
+			};
+		}
 	}
 
 	async getChatSessions(paperId?: string): Promise<ApiResponse<ChatSession[]>> {
@@ -132,6 +155,48 @@ class ApiClient {
 
 	async updateSettings(settings: Partial<Settings>): Promise<ApiResponse<Settings>> {
 		return this.request('PUT', '/settings', settings);
+	}
+
+	async saveSSOToken(
+		accessToken: string,
+		siteName?: string,
+		expiresAt?: number
+	): Promise<ApiResponse<Settings>> {
+		return this.request('PUT', '/settings', {
+			ssoAccessToken: accessToken,
+			ssoSiteName: siteName,
+			ssoTokenExpiry: expiresAt
+		});
+	}
+
+	/**
+	 * Trigger SSO login flow
+	 * - In Electron: Opens modal window with auto token extraction
+	 * - In Browser: Redirects to SSO login page (manual token entry)
+	 */
+	async loginSSO(): Promise<{
+		success: boolean;
+		accessToken?: string;
+		expiresIn?: number | null;
+		error?: string;
+	}> {
+		// Check if running in Electron
+		if (typeof window !== 'undefined' && window.electronAPI?.isElectron) {
+			try {
+				const result = await window.electronAPI.loginSSO();
+				return result;
+			} catch (error) {
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : 'SSO login failed'
+				};
+			}
+		} else {
+			// Browser environment: redirect to SSO login
+			// Callback will be handled by /auth/callback route
+			window.location.href = 'https://genai.postech.ac.kr/auth/login';
+			return { success: true }; // Will redirect, so this won't be reached
+		}
 	}
 
 	// File Upload - uses direct backend URL to avoid proxy issues with large files
@@ -526,6 +591,16 @@ export interface Settings {
 	pdfStoragePath: string | null;
 	theme: string;
 	semanticScholarApiKey: string | null;
+	// SSO Authentication for POSTECH GenAI file upload
+	ssoConfigured: boolean;
+	ssoTokenExpiresAt: number | null;
+	ssoSiteName: string;
+}
+
+export interface ChatFileAttachment {
+	id: string;
+	name: string;
+	url: string;
 }
 
 export interface UploadResponse {

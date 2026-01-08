@@ -29,6 +29,7 @@ import com.potero.service.metadata.SemanticScholarResolver
 import com.potero.service.search.SearchCacheService
 import com.potero.service.search.UnifiedSearchService
 import com.potero.service.tag.TagService
+import com.potero.service.genai.GenAIFileUploadService
 import io.ktor.client.HttpClient
 
 /**
@@ -152,6 +153,20 @@ object ServiceLocator {
 
     val pdfThumbnailExtractor: PdfThumbnailExtractor by lazy {
         PdfThumbnailExtractor()
+    }
+
+    val genAIFileUploadService: com.potero.service.genai.GenAIFileUploadService by lazy {
+        com.potero.service.genai.GenAIFileUploadService(
+            httpClient = httpClient,
+            tokenProvider = {
+                // Dynamically load SSO token from settings database
+                settingsRepository.get(SettingsKeys.SSO_ACCESS_TOKEN).getOrNull()
+            },
+            siteNameProvider = {
+                // Load site name from settings, default to "robi-gpt-dev"
+                settingsRepository.get(SettingsKeys.SSO_SITE_NAME).getOrNull() ?: "robi-gpt-dev"
+            }
+        )
     }
 
     /**

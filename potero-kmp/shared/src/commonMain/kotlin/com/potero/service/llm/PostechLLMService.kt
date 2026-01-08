@@ -102,6 +102,74 @@ class PostechLLMService(
         responseMessage
     }
 
+    override suspend fun chatWithFiles(message: String, files: List<FileAttachment>): Result<String> = runCatching {
+        // Get API key and provider dynamically from settings
+        val apiKey = apiKeyProvider()
+        val currentProvider = _providerOverride ?: providerProvider()
+
+        // Debug logging
+        println("[LLM] ========================================")
+        println("[LLM] Provider: ${currentProvider.name}")
+        println("[LLM] Endpoint: ${currentProvider.endpoint}")
+        println("[LLM] API Key configured: ${apiKey.isNotBlank()}")
+        println("[LLM] Message length: ${message.length} chars")
+        println("[LLM] Files attached: ${files.size}")
+        files.forEachIndexed { idx, file ->
+            println("[LLM]   File $idx: ${file.name} (${file.id})")
+        }
+        println("[LLM] ----------------------------------------")
+
+        if (apiKey.isBlank()) {
+            println("[LLM] ERROR: API key is empty!")
+            throw LLMException("LLM API key is not configured. Please set it in Settings.")
+        }
+
+        val requestBody = LLMRequest(
+            message = message,
+            stream = false,
+            files = files  // Now actually passing files!
+        )
+
+        println("[LLM] Sending request with ${files.size} file(s) to: ${currentProvider.endpoint}")
+
+        val response = httpClient.post(currentProvider.endpoint) {
+            contentType(ContentType.Application.Json)
+            header("X-Api-Key", apiKey)
+            setBody(requestBody)
+        }
+
+        println("[LLM] Response status: ${response.status}")
+
+        // Get raw response body first for debugging
+        val rawBody = response.body<String>()
+        println("[LLM] Raw response: ${rawBody.take(500)}...")
+
+        if (!response.status.isSuccess()) {
+            println("[LLM] ERROR Response: $rawBody")
+            throw LLMException("API request failed with status: ${response.status}. Response: $rawBody")
+        }
+
+        // Parse the response
+        val responseMessage = try {
+            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            val llmResponse = json.decodeFromString<LLMResponse>(rawBody)
+            llmResponse.getContent()
+        } catch (e: Exception) {
+            println("[LLM] Failed to parse as LLMResponse: ${e.message}")
+            // Fallback: use raw body
+            rawBody.trim().removeSurrounding("\"")
+        }
+
+        if (responseMessage.isBlank()) {
+            throw LLMException("LLM returned empty response")
+        }
+
+        println("[LLM] Response message length: ${responseMessage.length} chars")
+        println("[LLM] ========================================")
+
+        responseMessage
+    }
+
     override fun chatStream(message: String): Flow<String> = flow {
         // For MVP, streaming might not be fully supported
         // Fall back to regular response
