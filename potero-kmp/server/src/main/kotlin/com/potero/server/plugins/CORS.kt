@@ -12,8 +12,11 @@ fun Application.configureCORS() {
         allowHost("127.0.0.1:5173")
         allowHost("127.0.0.1:3000")
 
-        // Allow credentials for authentication
-        allowCredentials = true
+        // Allow any host for development (WSL IP access from Windows)
+        anyHost()
+
+        // Note: allowCredentials cannot be used with anyHost()
+        // allowCredentials = true
 
         // Allow common headers
         allowHeader(HttpHeaders.ContentType)

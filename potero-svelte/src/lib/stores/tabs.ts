@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { Tab, Paper } from '$lib/types';
+import type { Tab, Paper, PdfViewerState } from '$lib/types';
 
 // Initial tab
 const initialTabs: Tab[] = [{ id: 'home', type: 'home', title: 'Library' }];
@@ -81,4 +81,36 @@ export function openSettings() {
 
 export function goHome() {
 	activeTabId.set('home');
+}
+
+/**
+ * Update the viewer state for a tab (scroll position, zoom, etc.)
+ */
+export function updateViewerState(tabId: string, state: Partial<PdfViewerState>) {
+	tabs.update(($tabs) => {
+		return $tabs.map((tab) => {
+			if (tab.id === tabId && tab.type === 'viewer') {
+				return {
+					...tab,
+					viewerState: {
+						...tab.viewerState,
+						...state
+					} as PdfViewerState
+				};
+			}
+			return tab;
+		});
+	});
+}
+
+/**
+ * Get the viewer state for a tab
+ */
+export function getViewerState(tabId: string): PdfViewerState | undefined {
+	let state: PdfViewerState | undefined;
+	tabs.subscribe(($tabs) => {
+		const tab = $tabs.find((t) => t.id === tabId);
+		state = tab?.viewerState;
+	})();
+	return state;
 }

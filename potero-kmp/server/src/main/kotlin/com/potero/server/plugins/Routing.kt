@@ -18,6 +18,8 @@ fun Application.configureRouting() {
             chatRoutes()
             tagRoutes()
             searchRoutes()
+            settingsRoutes()
+            uploadRoutes()
         }
     }
 }

@@ -28,14 +28,20 @@ object DriverFactory {
      */
     private fun createDriver(dbPath: String?): SqlDriver {
         val path = dbPath ?: getDefaultDbPath()
+        val dbFile = File(path)
 
         // Ensure directory exists
-        File(path).parentFile?.mkdirs()
+        dbFile.parentFile?.mkdirs()
+
+        // Check if database already exists
+        val dbExists = dbFile.exists()
 
         val driver = JdbcSqliteDriver("jdbc:sqlite:$path")
 
-        // Create schema if needed
-        PoteroDatabase.Schema.create(driver)
+        // Create schema only if database doesn't exist
+        if (!dbExists) {
+            PoteroDatabase.Schema.create(driver)
+        }
 
         return driver
     }

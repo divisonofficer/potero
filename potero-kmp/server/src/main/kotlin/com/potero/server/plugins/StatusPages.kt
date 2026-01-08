@@ -46,12 +46,13 @@ fun Application.configureStatusPages() {
 
         exception<Exception> { call, cause ->
             call.application.log.error("Unhandled exception", cause)
+            cause.printStackTrace()
             call.respond(
                 HttpStatusCode.InternalServerError,
                 ErrorResponse(
                     error = ErrorDetail(
                         code = "INTERNAL_ERROR",
-                        message = "An unexpected error occurred"
+                        message = cause.message ?: "An unexpected error occurred"
                     )
                 )
             )

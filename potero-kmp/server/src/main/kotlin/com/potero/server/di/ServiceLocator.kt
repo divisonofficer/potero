@@ -1,9 +1,11 @@
 package com.potero.server.di
 
 import com.potero.data.repository.PaperRepositoryImpl
+import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
 import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.SettingsRepository
 import com.potero.domain.repository.TagRepository
 import com.potero.network.HttpClientFactory
 import com.potero.service.llm.LLMConfig
@@ -38,6 +40,10 @@ object ServiceLocator {
 
     val tagRepository: TagRepository by lazy {
         TagRepositoryImpl(database)
+    }
+
+    val settingsRepository: SettingsRepository by lazy {
+        SettingsRepositoryImpl(database)
     }
 
     val doiResolver: MetadataResolver by lazy {

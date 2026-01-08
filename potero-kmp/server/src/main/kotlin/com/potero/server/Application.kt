@@ -2,6 +2,7 @@ package com.potero.server
 
 import com.potero.server.di.ServiceLocator
 import com.potero.server.plugins.*
+import io.ktor.http.content.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*

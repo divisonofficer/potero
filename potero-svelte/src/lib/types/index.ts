@@ -72,6 +72,16 @@ export interface Tab {
 	type: 'home' | 'viewer' | 'settings';
 	title: string;
 	paper?: Paper;
+	// PDF viewer state (persisted across tab switches)
+	viewerState?: PdfViewerState;
+}
+
+export interface PdfViewerState {
+	scrollTop: number;
+	scrollLeft: number;
+	currentPage: number;
+	scale: number;
+	viewMode: 'single' | 'scroll';
 }
 
 export type ViewStyle = 'grid' | 'list' | 'compact';
