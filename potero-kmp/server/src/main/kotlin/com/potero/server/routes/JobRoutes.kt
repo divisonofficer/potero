@@ -99,6 +99,15 @@ fun Route.jobRoutes() {
             }
         }
 
+        // GET /api/jobs/paper/{paperId} - Get jobs for a specific paper
+        get("/paper/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val jobs = jobQueue.getAllJobs().filter { it.paperId == paperId }
+            call.respond(ApiResponse(data = jobs.map { it.toDto() }))
+        }
+
         // DELETE /api/jobs/completed - Clear completed jobs
         delete("/completed") {
             jobQueue.clearCompletedJobs()

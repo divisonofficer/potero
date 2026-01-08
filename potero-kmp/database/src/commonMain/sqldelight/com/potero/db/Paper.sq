@@ -2,6 +2,7 @@ CREATE TABLE Paper (
     id TEXT NOT NULL PRIMARY KEY,
     title TEXT NOT NULL,
     abstract TEXT,
+    abstract_korean TEXT,
     doi TEXT UNIQUE,
     arxiv_id TEXT,
     url TEXT,
@@ -46,13 +47,14 @@ selectByYearRange:
 SELECT * FROM Paper WHERE year >= ? AND year <= ?;
 
 insert:
-INSERT INTO Paper(id, title, abstract, doi, arxiv_id, url, year, conference, citations_count, pdf_path, thumbnail_path, has_blog_view, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO Paper(id, title, abstract, abstract_korean, doi, arxiv_id, url, year, conference, citations_count, pdf_path, thumbnail_path, has_blog_view, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 update:
 UPDATE Paper SET
     title = ?,
     abstract = ?,
+    abstract_korean = ?,
     doi = ?,
     arxiv_id = ?,
     url = ?,

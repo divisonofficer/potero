@@ -31,10 +31,30 @@
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
 	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
+	import AuthorModal from '$lib/components/AuthorModal.svelte';
+	import AuthorProfileView from '$lib/components/AuthorProfileView.svelte';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
+
+	// Author modal state
+	let selectedAuthorName = $state<string | null>(null);
+	let selectedAuthorPapers = $state<Paper[]>([]);
+
+	function openAuthorModal(authorName: string) {
+		// Find all papers by this author
+		const authorPapers = $papers.filter((p) =>
+			p.authors.some((a) => a.toLowerCase() === authorName.toLowerCase())
+		);
+		selectedAuthorName = authorName;
+		selectedAuthorPapers = authorPapers;
+	}
+
+	function closeAuthorModal() {
+		selectedAuthorName = null;
+		selectedAuthorPapers = [];
+	}
 
 	// Dynamic import for PDF viewer (client-side only due to pdfjs)
 	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
@@ -494,68 +514,124 @@
 					>
 						{#each $filteredPapers as paper (paper.id)}
 							{#if $viewStyle === 'grid'}
-								<!-- Grid view card -->
+								<!-- Grid view card with thumbnail -->
 								<div
-									class="group relative cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+									class="group relative cursor-pointer rounded-lg border bg-card overflow-hidden transition-shadow hover:shadow-md"
 									onclick={() => {
 										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
 									}}
 								>
-									<!-- Delete button (appears on hover) -->
-									<button
-										class="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-										onclick={(e) => {
-											e.stopPropagation();
-											paperToDelete = paper;
-										}}
-										title="Delete paper"
-									>
-										<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-										</svg>
-									</button>
-									<h3 class="mb-2 line-clamp-2 pr-6 font-semibold">{paper.title}</h3>
-									<p class="mb-2 text-sm text-muted-foreground">
-										{paper.authors.slice(0, 3).join(', ')}
-										{paper.authors.length > 3 ? ` +${paper.authors.length - 3}` : ''}
-									</p>
-									<div class="flex items-center gap-2 text-xs text-muted-foreground">
-										{#if paper.year}
-											<span>{paper.year}</span>
-										{/if}
-										{#if paper.conference}
-											{@const venueInfo = formatVenue(paper.conference)}
-											<span
-												class="rounded bg-muted px-2 py-0.5"
-												title={venueInfo.full ?? undefined}
-											>
-												{venueInfo.display}
-											</span>
-										{/if}
-										{#if paper.pdfUrl}
-											<span class="ml-auto text-primary">PDF</span>
-										{:else}
-											<span class="ml-auto">{paper.citations} citations</span>
-										{/if}
-									</div>
-									{#if paper.subject.length > 0}
-										<div class="mt-2 flex flex-wrap gap-1">
-											{#each paper.subject.slice(0, 3) as tag}
-												<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
-													{tag}
-												</span>
-											{/each}
+									<!-- Thumbnail -->
+									{#if paper.thumbnailUrl}
+										<div class="relative h-32 w-full bg-muted overflow-hidden">
+											<img
+												src={api.getThumbnailUrl(paper.id)}
+												alt=""
+												class="h-full w-full object-cover"
+												onerror={(e) => {
+													const target = e.currentTarget as HTMLImageElement;
+													target.style.display = 'none';
+												}}
+											/>
+										</div>
+									{:else if paper.pdfUrl}
+										<!-- Placeholder for papers with PDF but no thumbnail yet -->
+										<div class="relative h-32 w-full bg-gradient-to-br from-neutral-100 to-neutral-200 dark:from-neutral-800 dark:to-neutral-700 flex items-center justify-center">
+											<svg class="h-12 w-12 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+												<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+											</svg>
 										</div>
 									{/if}
+									<!-- Content -->
+									<div class="p-4">
+										<!-- Delete button (appears on hover) -->
+										<button
+											class="absolute right-2 top-2 rounded p-1 text-muted-foreground bg-background/80 opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+											onclick={(e) => {
+												e.stopPropagation();
+												paperToDelete = paper;
+											}}
+											title="Delete paper"
+										>
+											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+											</svg>
+										</button>
+										<h3 class="mb-2 line-clamp-2 pr-6 font-semibold">{paper.title}</h3>
+										<p class="mb-2 text-sm text-muted-foreground">
+											{#each paper.authors.slice(0, 3) as author, i}
+												<button
+													class="hover:text-primary hover:underline"
+													onclick={(e) => {
+														e.stopPropagation();
+														openAuthorModal(author);
+													}}
+												>
+													{author}
+												</button>{#if i < Math.min(paper.authors.length, 3) - 1}, {/if}
+											{/each}
+											{#if paper.authors.length > 3}
+												<span> +{paper.authors.length - 3}</span>
+											{/if}
+										</p>
+										<div class="flex items-center gap-2 text-xs text-muted-foreground">
+											{#if paper.year}
+												<span>{paper.year}</span>
+											{/if}
+											{#if paper.conference}
+												{@const venueInfo = formatVenue(paper.conference)}
+												<span
+													class="rounded bg-muted px-2 py-0.5"
+													title={venueInfo.full ?? undefined}
+												>
+													{venueInfo.display}
+												</span>
+											{/if}
+											{#if paper.pdfUrl}
+												<span class="ml-auto text-primary">PDF</span>
+											{:else}
+												<span class="ml-auto">{paper.citations} citations</span>
+											{/if}
+										</div>
+										{#if paper.subject.length > 0}
+											<div class="mt-2 flex flex-wrap gap-1">
+												{#each paper.subject.slice(0, 3) as tag}
+													<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+														{tag}
+													</span>
+												{/each}
+											</div>
+										{/if}
+									</div>
 								</div>
 							{:else if $viewStyle === 'list'}
-								<!-- List view -->
+								<!-- List view with small thumbnail -->
 								<div
-									class="group flex cursor-pointer items-center gap-4 rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+									class="group flex cursor-pointer items-center gap-4 rounded-lg border bg-card p-3 transition-shadow hover:shadow-md"
 									onclick={() => {
 										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
 									}}
 								>
+									<!-- Small thumbnail -->
+									<div class="shrink-0 h-16 w-12 rounded overflow-hidden bg-muted">
+										{#if paper.thumbnailUrl}
+											<img
+												src={api.getThumbnailUrl(paper.id)}
+												alt=""
+												class="h-full w-full object-cover"
+												onerror={(e) => {
+													const target = e.currentTarget as HTMLImageElement;
+													target.style.display = 'none';
+												}}
+											/>
+										{:else}
+											<div class="h-full w-full flex items-center justify-center bg-gradient-to-br from-neutral-100 to-neutral-200 dark:from-neutral-800 dark:to-neutral-700">
+												<svg class="h-6 w-6 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+													<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+												</svg>
+											</div>
+										{/if}
+									</div>
 									<div class="flex-1 min-w-0">
 										<h3 class="font-semibold truncate">{paper.title}</h3>
 										<p class="mt-1 text-sm text-muted-foreground truncate">
@@ -716,14 +792,11 @@
 								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
 								onclick={async () => {
 									if (!tab.paper?.id) return;
-									toast.info('Re-analyzing PDF...');
-									const result = await reanalyzePaper(tab.paper.id);
-									if (result?.autoResolved) {
-										toast.success('Metadata updated successfully');
-									} else if (result?.needsUserConfirmation) {
-										toast.info('Please select the correct paper from search results');
-									} else if (result) {
-										toast.warning('No metadata found');
+									const jobId = await reanalyzePaper(tab.paper.id);
+									if (jobId) {
+										toast.info('Re-analysis started. Check progress in the task panel.');
+									} else {
+										toast.error('Failed to start re-analysis');
 									}
 								}}
 								title="Re-analyze PDF to update metadata"
@@ -799,6 +872,15 @@
 					<div class="w-80 border-l">
 						<ChatPanel paper={tab.paper ?? null} />
 					</div>
+				{/if}
+			</div>
+		{/each}
+
+		<!-- Author profile tabs -->
+		{#each $tabs.filter(t => t.type === 'author') as tab (tab.id)}
+			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.author}
+					<AuthorProfileView author={tab.author} />
 				{/if}
 			</div>
 		{/each}
@@ -992,4 +1074,13 @@
 			<LLMLogPanel />
 		</div>
 	</div>
+{/if}
+
+<!-- Author Modal -->
+{#if selectedAuthorName}
+	<AuthorModal
+		authorName={selectedAuthorName}
+		papers={selectedAuthorPapers}
+		onClose={closeAuthorModal}
+	/>
 {/if}

@@ -8,6 +8,7 @@ data class Paper(
     val id: String,
     val title: String,
     val abstract: String? = null,
+    val abstractKorean: String? = null,
     val doi: String? = null,
     val arxivId: String? = null,
     val url: String? = null,

@@ -116,6 +116,7 @@ class PaperRepositoryImpl(
                 id = paper.id,
                 title = paper.title,
                 abstract_ = paper.abstract,
+                abstract_korean = paper.abstractKorean,
                 doi = paper.doi,
                 arxiv_id = paper.arxivId,
                 url = paper.url,
@@ -155,6 +156,7 @@ class PaperRepositoryImpl(
             paperQueries.update(
                 title = paper.title,
                 abstract_ = paper.abstract,
+                abstract_korean = paper.abstractKorean,
                 doi = paper.doi,
                 arxiv_id = paper.arxivId,
                 url = paper.url,
@@ -316,6 +318,7 @@ class PaperRepositoryImpl(
             id = this.id,
             title = this.title,
             abstract = this.abstract_,
+            abstractKorean = this.abstract_korean,
             doi = this.doi,
             arxivId = this.arxiv_id,
             url = this.url,

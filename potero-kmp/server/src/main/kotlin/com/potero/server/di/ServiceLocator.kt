@@ -14,7 +14,9 @@ import com.potero.service.llm.LLMLogger
 import com.potero.service.llm.LLMProvider
 import com.potero.service.llm.LLMService
 import com.potero.service.llm.MetadataCleaningService
+import com.potero.service.llm.PdfLLMAnalysisService
 import com.potero.service.llm.PostechLLMService
+import com.potero.service.pdf.PdfThumbnailExtractor
 import com.potero.service.metadata.ArxivResolver
 import com.potero.service.metadata.DOIResolver
 import com.potero.service.metadata.GoogleScholarScraper
@@ -121,6 +123,17 @@ object ServiceLocator {
             googleScholarScraper = googleScholarScraper,
             cacheService = searchCacheService
         )
+    }
+
+    val pdfLLMAnalysisService: PdfLLMAnalysisService by lazy {
+        PdfLLMAnalysisService(
+            llmService = llmService,
+            llmLogger = llmLogger
+        )
+    }
+
+    val pdfThumbnailExtractor: PdfThumbnailExtractor by lazy {
+        PdfThumbnailExtractor()
     }
 
     /**

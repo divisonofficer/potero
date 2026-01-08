@@ -28,10 +28,12 @@ enum class JobStatus {
  */
 enum class JobType {
     PDF_ANALYSIS,
+    PDF_REANALYSIS,
     AUTO_TAGGING,
     METADATA_LOOKUP,
     TAG_MERGE,
-    BULK_IMPORT
+    BULK_IMPORT,
+    THUMBNAIL_GENERATION
 }
 
 /**

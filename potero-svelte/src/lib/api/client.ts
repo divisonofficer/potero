@@ -210,13 +210,13 @@ class ApiClient {
 		}
 	}
 
-	// Re-analyze an existing paper's PDF
-	async reanalyzePaper(paperId: string): Promise<ApiResponse<UploadAnalysisResponse>> {
+	// Re-analyze an existing paper's PDF (async job)
+	async reanalyzePaper(paperId: string): Promise<ApiResponse<ReanalyzeJobResponse>> {
 		try {
 			const response = await fetch(`${this.directUploadUrl}/upload/reanalyze/${paperId}`, {
 				method: 'POST'
 			});
-			return (await response.json()) as ApiResponse<UploadAnalysisResponse>;
+			return (await response.json()) as ApiResponse<ReanalyzeJobResponse>;
 		} catch (error) {
 			return {
 				success: false,
@@ -226,6 +226,29 @@ class ApiClient {
 				}
 			};
 		}
+	}
+
+	// Analyze paper with LLM (extract title, abstract, Korean translation, thumbnail)
+	async analyzePaperWithLLM(paperId: string): Promise<ApiResponse<LLMAnalysisResponse>> {
+		try {
+			const response = await fetch(`${this.directUploadUrl}/upload/analyze/${paperId}`, {
+				method: 'POST'
+			});
+			return (await response.json()) as ApiResponse<LLMAnalysisResponse>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'ANALYZE_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to analyze paper with LLM'
+				}
+			};
+		}
+	}
+
+	// Get thumbnail URL for a paper
+	getThumbnailUrl(paperId: string): string {
+		return `${this.directUploadUrl}/upload/thumbnail/${paperId}`;
 	}
 
 	// Auto-tag a paper using LLM (async - returns job ID immediately)
@@ -325,9 +348,79 @@ class ApiClient {
 	async clearLLMLogs(): Promise<ApiResponse<{ cleared: boolean }>> {
 		return this.request('DELETE', '/llm/logs');
 	}
+
+	// Jobs API - Background task management
+	async getJobs(includeCompleted: boolean = true): Promise<ApiResponse<JobDto[]>> {
+		return this.request('GET', `/jobs?includeCompleted=${includeCompleted}`);
+	}
+
+	async getActiveJobs(): Promise<ApiResponse<JobDto[]>> {
+		return this.request('GET', '/jobs/active');
+	}
+
+	async getJob(jobId: string): Promise<ApiResponse<JobDto>> {
+		return this.request('GET', `/jobs/${jobId}`);
+	}
+
+	async getJobsForPaper(paperId: string): Promise<ApiResponse<JobDto[]>> {
+		return this.request('GET', `/jobs/paper/${paperId}`);
+	}
+
+	async cancelJob(jobId: string): Promise<ApiResponse<{ cancelled: boolean; jobId: string }>> {
+		return this.request('POST', `/jobs/${jobId}/cancel`);
+	}
+
+	async clearCompletedJobs(): Promise<ApiResponse<{ cleared: boolean }>> {
+		return this.request('DELETE', '/jobs/completed');
+	}
+
+	// Authors API - Semantic Scholar integration
+	async searchAuthors(query: string): Promise<ApiResponse<AuthorSearchResult[]>> {
+		return this.request('GET', `/authors/search?q=${encodeURIComponent(query)}`);
+	}
+
+	async lookupAuthor(name: string, affiliation?: string): Promise<ApiResponse<AuthorProfileResponse>> {
+		const params = new URLSearchParams({ name });
+		if (affiliation) params.append('affiliation', affiliation);
+		return this.request('GET', `/authors/lookup?${params.toString()}`);
+	}
+
+	async getAuthorById(authorId: string): Promise<ApiResponse<AuthorProfileResponse>> {
+		return this.request('GET', `/authors/${authorId}`);
+	}
 }
 
 // Types
+
+/**
+ * Author search result from Semantic Scholar
+ */
+export interface AuthorSearchResult {
+	id: string;
+	name: string;
+	affiliations: string[];
+	paperCount: number | null;
+	citationCount: number | null;
+	hIndex: number | null;
+}
+
+/**
+ * Detailed author profile with external links
+ */
+export interface AuthorProfileResponse {
+	name: string;
+	affiliations: string[];
+	paperCount: number;
+	citationCount: number;
+	hIndex: number | null;
+	i10Index: number | null;
+	homepage: string | null;
+	orcid: string | null;
+	semanticScholarId: string | null;
+	googleScholarUrl: string | null;
+	dblpUrl: string | null;
+	semanticScholarUrl: string | null;
+}
 export interface Settings {
 	llmApiKey: string | null;
 	llmProvider: string;
@@ -421,6 +514,47 @@ export interface TagSuggestion {
 }
 
 /**
+ * Response from LLM-based PDF analysis
+ */
+export interface LLMAnalysisResponse {
+	paperId: string;
+	title: string | null;
+	authors: string[];
+	abstract: string | null;
+	abstractKorean: string | null;
+	thumbnailPath: string | null;
+}
+
+/**
+ * Response when starting an auto-tag job
+ */
+export interface AutoTagJobResponse {
+	jobId: string;
+	paperId: string;
+	status: string;
+}
+
+/**
+ * Response from async re-analyze job submission
+ */
+export interface ReanalyzeJobResponse {
+	jobId: string;
+	paperId: string;
+	message: string;
+}
+
+/**
+ * Status of an auto-tag job
+ */
+export interface AutoTagJobStatus {
+	jobId: string;
+	paperId: string;
+	status: string; // 'processing' | 'completed' | 'failed'
+	result: AutoTagResponse | null;
+	error: string | null;
+}
+
+/**
  * Response from auto-tagging a paper
  */
 export interface AutoTagResponse {
@@ -493,6 +627,24 @@ export interface LLMStatus {
 	configured: boolean;
 	provider: string;
 	endpoint: string;
+}
+
+/**
+ * Background job DTO
+ */
+export interface JobDto {
+	id: string;
+	type: string; // 'PDF_ANALYSIS' | 'AUTO_TAGGING' | 'METADATA_LOOKUP' | 'TAG_MERGE' | 'BULK_IMPORT'
+	title: string;
+	description: string;
+	status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+	progress: number; // 0-100
+	progressMessage: string;
+	createdAt: string;
+	startedAt: string | null;
+	completedAt: string | null;
+	error: string | null;
+	paperId: string | null;
 }
 
 export const api = new ApiClient();

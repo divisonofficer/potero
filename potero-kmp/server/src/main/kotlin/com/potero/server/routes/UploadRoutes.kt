@@ -4,6 +4,8 @@ import com.potero.domain.model.Author
 import com.potero.domain.model.Paper
 import com.potero.domain.repository.SettingsKeys
 import com.potero.server.di.ServiceLocator
+import com.potero.service.job.GlobalJobQueue
+import com.potero.service.job.JobType
 import com.potero.service.metadata.SearchResult
 import com.potero.service.pdf.PdfAnalyzer
 import io.ktor.http.*
@@ -13,6 +15,8 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
@@ -52,6 +56,7 @@ data class ResolvedMetadataDto(
     val title: String,
     val authors: List<String>,
     val abstract: String? = null,
+    val abstractKorean: String? = null,
     val doi: String? = null,
     val arxivId: String? = null,
     val year: Int? = null,
@@ -69,11 +74,35 @@ data class ConfirmMetadataRequest(
     val title: String,
     val authors: List<String> = emptyList(),
     val abstract: String? = null,
+    val abstractKorean: String? = null,
     val doi: String? = null,
     val arxivId: String? = null,
     val year: Int? = null,
     val venue: String? = null,
     val citationsCount: Int? = null
+)
+
+/**
+ * Response for async re-analyze job submission
+ */
+@Serializable
+data class ReanalyzeJobResponse(
+    val jobId: String,
+    val paperId: String,
+    val message: String
+)
+
+/**
+ * Result data stored in job after re-analysis completes
+ */
+@Serializable
+data class ReanalyzeResult(
+    val paperId: String,
+    val autoResolved: Boolean,
+    val detectedDoi: String? = null,
+    val detectedArxivId: String? = null,
+    val searchResultCount: Int = 0,
+    val needsUserConfirmation: Boolean = false
 )
 
 fun Route.uploadRoutes() {
@@ -395,7 +424,7 @@ fun Route.uploadRoutes() {
             )
         }
 
-        // POST /api/upload/reanalyze/{paperId} - Re-analyze an existing paper's PDF
+        // POST /api/upload/reanalyze/{paperId} - Re-analyze an existing paper's PDF (async background job)
         post("/reanalyze/{paperId}") {
             val paperId = call.parameters["paperId"]
                 ?: throw IllegalArgumentException("Missing paper ID")
@@ -405,7 +434,7 @@ fun Route.uploadRoutes() {
             if (existingPaper == null) {
                 call.respond(
                     HttpStatusCode.NotFound,
-                    ApiResponse<UploadAnalysisResponse>(
+                    ApiResponse<ReanalyzeJobResponse>(
                         success = false,
                         error = "Paper not found: $paperId"
                     )
@@ -418,7 +447,7 @@ fun Route.uploadRoutes() {
             if (pdfPath.isNullOrBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    ApiResponse<UploadAnalysisResponse>(
+                    ApiResponse<ReanalyzeJobResponse>(
                         success = false,
                         error = "Paper does not have a PDF file"
                     )
@@ -430,7 +459,7 @@ fun Route.uploadRoutes() {
             if (!pdfFile.exists()) {
                 call.respond(
                     HttpStatusCode.NotFound,
-                    ApiResponse<UploadAnalysisResponse>(
+                    ApiResponse<ReanalyzeJobResponse>(
                         success = false,
                         error = "PDF file not found at path: $pdfPath"
                     )
@@ -438,28 +467,34 @@ fun Route.uploadRoutes() {
                 return@post
             }
 
-            // Re-analyze the PDF
-            var detectedDoi: String? = null
-            var detectedArxivId: String? = null
-            var pdfMetadataTitle: String? = null
-            var pdfMetadataAuthor: String? = null
-            var autoResolved = false
-            var resolvedMetadata: ResolvedMetadataDto? = null
-            var searchResults: List<SearchResult> = emptyList()
+            // Submit async job
+            val jobQueue = GlobalJobQueue.instance
+            val job = jobQueue.submitJob(
+                type = JobType.PDF_REANALYSIS,
+                title = "Re-analyzing: ${existingPaper.title.take(50)}...",
+                description = "Re-analyzing PDF metadata and searching for external references",
+                paperId = paperId
+            ) { ctx ->
+                ctx.updateProgress(10, "Analyzing PDF structure...")
 
-            try {
                 // Step 1: Analyze PDF
                 val analyzer = PdfAnalyzer(pdfFile.absolutePath)
                 val analysis = analyzer.analyze()
 
-                pdfMetadataTitle = analysis.metadata.title ?: analysis.extractedTitle
-                pdfMetadataAuthor = analysis.metadata.author ?: analysis.extractedAuthors.joinToString(", ")
-                detectedDoi = analysis.detectedDoi
-                detectedArxivId = analysis.detectedArxivId
+                val pdfMetadataTitle = analysis.metadata.title ?: analysis.extractedTitle
+                val pdfMetadataAuthor = analysis.metadata.author ?: analysis.extractedAuthors.joinToString(", ")
+                val detectedDoi = analysis.detectedDoi
+                val detectedArxivId = analysis.detectedArxivId
+
+                ctx.updateProgress(30, "Looking up metadata from external sources...")
 
                 // Step 2: Try to resolve metadata from identifiers
+                var autoResolved = false
+                var resolvedMetadata: ResolvedMetadataDto? = null
+
                 val doi = detectedDoi
                 if (doi != null) {
+                    ctx.updateProgress(40, "Resolving DOI: $doi")
                     val doiResult = doiResolver.resolve(doi).getOrNull()
                     if (doiResult != null) {
                         autoResolved = true
@@ -479,6 +514,7 @@ fun Route.uploadRoutes() {
 
                 val arxivId = detectedArxivId
                 if (!autoResolved && arxivId != null) {
+                    ctx.updateProgress(50, "Resolving arXiv ID: $arxivId")
                     val arxivResult = arxivResolver.resolve(arxivId).getOrNull()
                     if (arxivResult != null) {
                         autoResolved = true
@@ -497,7 +533,9 @@ fun Route.uploadRoutes() {
                 }
 
                 // Step 3: If no identifier found, search by title
+                var searchResults: List<SearchResult> = emptyList()
                 if (!autoResolved) {
+                    ctx.updateProgress(60, "Searching Semantic Scholar...")
                     val searchTitle = analysis.bestTitle ?: existingPaper.title
                     try {
                         searchResults = semanticScholarResolver.search(searchTitle, limit = 5)
@@ -506,84 +544,78 @@ fun Route.uploadRoutes() {
                         // Search failed, continue without results
                     }
                 }
-            } catch (e: Exception) {
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    ApiResponse<UploadAnalysisResponse>(
-                        success = false,
-                        error = "Failed to analyze PDF: ${e.message}"
-                    )
-                )
-                return@post
-            }
 
-            // Update paper with best available metadata
-            val metadata = resolvedMetadata
-            if (autoResolved && metadata != null) {
-                // Auto-resolved: use external API metadata
-                val updatedPaper = existingPaper.copy(
-                    title = metadata.title,
-                    authors = metadata.authors.mapIndexed { index, name ->
-                        Author(id = UUID.randomUUID().toString(), name = name, order = index)
-                    },
-                    abstract = metadata.abstract,
-                    doi = metadata.doi ?: detectedDoi,
-                    arxivId = metadata.arxivId ?: detectedArxivId,
-                    year = metadata.year,
-                    conference = metadata.venue,
-                    citationsCount = metadata.citationsCount ?: 0,
-                    updatedAt = Clock.System.now()
-                )
-                paperRepository.update(updatedPaper)
-            } else {
-                // Not auto-resolved: update with extracted PDF data if available
-                val extractedTitle = pdfMetadataTitle
-                val extractedAuthor = pdfMetadataAuthor
+                ctx.updateProgress(80, "Updating paper metadata...")
 
-                if (!extractedTitle.isNullOrBlank() || !extractedAuthor.isNullOrBlank()) {
-                    val extractedAuthors = if (!extractedAuthor.isNullOrBlank()) {
-                        extractedAuthor.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
-                            .filter { it.isNotBlank() }
-                            .mapIndexed { index, name ->
-                                Author(id = UUID.randomUUID().toString(), name = name.trim(), order = index)
-                            }
-                    } else {
-                        existingPaper.authors
-                    }
+                // Get fresh copy of paper (might have been updated)
+                val currentPaper = paperRepository.getById(paperId).getOrNull() ?: existingPaper
 
-                    val updatedPaper = existingPaper.copy(
-                        title = extractedTitle?.takeIf { it.isNotBlank() } ?: existingPaper.title,
-                        authors = extractedAuthors.ifEmpty { existingPaper.authors },
-                        doi = detectedDoi ?: existingPaper.doi,
-                        arxivId = detectedArxivId ?: existingPaper.arxivId,
+                // Update paper with best available metadata
+                val metadata = resolvedMetadata
+                if (autoResolved && metadata != null) {
+                    // Auto-resolved: use external API metadata
+                    val updatedPaper = currentPaper.copy(
+                        title = metadata.title,
+                        authors = metadata.authors.mapIndexed { index, name ->
+                            Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                        },
+                        abstract = metadata.abstract,
+                        doi = metadata.doi ?: detectedDoi,
+                        arxivId = metadata.arxivId ?: detectedArxivId,
+                        year = metadata.year,
+                        conference = metadata.venue,
+                        citationsCount = metadata.citationsCount ?: 0,
                         updatedAt = Clock.System.now()
                     )
                     paperRepository.update(updatedPaper)
-                }
-            }
+                } else {
+                    // Not auto-resolved: update with extracted PDF data if available
+                    val extractedTitle = pdfMetadataTitle
+                    val extractedAuthor = pdfMetadataAuthor
 
-            // Determine the final title to return in response
-            val finalTitle = when {
-                autoResolved && metadata != null -> metadata.title
-                !pdfMetadataTitle.isNullOrBlank() -> pdfMetadataTitle!!
-                else -> existingPaper.title
+                    if (!extractedTitle.isNullOrBlank() || !extractedAuthor.isNullOrBlank()) {
+                        val extractedAuthors = if (!extractedAuthor.isNullOrBlank()) {
+                            extractedAuthor.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+                                .filter { it.isNotBlank() }
+                                .mapIndexed { index, name ->
+                                    Author(id = UUID.randomUUID().toString(), name = name.trim(), order = index)
+                                }
+                        } else {
+                            currentPaper.authors
+                        }
+
+                        val updatedPaper = currentPaper.copy(
+                            title = extractedTitle?.takeIf { it.isNotBlank() } ?: currentPaper.title,
+                            authors = extractedAuthors.ifEmpty { currentPaper.authors },
+                            doi = detectedDoi ?: currentPaper.doi,
+                            arxivId = detectedArxivId ?: currentPaper.arxivId,
+                            updatedAt = Clock.System.now()
+                        )
+                        paperRepository.update(updatedPaper)
+                    }
+                }
+
+                ctx.updateProgress(100, "Re-analysis complete")
+
+                // Return result as JSON
+                val result = ReanalyzeResult(
+                    paperId = paperId,
+                    autoResolved = autoResolved,
+                    detectedDoi = detectedDoi,
+                    detectedArxivId = detectedArxivId,
+                    searchResultCount = searchResults.size,
+                    needsUserConfirmation = !autoResolved && searchResults.isNotEmpty()
+                )
+                Json.encodeToString(result)
             }
 
             call.respond(
+                HttpStatusCode.Accepted,
                 ApiResponse(
-                    data = UploadAnalysisResponse(
-                        paperId = existingPaper.id,
-                        fileName = pdfFile.name,
-                        filePath = pdfPath,
-                        title = finalTitle,
-                        detectedDoi = detectedDoi,
-                        detectedArxivId = detectedArxivId,
-                        pdfMetadataTitle = pdfMetadataTitle,
-                        pdfMetadataAuthor = pdfMetadataAuthor,
-                        autoResolved = autoResolved,
-                        resolvedMetadata = resolvedMetadata,
-                        searchResults = searchResults,
-                        needsUserConfirmation = !autoResolved && searchResults.isNotEmpty()
+                    data = ReanalyzeJobResponse(
+                        jobId = job.id,
+                        paperId = paperId,
+                        message = "Re-analysis job submitted"
                     )
                 )
             )
@@ -683,5 +715,197 @@ fun Route.uploadRoutes() {
                 }
             )
         }
+
+        // POST /api/upload/analyze/{paperId} - Analyze paper PDF with LLM (extract title, abstract, Korean translation)
+        post("/analyze/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val pdfLLMAnalysisService = ServiceLocator.pdfLLMAnalysisService
+            val pdfThumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+
+            // Get paper
+            val paper = paperRepository.getById(paperId).getOrNull()
+            if (paper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<LLMAnalysisResponse>(
+                        success = false,
+                        error = "Paper not found: $paperId"
+                    )
+                )
+                return@post
+            }
+
+            val pdfPath = paper.pdfPath
+            if (pdfPath.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<LLMAnalysisResponse>(
+                        success = false,
+                        error = "Paper does not have a PDF file"
+                    )
+                )
+                return@post
+            }
+
+            val pdfFile = File(pdfPath)
+            if (!pdfFile.exists()) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<LLMAnalysisResponse>(
+                        success = false,
+                        error = "PDF file not found"
+                    )
+                )
+                return@post
+            }
+
+            try {
+                // Extract text from PDF for LLM analysis
+                val analyzer = PdfAnalyzer(pdfPath)
+                val pdfText = analyzer.extractFirstPagesText(maxPages = 3)
+
+                // Analyze with LLM
+                val analysisResult = pdfLLMAnalysisService.analyzePdf(
+                    pdfText = pdfText,
+                    rawTitle = paper.title,
+                    paperId = paperId
+                )
+
+                // Extract thumbnail
+                val thumbnailDir = File(pdfFile.parentFile, "thumbnails")
+                thumbnailDir.mkdirs()
+                val thumbnailPath = File(thumbnailDir, "${paperId}.png").absolutePath
+                val extractedThumbnail = pdfThumbnailExtractor.extractThumbnail(pdfPath, thumbnailPath)
+
+                if (analysisResult.isSuccess) {
+                    val analysis = analysisResult.getOrThrow()
+                    // Update paper with LLM analysis results
+                    val updatedPaper = paper.copy(
+                        title = analysis.title ?: paper.title,
+                        abstract = analysis.abstract ?: paper.abstract,
+                        abstractKorean = analysis.abstractKorean ?: paper.abstractKorean,
+                        thumbnailPath = extractedThumbnail ?: paper.thumbnailPath,
+                        authors = if (analysis.authors.isNotEmpty()) {
+                            analysis.authors.mapIndexed { index: Int, name: String ->
+                                Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                            }
+                        } else {
+                            paper.authors
+                        },
+                        updatedAt = Clock.System.now()
+                    )
+
+                    paperRepository.update(updatedPaper)
+
+                    call.respond(
+                        ApiResponse(
+                            data = LLMAnalysisResponse(
+                                paperId = paperId,
+                                title = analysis.title,
+                                authors = analysis.authors,
+                                abstract = analysis.abstract,
+                                abstractKorean = analysis.abstractKorean,
+                                thumbnailPath = extractedThumbnail
+                            )
+                        )
+                    )
+                } else {
+                    val error = analysisResult.exceptionOrNull()
+                    // Even if LLM fails, we might have a thumbnail
+                    if (extractedThumbnail != null) {
+                        val updatedPaper = paper.copy(
+                            thumbnailPath = extractedThumbnail,
+                            updatedAt = Clock.System.now()
+                        )
+                        paperRepository.update(updatedPaper)
+                    }
+
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<LLMAnalysisResponse>(
+                            success = false,
+                            error = "LLM analysis failed: ${error?.message}"
+                        )
+                    )
+                }
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<LLMAnalysisResponse>(
+                        success = false,
+                        error = "Analysis failed: ${e.message}"
+                    )
+                )
+            }
+        }
+
+        // GET /api/upload/thumbnail/{paperId} - Get or generate thumbnail for a paper
+        get("/thumbnail/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val pdfThumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+
+            val paper = paperRepository.getById(paperId).getOrNull()
+            if (paper == null) {
+                call.respond(HttpStatusCode.NotFound, "Paper not found")
+                return@get
+            }
+
+            // If thumbnail already exists, serve it
+            val existingThumbnail = paper.thumbnailPath
+            if (!existingThumbnail.isNullOrBlank()) {
+                val thumbnailFile = File(existingThumbnail)
+                if (thumbnailFile.exists()) {
+                    call.respondFile(thumbnailFile)
+                    return@get
+                }
+            }
+
+            // Generate thumbnail on the fly
+            val pdfPath = paper.pdfPath
+            if (pdfPath.isNullOrBlank()) {
+                call.respond(HttpStatusCode.NotFound, "Paper has no PDF")
+                return@get
+            }
+
+            val pdfFile = File(pdfPath)
+            if (!pdfFile.exists()) {
+                call.respond(HttpStatusCode.NotFound, "PDF file not found")
+                return@get
+            }
+
+            // Generate and save thumbnail
+            val thumbnailDir = File(pdfFile.parentFile, "thumbnails")
+            thumbnailDir.mkdirs()
+            val thumbnailPath = File(thumbnailDir, "${paperId}.png").absolutePath
+
+            val generatedPath: String? = pdfThumbnailExtractor.extractThumbnail(pdfPath, thumbnailPath)
+            if (generatedPath != null) {
+                // Update paper with thumbnail path
+                val updatedPaper = paper.copy(
+                    thumbnailPath = generatedPath,
+                    updatedAt = Clock.System.now()
+                )
+                paperRepository.update(updatedPaper)
+
+                val thumbnailFile = java.io.File(generatedPath)
+                call.respondFile(thumbnailFile)
+            } else {
+                call.respond(HttpStatusCode.InternalServerError, "Failed to generate thumbnail")
+            }
+        }
     }
 }
+
+@Serializable
+data class LLMAnalysisResponse(
+    val paperId: String,
+    val title: String? = null,
+    val authors: List<String> = emptyList(),
+    val abstract: String? = null,
+    val abstractKorean: String? = null,
+    val thumbnailPath: String? = null
+)

@@ -7,6 +7,7 @@ import {
 	type AutoTagResponse,
 	type TagSuggestion
 } from '$lib/api/client';
+import { triggerJobRefresh } from '$lib/stores/jobs';
 
 // Core state
 export const papers = writable<Paper[]>([]);
@@ -257,6 +258,7 @@ export async function deletePaper(id: string): Promise<boolean> {
 /**
  * Upload a PDF file and create a new paper
  * Returns the analysis response which may contain search results for user confirmation
+ * Automatically starts auto-tagging in the background after successful upload
  */
 export async function uploadPdf(
 	file: File,
@@ -283,6 +285,21 @@ export async function uploadPdf(
 		// Reload papers to get the new entry
 		await loadPapers();
 		isLoading.set(false);
+
+		// Auto-tag the paper in background (fire and forget)
+		// This will show progress in JobStatusPanel
+		api.autoTagPaper(analysisResult.paperId).then(async (tagResult) => {
+			// Trigger immediate job panel refresh
+			triggerJobRefresh();
+			if (tagResult.success) {
+				// Reload tags and papers after auto-tagging completes
+				await loadTags();
+				await loadPapers();
+			}
+		});
+		// Also trigger refresh immediately when the request starts
+		triggerJobRefresh();
+
 		return analysisResult;
 	} else {
 		error.set(result.error?.message ?? 'Failed to upload PDF');
@@ -301,6 +318,7 @@ export function clearPendingUploadAnalysis() {
 /**
  * Upload multiple PDF files
  * Returns number of successful uploads and any pending analysis for user confirmation
+ * Automatically starts auto-tagging for each uploaded paper in the background
  */
 export async function uploadPdfs(files: FileList | File[]): Promise<{
 	successCount: number;
@@ -312,6 +330,7 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
 	let successCount = 0;
 	let lastError: string | null = null;
 	const pendingAnalyses: PendingUploadAnalysis[] = [];
+	const uploadedPaperIds: string[] = [];
 
 	const pdfFiles = Array.from(files).filter(
 		(f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
@@ -326,6 +345,7 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
 			console.log('Upload result:', result);
 			if (result.success && result.data) {
 				successCount++;
+				uploadedPaperIds.push(result.data.paperId);
 				// Collect pending analyses for later display
 				if (result.data.needsUserConfirmation && result.data.searchResults.length > 0) {
 					pendingAnalyses.push({
@@ -359,6 +379,24 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
 	}
 
 	isLoading.set(false);
+
+	// Auto-tag all uploaded papers in background (fire and forget)
+	// Each will show as a separate job in JobStatusPanel
+	for (const paperId of uploadedPaperIds) {
+		api.autoTagPaper(paperId).then(async (tagResult) => {
+			triggerJobRefresh();
+			if (tagResult.success) {
+				// Reload tags and papers after each auto-tagging completes
+				await loadTags();
+				await loadPapers();
+			}
+		});
+	}
+	// Trigger refresh immediately when jobs start
+	if (uploadedPaperIds.length > 0) {
+		triggerJobRefresh();
+	}
+
 	return { successCount, pendingAnalyses };
 }
 
@@ -370,35 +408,20 @@ export async function initializeLibrary() {
 }
 
 /**
- * Re-analyze an existing paper's PDF to update metadata
- * Returns the analysis response which may contain search results for user confirmation
+ * Re-analyze an existing paper's PDF to update metadata (async background job)
+ * Returns the job ID - progress can be tracked via JobStatusPanel
  */
-export async function reanalyzePaper(paperId: string): Promise<UploadAnalysisResponse | null> {
-	isLoading.set(true);
+export async function reanalyzePaper(paperId: string): Promise<string | null> {
 	error.set(null);
 
 	const result = await api.reanalyzePaper(paperId);
 
 	if (result.success && result.data) {
-		const analysisResult = result.data;
-
-		// If there are search results that need user confirmation, store them
-		if (analysisResult.needsUserConfirmation && analysisResult.searchResults.length > 0) {
-			pendingUploadAnalysis.set({
-				paperId: analysisResult.paperId,
-				searchQuery: analysisResult.pdfMetadataTitle || analysisResult.title,
-				searchResults: analysisResult.searchResults
-			});
-		}
-
-		// Always reload papers to get updated data (title, authors extracted from PDF)
-		await loadPapers();
-
-		isLoading.set(false);
-		return analysisResult;
+		// Trigger job panel refresh to show the new job
+		triggerJobRefresh();
+		return result.data.jobId;
 	} else {
-		error.set(result.error?.message ?? 'Failed to re-analyze paper');
-		isLoading.set(false);
+		error.set(result.error?.message ?? 'Failed to start re-analysis');
 		return null;
 	}
 }

@@ -21,9 +21,13 @@ class SemanticScholarResolver(
         private const val BASE_URL = "https://api.semanticscholar.org/graph/v1"
         private const val SEARCH_URL = "$BASE_URL/paper/search"
         private const val PAPER_URL = "$BASE_URL/paper"
+        private const val AUTHOR_URL = "$BASE_URL/author"
+        private const val AUTHOR_SEARCH_URL = "$AUTHOR_URL/search"
 
         // Fields to request from API
         private const val PAPER_FIELDS = "paperId,title,authors,year,venue,citationCount,abstract,externalIds,openAccessPdf,publicationDate"
+        private const val AUTHOR_FIELDS = "authorId,name,affiliations,paperCount,citationCount,hIndex,homepage,externalIds"
+        private const val AUTHOR_PAPERS_FIELDS = "paperId,title,year,venue,citationCount"
     }
 
     override fun canResolve(identifier: String): Boolean = identifier.isNotBlank()
@@ -130,6 +134,112 @@ class SemanticScholarResolver(
 
         return response.body<SemanticScholarPaper>()
     }
+
+    // ==================== Author API ====================
+
+    /**
+     * Search for authors by name
+     * Returns a list of matching authors with their details
+     */
+    suspend fun searchAuthors(query: String, limit: Int = 10): List<SemanticScholarAuthorDetail> {
+        var lastException: Exception? = null
+        var delayMs = 1000L
+
+        repeat(3) { attempt ->
+            try {
+                val response = httpClient.get(AUTHOR_SEARCH_URL) {
+                    parameter("query", query)
+                    parameter("limit", limit)
+                    parameter("fields", AUTHOR_FIELDS)
+                }
+
+                if (response.status.value == 429) {
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2
+                    return@repeat
+                }
+
+                if (!response.status.isSuccess()) {
+                    throw MetadataResolutionException(
+                        "Semantic Scholar Author API error: ${response.status}",
+                        query
+                    )
+                }
+
+                val searchResponse = response.body<SemanticScholarAuthorSearchResponse>()
+                return searchResponse.data
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < 2) {
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2
+                }
+            }
+        }
+
+        throw lastException ?: MetadataResolutionException("Author search failed after retries", query)
+    }
+
+    /**
+     * Get author by Semantic Scholar author ID
+     * Includes their recent papers
+     */
+    suspend fun getAuthorById(authorId: String, includePapers: Boolean = true): SemanticScholarAuthorDetail? {
+        val fields = if (includePapers) {
+            "$AUTHOR_FIELDS,papers.$AUTHOR_PAPERS_FIELDS"
+        } else {
+            AUTHOR_FIELDS
+        }
+
+        var lastException: Exception? = null
+        var delayMs = 1000L
+
+        repeat(3) { attempt ->
+            try {
+                val response = httpClient.get("$AUTHOR_URL/$authorId") {
+                    parameter("fields", fields)
+                }
+
+                if (response.status.value == 429) {
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2
+                    return@repeat
+                }
+
+                if (!response.status.isSuccess()) {
+                    return null
+                }
+
+                return response.body<SemanticScholarAuthorDetail>()
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < 2) {
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2
+                }
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Find best matching author for a given name
+     * Optionally filter by affiliation hint
+     */
+    suspend fun findAuthor(name: String, affiliationHint: String? = null): SemanticScholarAuthorDetail? {
+        val results = searchAuthors(name, limit = 5)
+        if (results.isEmpty()) return null
+
+        // If no affiliation hint, return first result
+        if (affiliationHint == null) return results.first()
+
+        // Try to match by affiliation
+        val affiliationLower = affiliationHint.lowercase()
+        return results.find { author ->
+            author.affiliations.any { it.lowercase().contains(affiliationLower) }
+        } ?: results.first()
+    }
 }
 
 /**
@@ -198,6 +308,37 @@ data class SemanticScholarPaper(
 data class SemanticScholarAuthor(
     val authorId: String? = null,
     val name: String
+)
+
+/**
+ * Detailed author information from Semantic Scholar Author API
+ */
+@Serializable
+data class SemanticScholarAuthorDetail(
+    val authorId: String,
+    val name: String,
+    val affiliations: List<String> = emptyList(),
+    val paperCount: Int? = null,
+    val citationCount: Int? = null,
+    val hIndex: Int? = null,
+    val homepage: String? = null,
+    val externalIds: SemanticScholarAuthorExternalIds? = null,
+    val papers: List<SemanticScholarPaper> = emptyList()
+)
+
+@Serializable
+data class SemanticScholarAuthorExternalIds(
+    @SerialName("ORCID") val orcid: String? = null,
+    @SerialName("DBLP") val dblp: List<String>? = null
+)
+
+/**
+ * Search response for author search
+ */
+@Serializable
+data class SemanticScholarAuthorSearchResponse(
+    val total: Int,
+    val data: List<SemanticScholarAuthorDetail>
 )
 
 @Serializable

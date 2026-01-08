@@ -1,5 +1,5 @@
 import { writable, derived } from 'svelte/store';
-import type { Tab, Paper, PdfViewerState } from '$lib/types';
+import type { Tab, Paper, PdfViewerState, AuthorProfile, TagProfile, JournalProfile } from '$lib/types';
 
 // Initial tab
 const initialTabs: Tab[] = [{ id: 'home', type: 'home', title: 'Library' }];
@@ -120,4 +120,76 @@ export function getViewerState(tabId: string): PdfViewerState | undefined {
 		state = tab?.viewerState;
 	})();
 	return state;
+}
+
+/**
+ * Open author profile tab
+ */
+export function openAuthorProfile(author: AuthorProfile) {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'author' && t.author?.name === author.name);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `author-${author.name.replace(/\s+/g, '-')}-${Date.now()}`,
+			type: 'author',
+			title: author.name.length > 20 ? author.name.slice(0, 20) + '...' : author.name,
+			author
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open tag profile tab
+ */
+export function openTagProfile(tag: TagProfile) {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'tag' && t.tag?.name === tag.name);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `tag-${tag.name.replace(/\s+/g, '-')}-${Date.now()}`,
+			type: 'tag',
+			title: tag.name,
+			tag
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open journal/venue profile tab
+ */
+export function openJournalProfile(journal: JournalProfile) {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'journal' && t.journal?.name === journal.name);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `journal-${journal.name.replace(/\s+/g, '-')}-${Date.now()}`,
+			type: 'journal',
+			title: journal.abbreviation || (journal.name.length > 20 ? journal.name.slice(0, 20) + '...' : journal.name),
+			journal
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api/client';
+	import { jobRefreshTrigger } from '$lib/stores/jobs';
 
 	interface Job {
 		id: string;
@@ -38,8 +39,27 @@
 	let visibleJobs = $derived([...activeJobs, ...recentlyCompletedJobs]);
 	let hasJobs = $derived(visibleJobs.length > 0);
 
+	// Subscribe to refresh trigger - use unsubscribe pattern
+	let unsubscribeRefresh: (() => void) | null = null;
+
+	$effect(() => {
+		// Subscribe to the store and fetch jobs when it changes
+		unsubscribeRefresh = jobRefreshTrigger.subscribe((value) => {
+			if (value > 0) {
+				fetchJobs();
+			}
+		});
+
+		return () => {
+			if (unsubscribeRefresh) {
+				unsubscribeRefresh();
+			}
+		};
+	});
+
 	async function fetchJobs() {
-		const result = await api.request<Job[]>('GET', '/jobs/active');
+		// Fetch all jobs (including recently completed) so we can show them in the panel
+		const result = await api.request<Job[]>('GET', '/jobs?includeCompleted=true');
 		if (result.success && result.data) {
 			jobs = result.data;
 		}
@@ -83,6 +103,8 @@
 		switch (type) {
 			case 'PDF_ANALYSIS':
 				return 'PDF Analysis';
+			case 'PDF_REANALYSIS':
+				return 'Re-Analysis';
 			case 'AUTO_TAGGING':
 				return 'Auto Tagging';
 			case 'METADATA_LOOKUP':
@@ -91,6 +113,8 @@
 				return 'Tag Merge';
 			case 'BULK_IMPORT':
 				return 'Bulk Import';
+			case 'THUMBNAIL_GENERATION':
+				return 'Thumbnail';
 			default:
 				return type;
 		}

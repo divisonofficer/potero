@@ -41,9 +41,26 @@ object DriverFactory {
         // Create schema only if database doesn't exist
         if (!dbExists) {
             PoteroDatabase.Schema.create(driver)
+        } else {
+            // Run migrations for existing databases
+            runMigrations(driver)
         }
 
         return driver
+    }
+
+    /**
+     * Run database migrations for schema updates
+     */
+    private fun runMigrations(driver: SqlDriver) {
+        // Migration 1: Add abstract_korean column to Paper table
+        try {
+            driver.execute(null, "SELECT abstract_korean FROM Paper LIMIT 1", 0)
+        } catch (e: Exception) {
+            // Column doesn't exist, add it
+            println("[DB Migration] Adding abstract_korean column to Paper table")
+            driver.execute(null, "ALTER TABLE Paper ADD COLUMN abstract_korean TEXT", 0)
+        }
     }
 
     /**

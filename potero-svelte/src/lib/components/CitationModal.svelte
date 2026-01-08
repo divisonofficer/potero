@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, type SearchResult } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/types';
 
 	interface Props {
 		query: string;
@@ -32,7 +33,7 @@
 			if (response.success && response.data) {
 				results = response.data;
 			} else {
-				error = response.error?.message || 'Search failed';
+				error = getErrorMessage(response.error) || 'Search failed';
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Search failed';

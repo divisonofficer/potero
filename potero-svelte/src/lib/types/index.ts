@@ -70,11 +70,52 @@ export interface ChatSession {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'viewer' | 'settings';
+	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal';
 	title: string;
 	paper?: Paper;
 	// PDF viewer state (persisted across tab switches)
 	viewerState?: PdfViewerState;
+	// Author profile data
+	author?: AuthorProfile;
+	// Tag details
+	tag?: TagProfile;
+	// Journal/venue details
+	journal?: JournalProfile;
+}
+
+export interface AuthorProfile {
+	name: string;
+	affiliation: string | null;
+	publications: number;
+	citations: number;
+	hIndex: number;
+	i10Index: number;
+	overview: string | null;
+	researchInterests: string[];
+	recentPapers: Paper[];
+	// External links (from Semantic Scholar API)
+	semanticScholarId?: string;
+	googleScholarUrl?: string;
+	semanticScholarUrl?: string;
+	dblpUrl?: string;
+	orcid?: string;
+	homepage?: string;
+}
+
+export interface TagProfile {
+	name: string;
+	color: string;
+	paperCount: number;
+	papers: Paper[];
+	relatedTags: string[];
+}
+
+export interface JournalProfile {
+	name: string;
+	abbreviation: string | null;
+	paperCount: number;
+	papers: Paper[];
+	years: number[];
 }
 
 export interface PdfViewerState {
@@ -94,11 +135,23 @@ export interface SearchFilters {
 	subject?: string[];
 }
 
+export interface ApiError {
+	code: string;
+	message: string;
+}
+
 export interface ApiResponse<T> {
 	success: boolean;
 	data?: T;
-	error?: {
-		code: string;
-		message: string;
-	};
+	// Error can be either a string (from backend) or an object (from frontend client)
+	error?: string | ApiError;
+}
+
+/**
+ * Helper to get error message from ApiResponse
+ */
+export function getErrorMessage(error: string | ApiError | undefined): string {
+	if (!error) return 'Unknown error';
+	if (typeof error === 'string') return error;
+	return error.message;
 }
