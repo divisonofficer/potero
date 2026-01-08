@@ -27,7 +27,7 @@ class ApiClient {
 		}
 	}
 
-	private async request<T>(
+	async request<T>(
 		method: string,
 		path: string,
 		body?: unknown
@@ -209,6 +209,122 @@ class ApiClient {
 			};
 		}
 	}
+
+	// Re-analyze an existing paper's PDF
+	async reanalyzePaper(paperId: string): Promise<ApiResponse<UploadAnalysisResponse>> {
+		try {
+			const response = await fetch(`${this.directUploadUrl}/upload/reanalyze/${paperId}`, {
+				method: 'POST'
+			});
+			return (await response.json()) as ApiResponse<UploadAnalysisResponse>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'REANALYZE_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to re-analyze paper'
+				}
+			};
+		}
+	}
+
+	// Auto-tag a paper using LLM (async - returns job ID immediately)
+	async autoTagPaper(paperId: string): Promise<ApiResponse<AutoTagJobResponse>> {
+		return this.request('POST', `/papers/${paperId}/tags/auto`);
+	}
+
+	// Check auto-tag job status
+	async getAutoTagJobStatus(paperId: string, jobId: string): Promise<ApiResponse<AutoTagJobStatus>> {
+		return this.request('GET', `/papers/${paperId}/tags/auto/${jobId}`);
+	}
+
+	// Poll for auto-tag completion
+	async waitForAutoTag(
+		paperId: string,
+		jobId: string,
+		onProgress?: (status: string) => void,
+		maxWaitMs: number = 60000,
+		pollIntervalMs: number = 1000
+	): Promise<ApiResponse<AutoTagResponse>> {
+		const startTime = Date.now();
+
+		while (Date.now() - startTime < maxWaitMs) {
+			const result = await this.getAutoTagJobStatus(paperId, jobId);
+
+			if (!result.success || !result.data) {
+				return {
+					success: false,
+					error: result.error || { code: 'POLL_ERROR', message: 'Failed to get job status' }
+				};
+			}
+
+			const status = result.data;
+			onProgress?.(status.status);
+
+			if (status.status === 'completed' && status.result) {
+				return { success: true, data: status.result };
+			}
+
+			if (status.status === 'failed') {
+				return {
+					success: false,
+					error: { code: 'AUTO_TAG_FAILED', message: status.error || 'Auto-tagging failed' }
+				};
+			}
+
+			// Still processing, wait and poll again
+			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+		}
+
+		return {
+			success: false,
+			error: { code: 'TIMEOUT', message: 'Auto-tagging timed out' }
+		};
+	}
+
+	// Get tag suggestions for a paper without applying
+	async suggestTags(paperId: string): Promise<ApiResponse<TagSuggestion[]>> {
+		return this.request('POST', `/papers/${paperId}/tags/suggest`);
+	}
+
+	// Merge similar tags (admin operation)
+	async mergeSimilarTags(): Promise<ApiResponse<{ mergedCount: number; message: string }>> {
+		return this.request('POST', '/tags/merge');
+	}
+
+	// Online search for papers
+	async searchOnline(
+		query: string,
+		engine: 'semantic' | 'scholar' = 'semantic'
+	): Promise<ApiResponse<SearchResult[]>> {
+		return this.request(
+			'GET',
+			`/search/online?q=${encodeURIComponent(query)}&engine=${engine}`
+		);
+	}
+
+	// LLM logs and status (uses /api/llm prefix)
+	async getLLMLogs(limit: number = 50, purpose?: string): Promise<ApiResponse<LLMLogEntry[]>> {
+		const params = new URLSearchParams({ limit: limit.toString() });
+		if (purpose) params.append('purpose', purpose);
+		return this.request('GET', `/llm/logs?${params}`);
+	}
+
+	async getLLMLogDetail(logId: string): Promise<ApiResponse<LLMLogDetail>> {
+		return this.request('GET', `/llm/logs/${logId}`);
+	}
+
+	async getLLMStats(): Promise<ApiResponse<LLMUsageStats>> {
+		return this.request('GET', '/llm/stats');
+	}
+
+	async getLLMStatus(): Promise<ApiResponse<LLMStatus>> {
+		return this.request('GET', '/llm/status');
+	}
+
+	async clearLLMLogs(): Promise<ApiResponse<{ cleared: boolean }>> {
+		return this.request('DELETE', '/llm/logs');
+	}
 }
 
 // Types
@@ -292,6 +408,91 @@ export interface ConfirmMetadataRequest {
 	year?: number;
 	venue?: string;
 	citationsCount?: number;
+}
+
+/**
+ * Tag suggestion from LLM analysis
+ */
+export interface TagSuggestion {
+	name: string;
+	existingTagId: string | null;
+	existingTagName: string | null;
+	isNew: boolean;
+}
+
+/**
+ * Response from auto-tagging a paper
+ */
+export interface AutoTagResponse {
+	paperId: string;
+	suggestedTags: TagSuggestion[];
+	assignedTags: {
+		id: string;
+		name: string;
+		color: string;
+		count: number;
+	}[];
+}
+
+/**
+ * LLM log entry (summarized)
+ */
+export interface LLMLogEntry {
+	id: string;
+	timestamp: string;
+	provider: string;
+	purpose: string;
+	inputPromptPreview: string;
+	inputTokensEstimate: number;
+	outputResponsePreview: string | null;
+	outputTokensEstimate: number | null;
+	durationMs: number;
+	success: boolean;
+	errorMessage: string | null;
+	paperId: string | null;
+	paperTitle: string | null;
+}
+
+/**
+ * LLM log entry (detailed)
+ */
+export interface LLMLogDetail {
+	id: string;
+	timestamp: string;
+	provider: string;
+	purpose: string;
+	inputPrompt: string;
+	inputTokensEstimate: number;
+	outputResponse: string | null;
+	outputTokensEstimate: number | null;
+	durationMs: number;
+	success: boolean;
+	errorMessage: string | null;
+	paperId: string | null;
+	paperTitle: string | null;
+}
+
+/**
+ * LLM usage statistics
+ */
+export interface LLMUsageStats {
+	totalCalls: number;
+	successfulCalls: number;
+	failedCalls: number;
+	totalInputTokensEstimate: number;
+	totalOutputTokensEstimate: number;
+	averageDurationMs: number;
+	callsByPurpose: Record<string, number>;
+	callsByProvider: Record<string, number>;
+}
+
+/**
+ * LLM service status
+ */
+export interface LLMStatus {
+	configured: boolean;
+	provider: string;
+	endpoint: string;
 }
 
 export const api = new ApiClient();

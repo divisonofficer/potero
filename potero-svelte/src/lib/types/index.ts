@@ -14,6 +14,7 @@ export interface Paper {
 	thumbnailUrl: string | null;
 	citations: number;
 	doi: string | null;
+	arxivId: string | null;
 	hasBlogView: boolean;
 }
 

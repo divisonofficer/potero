@@ -89,7 +89,7 @@ class PdfAnalyzer(private val pdfPath: String) {
     }
 
     /**
-     * Perform full analysis: metadata + DOI/arXiv detection
+     * Perform full analysis: metadata + DOI/arXiv detection + title/author extraction
      */
     fun analyze(): PdfAnalysisResult {
         val metadata = extractBuiltInMetadata()
@@ -103,11 +103,17 @@ class PdfAnalyzer(private val pdfPath: String) {
             extractTitleFromText(firstPagesText)
         } else null
 
+        // Try to extract authors from first page if not in metadata
+        val extractedAuthors = if (metadata.author == null) {
+            extractAuthorsFromText(firstPagesText)
+        } else emptyList()
+
         return PdfAnalysisResult(
             metadata = metadata,
             detectedDoi = doi,
             detectedArxivId = arxivId,
             extractedTitle = extractedTitle,
+            extractedAuthors = extractedAuthors,
             firstPagesText = firstPagesText
         )
     }
@@ -117,28 +123,119 @@ class PdfAnalyzer(private val pdfPath: String) {
      * Heuristic: Title is usually the largest/first prominent text
      */
     private fun extractTitleFromText(text: String): String? {
-        // Simple heuristic: first non-empty line that's reasonably long
         val lines = text.lines()
             .map { it.trim() }
-            .filter { it.isNotBlank() && it.length > 10 }
+            .filter { it.isNotBlank() }
 
-        // Skip common header elements
+        // Skip common header elements (case-insensitive)
         val skipPatterns = listOf(
             "arXiv", "preprint", "submitted", "accepted", "published",
-            "journal", "conference", "abstract", "introduction"
+            "journal", "conference", "abstract", "introduction",
+            "proceedings", "copyright", "vol.", "volume", "issue",
+            "http", "www.", "doi:", "©", "ieee", "acm", "springer",
+            "under review", "workshop", "supplementary", "appendix",
+            "cvpr", "iccv", "eccv", "neurips", "icml", "aaai", "ijcai"
         )
 
-        for (line in lines.take(10)) {
-            if (skipPatterns.none { line.contains(it, ignoreCase = true) }) {
-                // Likely a title if it doesn't end with common sentence endings
-                // and is reasonably short (titles are usually < 200 chars)
-                if (line.length < 200 && !line.endsWith(".") && !line.endsWith(":")) {
-                    return line
+        val potentialTitles = mutableListOf<String>()
+
+        for (line in lines.take(20)) {
+            // Skip if contains skip patterns
+            if (skipPatterns.any { line.contains(it, ignoreCase = true) }) {
+                continue
+            }
+
+            // Skip lines that look like author names (contain email or multiple commas)
+            if (line.contains("@") || line.count { it == ',' } > 3) {
+                continue
+            }
+
+            // Skip very short lines
+            if (line.length < 10) {
+                continue
+            }
+
+            // Skip lines that are all uppercase and short (likely headers)
+            if (line.length < 25 && line == line.uppercase()) {
+                continue
+            }
+
+            // Skip lines that look like affiliations (university, institute, etc.)
+            if (line.contains("university", ignoreCase = true) ||
+                line.contains("institute", ignoreCase = true) ||
+                line.contains("department", ignoreCase = true) ||
+                line.contains("laboratory", ignoreCase = true)) {
+                continue
+            }
+
+            // A good title candidate
+            val endsWithPunctuation = line.endsWith(".") || line.endsWith(":") || line.endsWith(";")
+            val isQuestion = line.endsWith("?")
+
+            if (line.length in 15..300 && (!endsWithPunctuation || isQuestion)) {
+                potentialTitles.add(line)
+            }
+        }
+
+        // Prefer the first longer title candidate (titles are usually near the top)
+        return potentialTitles.firstOrNull { it.length > 30 } ?: potentialTitles.firstOrNull()
+    }
+
+    /**
+     * Try to extract authors from first page text
+     */
+    fun extractAuthorsFromText(text: String): List<String> {
+        val lines = text.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        val authors = mutableListOf<String>()
+
+        // Look in first 25 lines for author-like patterns
+        for (i in 0 until minOf(25, lines.size)) {
+            val line = lines[i]
+
+            // Skip lines that are clearly not authors
+            if (line.length > 200 ||
+                line.contains("abstract", ignoreCase = true) ||
+                line.contains("introduction", ignoreCase = true) ||
+                line.contains("@") || // email
+                line.startsWith("http") ||
+                line.contains("university", ignoreCase = true) ||
+                line.contains("institute", ignoreCase = true)) {
+                continue
+            }
+
+            // Check if line contains comma-separated or "and"-separated names
+            if ((line.contains(",") || line.contains(" and ", ignoreCase = true)) &&
+                !line.endsWith(".") && line.length in 10..150) {
+
+                // Split by comma or "and"
+                val parts = line.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+
+                for (part in parts) {
+                    val trimmed = part.trim()
+                        .replace(Regex("""\d+$"""), "") // Remove trailing numbers (affiliations)
+                        .replace(Regex("""^\d+\s*"""), "") // Remove leading numbers
+                        .replace(Regex("""\*+$"""), "") // Remove asterisks
+                        .trim()
+
+                    // Valid author name: 2-4 words, reasonable length
+                    val words = trimmed.split(Regex("""\s+"""))
+                    if (trimmed.length in 3..50 &&
+                        words.size in 2..5 &&
+                        words.all { it.isNotBlank() && it.first().isUpperCase() }) {
+                        authors.add(trimmed)
+                    }
+                }
+
+                if (authors.size >= 2) {
+                    break // Found authors, stop searching
                 }
             }
         }
 
-        return lines.firstOrNull()
+        return authors.take(10) // Limit to 10 authors
     }
 
     private fun <T> withDocument(block: (PDDocument) -> T): T {
@@ -179,6 +276,7 @@ data class PdfAnalysisResult(
     val detectedDoi: String? = null,
     val detectedArxivId: String? = null,
     val extractedTitle: String? = null,
+    val extractedAuthors: List<String> = emptyList(),
     val firstPagesText: String = ""
 ) {
     /**
@@ -186,6 +284,19 @@ data class PdfAnalysisResult(
      */
     val bestTitle: String?
         get() = metadata.title ?: extractedTitle
+
+    /**
+     * Best authors: metadata > extracted > empty
+     */
+    val bestAuthors: List<String>
+        get() = if (!metadata.author.isNullOrBlank()) {
+            // Split metadata author by common separators
+            metadata.author.split(Regex("""\s*[,;]\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+        } else {
+            extractedAuthors
+        }
 
     /**
      * Whether we found any identifier that can be used for metadata lookup

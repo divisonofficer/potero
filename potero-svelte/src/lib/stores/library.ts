@@ -1,6 +1,12 @@
 import { writable, derived } from 'svelte/store';
 import type { Paper, ViewStyle, SortBy, Tag } from '$lib/types';
-import { api, type UploadAnalysisResponse, type SearchResult } from '$lib/api/client';
+import {
+	api,
+	type UploadAnalysisResponse,
+	type SearchResult,
+	type AutoTagResponse,
+	type TagSuggestion
+} from '$lib/api/client';
 
 // Core state
 export const papers = writable<Paper[]>([]);
@@ -25,6 +31,11 @@ export const selectedSubjects = writable<string[]>([]);
 // View state
 export const viewStyle = writable<ViewStyle>('grid');
 export const sortBy = writable<SortBy>('recent');
+
+// Online search state
+export const onlineSearchResults = writable<SearchResult[]>([]);
+export const isSearchingOnline = writable(false);
+let onlineSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Derived: filtered and sorted papers
 export const filteredPapers = derived(
@@ -113,9 +124,45 @@ export const availableSubjects = derived(papers, ($papers) => {
 		.sort((a, b) => b.count - a.count);
 });
 
+// Online search - triggered when local results are few
+export async function searchOnlineIfNeeded(query: string, localResultCount: number) {
+	// Clear previous timer
+	if (onlineSearchDebounceTimer) {
+		clearTimeout(onlineSearchDebounceTimer);
+	}
+
+	// Clear results if query is short or local results are sufficient
+	if (query.length < 3 || localResultCount >= 3) {
+		onlineSearchResults.set([]);
+		isSearchingOnline.set(false);
+		return;
+	}
+
+	// Debounce: wait 500ms before searching
+	onlineSearchDebounceTimer = setTimeout(async () => {
+		isSearchingOnline.set(true);
+
+		const results = await searchOnline(query);
+		onlineSearchResults.set(results);
+
+		isSearchingOnline.set(false);
+	}, 500);
+}
+
+// Clear online search results
+export function clearOnlineSearchResults() {
+	onlineSearchResults.set([]);
+	isSearchingOnline.set(false);
+	if (onlineSearchDebounceTimer) {
+		clearTimeout(onlineSearchDebounceTimer);
+		onlineSearchDebounceTimer = null;
+	}
+}
+
 // Actions
 export function clearFilters() {
 	searchQuery.set('');
+	clearOnlineSearchResults();
 	selectedConference.set(null);
 	selectedYear.set(null);
 	selectedSubjects.set([]);
@@ -320,4 +367,162 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
  */
 export async function initializeLibrary() {
 	await Promise.all([loadPapers(), loadTags()]);
+}
+
+/**
+ * Re-analyze an existing paper's PDF to update metadata
+ * Returns the analysis response which may contain search results for user confirmation
+ */
+export async function reanalyzePaper(paperId: string): Promise<UploadAnalysisResponse | null> {
+	isLoading.set(true);
+	error.set(null);
+
+	const result = await api.reanalyzePaper(paperId);
+
+	if (result.success && result.data) {
+		const analysisResult = result.data;
+
+		// If there are search results that need user confirmation, store them
+		if (analysisResult.needsUserConfirmation && analysisResult.searchResults.length > 0) {
+			pendingUploadAnalysis.set({
+				paperId: analysisResult.paperId,
+				searchQuery: analysisResult.pdfMetadataTitle || analysisResult.title,
+				searchResults: analysisResult.searchResults
+			});
+		}
+
+		// Always reload papers to get updated data (title, authors extracted from PDF)
+		await loadPapers();
+
+		isLoading.set(false);
+		return analysisResult;
+	} else {
+		error.set(result.error?.message ?? 'Failed to re-analyze paper');
+		isLoading.set(false);
+		return null;
+	}
+}
+
+/**
+ * Auto-tag a paper using LLM analysis
+ */
+export async function autoTagPaper(paperId: string): Promise<AutoTagResponse | null> {
+	isLoading.set(true);
+	error.set(null);
+
+	const result = await api.autoTagPaper(paperId);
+
+	if (result.success && result.data) {
+		// Reload tags to include any newly created tags
+		await loadTags();
+		// Reload papers to get updated tag associations
+		await loadPapers();
+		isLoading.set(false);
+		return result.data;
+	} else {
+		error.set(result.error?.message ?? 'Failed to auto-tag paper');
+		isLoading.set(false);
+		return null;
+	}
+}
+
+/**
+ * Get tag suggestions for a paper without applying
+ */
+export async function suggestTagsForPaper(paperId: string): Promise<TagSuggestion[] | null> {
+	const result = await api.suggestTags(paperId);
+
+	if (result.success && result.data) {
+		return result.data;
+	} else {
+		error.set(result.error?.message ?? 'Failed to get tag suggestions');
+		return null;
+	}
+}
+
+/**
+ * Merge similar tags (admin operation)
+ */
+export async function mergeSimilarTags(): Promise<number> {
+	isLoading.set(true);
+	error.set(null);
+
+	const result = await api.mergeSimilarTags();
+
+	if (result.success && result.data) {
+		// Reload tags after merge
+		await loadTags();
+		isLoading.set(false);
+		return result.data.mergedCount;
+	} else {
+		error.set(result.error?.message ?? 'Failed to merge tags');
+		isLoading.set(false);
+		return 0;
+	}
+}
+
+/**
+ * Search for papers online (Semantic Scholar)
+ */
+export async function searchOnline(
+	query: string,
+	engine: 'semantic' | 'scholar' = 'semantic'
+): Promise<SearchResult[]> {
+	const result = await api.searchOnline(query, engine);
+
+	if (result.success && result.data) {
+		return result.data;
+	} else {
+		return [];
+	}
+}
+
+/**
+ * Import a paper from online search result
+ */
+export async function importFromSearchResult(searchResult: SearchResult): Promise<Paper | null> {
+	isLoading.set(true);
+	error.set(null);
+
+	// Try to import by DOI first, then arXiv
+	if (searchResult.doi) {
+		const result = await api.importByDoi(searchResult.doi);
+		if (result.success && result.data) {
+			await loadPapers();
+			isLoading.set(false);
+			return result.data;
+		}
+	}
+
+	if (searchResult.arxivId) {
+		const result = await api.importByArxiv(searchResult.arxivId);
+		if (result.success && result.data) {
+			await loadPapers();
+			isLoading.set(false);
+			return result.data;
+		}
+	}
+
+	// Fall back to creating paper manually from search result
+	const result = await api.createPaper({
+		title: searchResult.title,
+		authors: searchResult.authors,
+		abstract: searchResult.abstract ?? undefined,
+		year: searchResult.year ?? undefined,
+		conference: searchResult.venue ?? undefined,
+		doi: searchResult.doi ?? undefined,
+		arxivId: searchResult.arxivId ?? undefined,
+		citations: searchResult.citationCount ?? 0,
+		pdfUrl: searchResult.pdfUrl ?? undefined
+	});
+
+	if (result.success && result.data) {
+		await loadPapers();
+		isLoading.set(false);
+		return result.data;
+	}
+
+	error.set(result.error?.message ?? 'Failed to import paper');
+	isLoading.set(false);
+	return null;
 }

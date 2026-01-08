@@ -11,6 +11,7 @@ android-compileSdk = "34"
 android-minSdk = "24"
 android-targetSdk = "34"
 pdfbox = "3.0.3"
+jsoup = "1.17.2"
 
 [libraries]
 # Kotlin
@@ -48,6 +49,9 @@ koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
 
 # PDF Processing
 pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
+
+# HTML Parsing
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 
 # Testing
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
  * LLM Provider endpoints for POSTECH GenAI API
  */
 enum class LLMProvider(val endpoint: String, val displayName: String) {
-    GPT("https://genai.postech.ac.kr/agent/api/a1/got", "GPT"),
+    GPT("https://genai.postech.ac.kr/agent/api/a1/gpt", "GPT"),
     GEMINI("https://genai.postech.ac.kr/agent/api/a2/gemini", "Gemini"),
     CLAUDE("https://genai.postech.ac.kr/agent/api/a3/claude", "Claude")
 }
@@ -35,11 +35,18 @@ data class FileAttachment(
 
 /**
  * Response from POSTECH GenAI API
+ * Note: The API returns "replies" field, not "message"
  */
 @Serializable
 data class LLMResponse(
-    val message: String
-)
+    val replies: String? = null,
+    val message: String? = null
+) {
+    /**
+     * Get the response content (handles both "replies" and "message" fields)
+     */
+    fun getContent(): String = replies ?: message ?: ""
+}
 
 /**
  * LLM Service interface for chat operations

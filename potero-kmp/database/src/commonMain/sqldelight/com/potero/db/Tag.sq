@@ -57,3 +57,23 @@ DELETE FROM PaperTag WHERE paper_id = ?;
 
 delete:
 DELETE FROM Tag WHERE id = ?;
+
+-- Count total tags
+countAll:
+SELECT COUNT(*) FROM Tag;
+
+-- Search by name (case-insensitive partial match)
+searchByName:
+SELECT * FROM Tag WHERE LOWER(name) LIKE '%' || LOWER(?) || '%' ORDER BY name LIMIT 20;
+
+-- Get papers with a specific tag
+selectPapersWithTag:
+SELECT paper_id FROM PaperTag WHERE tag_id = ?;
+
+-- Merge tags: update all PaperTag entries from source to target
+mergeTagLinks:
+UPDATE OR IGNORE PaperTag SET tag_id = ? WHERE tag_id = ?;
+
+-- Delete orphaned links after merge
+deleteTagLinks:
+DELETE FROM PaperTag WHERE tag_id = ?;

@@ -2,6 +2,7 @@ package com.potero.server.routes
 
 import com.potero.domain.model.Paper
 import com.potero.server.di.ServiceLocator
+import com.potero.service.metadata.SearchResult
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -99,10 +100,118 @@ fun Paper.toSearchResult(score: Double = 1.0, highlights: Map<String, String>? =
         highlights = highlights
     )
 
+/**
+ * DTO for online search result (from Semantic Scholar, etc.)
+ */
+@Serializable
+data class OnlineSearchResultDto(
+    val id: String,
+    val title: String,
+    val authors: List<String>,
+    val year: Int?,
+    val venue: String?,
+    val citationCount: Int?,
+    val abstract: String?,
+    val pdfUrl: String?,
+    val doi: String?,
+    val arxivId: String?,
+    val source: String
+)
+
+// Simple in-memory cache for search results
+private data class CachedSearch(
+    val results: List<OnlineSearchResultDto>,
+    val timestamp: Long = System.currentTimeMillis()
+) {
+    fun isExpired(ttlMs: Long = 5 * 60 * 1000): Boolean = // 5 minutes TTL
+        System.currentTimeMillis() - timestamp > ttlMs
+}
+
+private val searchCache = mutableMapOf<String, CachedSearch>()
+private var lastSearchTime = 0L
+private const val MIN_SEARCH_INTERVAL_MS = 1000L // Minimum 1 second between searches
+
 fun Route.searchRoutes() {
     val repository = ServiceLocator.paperRepository
+    val unifiedSearchService = ServiceLocator.unifiedSearchService
 
     route("/search") {
+        // GET /api/search/online - Online paper search (with automatic fallback)
+        get("/online") {
+            val query = call.request.queryParameters["q"] ?: ""
+            val engine = call.request.queryParameters["engine"] ?: "semantic"
+
+            println("[Search] Online search request: query='$query', engine='$engine'")
+
+            if (query.isBlank()) {
+                call.respond(ApiResponse(data = emptyList<OnlineSearchResultDto>()))
+                return@get
+            }
+
+            try {
+                // Use UnifiedSearchService which handles caching, throttling, and fallback
+                val result = unifiedSearchService.search(
+                    query = query,
+                    preferredEngine = engine,
+                    limit = 10
+                )
+
+                val dtos: List<OnlineSearchResultDto> = result.results.map { searchResult ->
+                    OnlineSearchResultDto(
+                        id = searchResult.id,
+                        title = searchResult.title,
+                        authors = searchResult.authors,
+                        year = searchResult.year,
+                        venue = searchResult.venue,
+                        citationCount = searchResult.citationCount,
+                        abstract = searchResult.abstract,
+                        pdfUrl = searchResult.pdfUrl,
+                        doi = searchResult.doi,
+                        arxivId = searchResult.arxivId,
+                        source = searchResult.source
+                    )
+                }
+
+                println("[Search] Found ${dtos.size} results from ${result.source}" +
+                    (if (result.fromCache) " (cached)" else "") +
+                    (if (result.usedFallback) " (used fallback)" else ""))
+
+                if (result.error != null) {
+                    call.respond(ApiResponse<List<OnlineSearchResultDto>>(
+                        success = false,
+                        error = result.error
+                    ))
+                } else {
+                    call.respond(ApiResponse<List<OnlineSearchResultDto>>(data = dtos))
+                }
+            } catch (e: Exception) {
+                println("[Search] Search failed: ${e.message}")
+                call.respond(ApiResponse<List<OnlineSearchResultDto>>(
+                    success = false,
+                    error = "Search failed: ${e.message}. Please try again later."
+                ))
+            }
+        }
+
+        // GET /api/search/status - Get search service status
+        get("/status") {
+            try {
+                val status = unifiedSearchService.getStatus()
+                call.respond(ApiResponse(data = mapOf(
+                    "cacheEntries" to status.cacheEntries,
+                    "semanticScholarAvailable" to status.semanticScholarAvailable,
+                    "googleScholarAvailable" to status.googleScholarAvailable,
+                    "semanticScholarFailures" to status.semanticScholarFailures,
+                    "googleScholarFailures" to status.googleScholarFailures
+                )))
+            } catch (e: Exception) {
+                call.respond(ApiResponse<Map<String, Any>>(
+                    success = false,
+                    error = e.message ?: "Failed to get status"
+                ))
+            }
+        }
+
         // POST /api/search - Full-text search
         post {
             val request = call.receive<SearchRequest>()

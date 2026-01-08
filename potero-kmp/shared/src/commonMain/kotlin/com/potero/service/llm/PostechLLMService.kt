@@ -9,37 +9,97 @@ import kotlinx.coroutines.flow.flow
 
 /**
  * Implementation of LLMService using POSTECH GenAI API
+ *
+ * @param httpClient HTTP client for API requests
+ * @param apiKeyProvider Function to get the current API key (allows dynamic loading from settings)
+ * @param providerProvider Function to get the current provider (allows dynamic loading from settings)
  */
 class PostechLLMService(
     private val httpClient: HttpClient,
-    private val config: LLMConfig
+    private val apiKeyProvider: suspend () -> String,
+    private val providerProvider: suspend () -> LLMProvider = { LLMProvider.GPT }
 ) : LLMService {
 
-    private var _provider: LLMProvider = config.provider
+    // Secondary constructor for backward compatibility
+    constructor(
+        httpClient: HttpClient,
+        config: LLMConfig
+    ) : this(httpClient, { config.apiKey }, { config.provider })
+
+    private var _providerOverride: LLMProvider? = null
 
     override val provider: LLMProvider
-        get() = _provider
+        get() = _providerOverride ?: LLMProvider.GPT
 
     override fun setProvider(provider: LLMProvider) {
-        _provider = provider
+        _providerOverride = provider
     }
 
     override suspend fun chat(message: String): Result<String> = runCatching {
-        val response = httpClient.post(_provider.endpoint) {
-            contentType(ContentType.Application.Json)
-            header("X-Api-Key", config.apiKey)
-            setBody(LLMRequest(
-                message = message,
-                stream = false,
-                files = emptyList() // MVP: No file upload, using text extraction
-            ))
+        // Get API key and provider dynamically from settings
+        val apiKey = apiKeyProvider()
+        val currentProvider = _providerOverride ?: providerProvider()
+
+        // Debug logging
+        println("[LLM] ========================================")
+        println("[LLM] Provider: ${currentProvider.name}")
+        println("[LLM] Endpoint: ${currentProvider.endpoint}")
+        println("[LLM] API Key configured: ${apiKey.isNotBlank()}")
+        println("[LLM] API Key (first 10 chars): ${apiKey.take(10)}...")
+        println("[LLM] Message length: ${message.length} chars")
+        println("[LLM] Message preview: ${message.take(200)}...")
+        println("[LLM] ----------------------------------------")
+
+        if (apiKey.isBlank()) {
+            println("[LLM] ERROR: API key is empty!")
+            throw LLMException("LLM API key is not configured. Please set it in Settings.")
         }
+
+        val requestBody = LLMRequest(
+            message = message,
+            stream = false,
+            files = emptyList() // MVP: No file upload, using text extraction
+        )
+
+        println("[LLM] Sending request to: ${currentProvider.endpoint}")
+
+        val response = httpClient.post(currentProvider.endpoint) {
+            contentType(ContentType.Application.Json)
+            header("X-Api-Key", apiKey)
+            setBody(requestBody)
+        }
+
+        println("[LLM] Response status: ${response.status}")
+
+        // Get raw response body first for debugging
+        val rawBody = response.body<String>()
+        println("[LLM] Raw response: $rawBody")
 
         if (!response.status.isSuccess()) {
-            throw LLMException("API request failed with status: ${response.status}")
+            println("[LLM] ERROR Response: $rawBody")
+            throw LLMException("API request failed with status: ${response.status}. Response: $rawBody")
         }
 
-        response.body<LLMResponse>().message
+        // Parse the response
+        val responseMessage = try {
+            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            val llmResponse = json.decodeFromString<LLMResponse>(rawBody)
+            llmResponse.getContent()
+        } catch (e: Exception) {
+            println("[LLM] Failed to parse as LLMResponse: ${e.message}")
+            // Fallback: use raw body
+            rawBody.trim().removeSurrounding("\"")
+        }
+
+        if (responseMessage.isBlank()) {
+            throw LLMException("LLM returned empty response")
+        }
+
+        println("[LLM] Response message length: ${responseMessage.length} chars")
+        println("[LLM] Response preview: ${responseMessage.take(200)}...")
+        println("[LLM] ========================================")
+
+        responseMessage
     }
 
     override fun chatStream(message: String): Flow<String> = flow {

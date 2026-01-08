@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { updateViewerState } from '$lib/stores/tabs';
 	import type { PdfViewerState } from '$lib/types';
+	import CitationModal from './CitationModal.svelte';
 
 	interface Props {
 		pdfUrl: string;
@@ -12,6 +13,10 @@
 	}
 
 	let { pdfUrl, tabId, initialState, onPageChange, onTextSelect }: Props = $props();
+
+	// Citation modal state
+	let showCitationModal = $state(false);
+	let citationQuery = $state('');
 
 	let container: HTMLDivElement;
 	let scrollContainer: HTMLDivElement;
@@ -267,12 +272,44 @@
 					viewport: viewport
 				});
 				await textLayer.render();
+
+				// Annotate clickable references (citations and figures)
+				annotateTextLayer(textLayerDiv);
 			}
 
 		} catch (e) {
 			if (e instanceof Error && e.message.includes('cancelled')) return;
 			console.error(`Failed to render page ${pageNum}:`, e);
 			renderedPages.delete(pageNum);
+		}
+	}
+
+	// Annotate text layer spans with citation/figure classes for visual indication
+	function annotateTextLayer(textLayerDiv: HTMLElement) {
+		const spans = textLayerDiv.querySelectorAll('span');
+
+		for (const span of spans) {
+			const text = span.textContent || '';
+
+			// Check for citation patterns
+			for (const pattern of CITATION_PATTERNS) {
+				pattern.lastIndex = 0;
+				if (pattern.test(text)) {
+					span.classList.add('citation-ref');
+					span.title = 'Click to look up citation';
+					break;
+				}
+			}
+
+			// Check for figure patterns
+			for (const pattern of FIGURE_PATTERNS) {
+				pattern.lastIndex = 0;
+				if (pattern.test(text)) {
+					span.classList.add('figure-ref');
+					span.title = 'Click to jump to figure';
+					break;
+				}
+			}
 		}
 	}
 
@@ -348,6 +385,9 @@
 					viewport: viewport
 				});
 				await textLayer.render();
+
+				// Annotate clickable references (citations and figures)
+				annotateTextLayer(textLayerDiv);
 			}
 
 			onPageChange?.(currentPage, totalPages);
@@ -528,6 +568,182 @@
 		}
 	}
 
+	// Patterns for citation and figure references
+	const CITATION_PATTERNS = [
+		/\[(\d+(?:,\s*\d+)*)\]/g,          // [1], [1, 2, 3]
+		/\[(\d+)\s*[-–]\s*(\d+)\]/g,       // [1-3], [1–5]
+		/\(([A-Z][a-z]+(?:\s+(?:et\s+al\.?|&\s+[A-Z][a-z]+))?(?:,?\s*\d{4}))\)/gi  // (Author et al., 2024)
+	];
+
+	const FIGURE_PATTERNS = [
+		/\b(Fig(?:ure)?\.?\s*\d+(?:\.\d+)?(?:\s*[a-z])?)/gi,  // Fig. 1, Figure 1, Fig. 1a, Fig. 1.2
+		/\b(Table\s*\d+(?:\.\d+)?)/gi,                        // Table 1, Table 1.2
+		/\b(Algorithm\s*\d+)/gi,                               // Algorithm 1
+		/\b(Equation\s*\d+)/gi,                                // Equation 1
+	];
+
+	// Handle click on text layer to detect citations and figures
+	function handleTextLayerClick(event: MouseEvent) {
+		const target = event.target as HTMLElement;
+		if (!target.closest('.textLayer')) return;
+
+		// Get surrounding text context (expand selection to get full reference)
+		const text = target.textContent || '';
+		const clickedText = text.trim();
+
+		// Check for figure/table references first (navigate to figure)
+		for (const pattern of FIGURE_PATTERNS) {
+			pattern.lastIndex = 0;
+			const match = pattern.exec(clickedText);
+			if (match) {
+				const figRef = match[1];
+				scrollToFigure(figRef);
+				return;
+			}
+		}
+
+		// Check for citation patterns (show lookup modal)
+		for (const pattern of CITATION_PATTERNS) {
+			pattern.lastIndex = 0;
+			const match = pattern.exec(clickedText);
+			if (match) {
+				// For numbered citations, we need to look up in references section
+				// For now, use the selected text or broader context for search
+				handleCitationClick(event, clickedText);
+				return;
+			}
+		}
+
+		// Check if we're near a citation by expanding context
+		const selection = window.getSelection();
+		if (selection) {
+			const range = document.createRange();
+			range.selectNodeContents(target);
+			const fullText = range.toString();
+
+			// Look for patterns in full text
+			for (const pattern of CITATION_PATTERNS) {
+				pattern.lastIndex = 0;
+				if (pattern.test(fullText)) {
+					handleCitationClick(event, fullText);
+					return;
+				}
+			}
+		}
+	}
+
+	// Handle citation click - show lookup modal
+	function handleCitationClick(event: MouseEvent, text: string) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		// Extract meaningful search query from citation context
+		// For author citations like "(Smith et al., 2024)", use as-is
+		// For numeric citations, we need to find the referenced paper title from References section
+		let query = text;
+
+		// Clean up the query
+		query = query.replace(/[\[\]()]/g, '').trim();
+
+		// If it's just numbers, try to get surrounding context
+		if (/^\d+(?:,\s*\d+)*$/.test(query) || /^\d+\s*[-–]\s*\d+$/.test(query)) {
+			// Get broader text context for numbered citations
+			const selection = window.getSelection();
+			if (selection && selection.rangeCount > 0) {
+				// Try to expand selection to sentence
+				const range = selection.getRangeAt(0);
+				const container = range.startContainer.parentElement;
+				if (container) {
+					// Look at sibling text nodes for context
+					const parent = container.parentElement;
+					if (parent) {
+						const siblings = Array.from(parent.children);
+						const currentIndex = siblings.indexOf(container);
+
+						// Collect text from surrounding elements
+						let contextText = '';
+						for (let i = Math.max(0, currentIndex - 3); i <= Math.min(siblings.length - 1, currentIndex + 3); i++) {
+							contextText += ' ' + (siblings[i].textContent || '');
+						}
+
+						// Extract sentence containing the citation
+						const sentences = contextText.split(/[.!?]+/);
+						for (const sentence of sentences) {
+							if (sentence.includes(text)) {
+								// Use key terms from the sentence
+								query = sentence.replace(/\[\d+(?:,\s*\d+)*\]/g, '').trim();
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// If query is still just numbers or too short, use generic approach
+		if (query.length < 10 || /^[\d\s,\-–]+$/.test(query)) {
+			// For numbered references, we'd ideally look up in the References section
+			// For now, show a message that we need more context
+			console.log('Citation reference detected:', text);
+			return;
+		}
+
+		// Show citation modal
+		citationQuery = query;
+		showCitationModal = true;
+	}
+
+	// Scroll to figure/table in the document
+	function scrollToFigure(figRef: string) {
+		if (!scrollContainer || !pdfDoc) return;
+
+		// Extract figure number
+		const numMatch = figRef.match(/\d+(?:\.\d+)?/);
+		if (!numMatch) return;
+
+		const figNum = numMatch[0];
+		const figType = figRef.toLowerCase().startsWith('tab') ? 'table' :
+		                figRef.toLowerCase().startsWith('alg') ? 'algorithm' :
+		                figRef.toLowerCase().startsWith('eq') ? 'equation' : 'figure';
+
+		// Search through rendered pages for the figure
+		const textLayers = scrollContainer.querySelectorAll('.textLayer');
+		for (const textLayer of textLayers) {
+			const spans = textLayer.querySelectorAll('span');
+			for (const span of spans) {
+				const spanText = span.textContent?.toLowerCase() || '';
+
+				// Look for figure caption patterns
+				const captionPatterns = [
+					new RegExp(`${figType}\\s*${figNum}[.:]`, 'i'),
+					new RegExp(`${figType}\\s*${figNum}\\s`, 'i'),
+					new RegExp(`^${figType}\\s*${figNum}`, 'i'),
+				];
+
+				for (const pattern of captionPatterns) {
+					if (pattern.test(spanText)) {
+						// Found the figure caption - scroll to it
+						const pageWrapper = span.closest('.page-wrapper');
+						if (pageWrapper) {
+							pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+							// Highlight the figure temporarily
+							span.style.backgroundColor = 'rgba(255, 255, 0, 0.5)';
+							setTimeout(() => {
+								span.style.backgroundColor = '';
+							}, 2000);
+
+							return;
+						}
+					}
+				}
+			}
+		}
+
+		// If not found in rendered pages, show notification
+		console.log(`${figRef} not found in currently rendered pages`);
+	}
+
 	// Save viewer state to tab store
 	function saveViewerState() {
 		if (!tabId || !scrollContainer) return;
@@ -655,6 +871,24 @@
 
 		.textLayer .endOfContent.active {
 			top: 0;
+		}
+
+		/* Clickable citation/figure reference styles */
+		.textLayer span.citation-ref,
+		.textLayer span.figure-ref {
+			cursor: pointer !important;
+			color: transparent;
+			background-color: rgba(59, 130, 246, 0.1);
+			border-radius: 2px;
+			transition: background-color 0.15s ease;
+		}
+
+		.textLayer span.citation-ref:hover {
+			background-color: rgba(59, 130, 246, 0.25);
+		}
+
+		.textLayer span.figure-ref:hover {
+			background-color: rgba(34, 197, 94, 0.25);
 		}
 	</style>
 </svelte:head>
@@ -803,6 +1037,7 @@
 		bind:this={scrollContainer}
 		onscroll={handleScroll}
 		onmouseup={handleMouseUp}
+		onclick={handleTextLayerClick}
 	>
 		{#if isLoading}
 			<div class="flex h-full items-center justify-center">
@@ -828,3 +1063,14 @@
 		{/if}
 	</div>
 </div>
+
+<!-- Citation Lookup Modal -->
+{#if showCitationModal}
+	<CitationModal
+		query={citationQuery}
+		onClose={() => {
+			showCitationModal = false;
+			citationQuery = '';
+		}}
+	/>
+{/if}

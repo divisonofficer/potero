@@ -5,17 +5,24 @@ import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
 import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.SettingsKeys
 import com.potero.domain.repository.SettingsRepository
 import com.potero.domain.repository.TagRepository
 import com.potero.network.HttpClientFactory
 import com.potero.service.llm.LLMConfig
+import com.potero.service.llm.LLMLogger
 import com.potero.service.llm.LLMProvider
 import com.potero.service.llm.LLMService
+import com.potero.service.llm.MetadataCleaningService
 import com.potero.service.llm.PostechLLMService
 import com.potero.service.metadata.ArxivResolver
 import com.potero.service.metadata.DOIResolver
+import com.potero.service.metadata.GoogleScholarScraper
 import com.potero.service.metadata.MetadataResolver
 import com.potero.service.metadata.SemanticScholarResolver
+import com.potero.service.search.SearchCacheService
+import com.potero.service.search.UnifiedSearchService
+import com.potero.service.tag.TagService
 import io.ktor.client.HttpClient
 
 /**
@@ -63,10 +70,56 @@ object ServiceLocator {
         listOf(doiResolver, arxivResolver)
     }
 
+    val llmLogger: LLMLogger by lazy {
+        LLMLogger(maxEntries = 100)
+    }
+
     val llmService: LLMService by lazy {
         PostechLLMService(
             httpClient = httpClient,
-            config = llmConfig
+            apiKeyProvider = {
+                // Dynamically load API key from settings database
+                settingsRepository.get(SettingsKeys.LLM_API_KEY).getOrNull() ?: ""
+            },
+            providerProvider = {
+                // Dynamically load provider from settings database
+                val providerName = settingsRepository.get(SettingsKeys.LLM_PROVIDER).getOrNull()
+                when (providerName?.lowercase()) {
+                    "claude" -> LLMProvider.CLAUDE
+                    "gemini" -> LLMProvider.GEMINI
+                    else -> LLMProvider.GPT
+                }
+            }
+        )
+    }
+
+    val metadataCleaningService: MetadataCleaningService by lazy {
+        MetadataCleaningService(
+            llmService = llmService,
+            llmLogger = llmLogger
+        )
+    }
+
+    val tagService: TagService by lazy {
+        TagService(
+            tagRepository = tagRepository,
+            llmService = llmService
+        )
+    }
+
+    val googleScholarScraper: GoogleScholarScraper by lazy {
+        GoogleScholarScraper()
+    }
+
+    val searchCacheService: SearchCacheService by lazy {
+        SearchCacheService()
+    }
+
+    val unifiedSearchService: UnifiedSearchService by lazy {
+        UnifiedSearchService(
+            semanticScholarResolver = semanticScholarResolver,
+            googleScholarScraper = googleScholarScraper,
+            cacheService = searchCacheService
         )
     }
 

@@ -44,23 +44,46 @@ class SemanticScholarResolver(
     /**
      * Search for papers by query (title, keywords, etc.)
      * Returns a list of results for user selection
+     * Includes retry logic for rate limiting (429 errors)
      */
     suspend fun search(query: String, limit: Int = 10): List<SemanticScholarPaper> {
-        val response = httpClient.get(SEARCH_URL) {
-            parameter("query", query)
-            parameter("limit", limit)
-            parameter("fields", PAPER_FIELDS)
+        var lastException: Exception? = null
+        var delayMs = 1000L
+
+        repeat(3) { attempt ->
+            try {
+                val response = httpClient.get(SEARCH_URL) {
+                    parameter("query", query)
+                    parameter("limit", limit)
+                    parameter("fields", PAPER_FIELDS)
+                }
+
+                if (response.status.value == 429) {
+                    // Rate limited - wait and retry
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2 // Exponential backoff
+                    return@repeat
+                }
+
+                if (!response.status.isSuccess()) {
+                    throw MetadataResolutionException(
+                        "Semantic Scholar API error: ${response.status}",
+                        query
+                    )
+                }
+
+                val searchResponse = response.body<SemanticScholarSearchResponse>()
+                return searchResponse.data
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < 2) {
+                    kotlinx.coroutines.delay(delayMs)
+                    delayMs *= 2
+                }
+            }
         }
 
-        if (!response.status.isSuccess()) {
-            throw MetadataResolutionException(
-                "Semantic Scholar API error: ${response.status}",
-                query
-            )
-        }
-
-        val searchResponse = response.body<SemanticScholarSearchResponse>()
-        return searchResponse.data
+        throw lastException ?: MetadataResolutionException("Search failed after retries", query)
     }
 
     /**

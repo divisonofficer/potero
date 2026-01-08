@@ -30,6 +30,7 @@ kotlin {
                 implementation(libs.ktor.client.cio)
                 implementation(libs.sqldelight.driver.jvm)
                 implementation(libs.pdfbox)
+                implementation(libs.jsoup)
             }
         }
     }

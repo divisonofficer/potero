@@ -101,4 +101,68 @@ class TagRepositoryImpl(
             }
         }
     }
+
+    override suspend fun getTagsForPaper(paperId: String): Result<List<Tag>> = withContext(Dispatchers.IO) {
+        runCatching {
+            tagQueries.selectByPaper(paperId).executeAsList().map { dbTag ->
+                Tag(
+                    id = dbTag.id,
+                    name = dbTag.name,
+                    color = dbTag.color ?: "#6366f1"
+                )
+            }
+        }
+    }
+
+    override suspend fun linkTagToPaper(paperId: String, tagId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            tagQueries.linkPaperTag(paperId, tagId)
+        }
+    }
+
+    override suspend fun unlinkTagFromPaper(paperId: String, tagId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            tagQueries.unlinkPaperTag(paperId, tagId)
+        }
+    }
+
+    override suspend fun setTagsForPaper(paperId: String, tagIds: List<String>): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Remove all existing tags
+            tagQueries.unlinkAllFromPaper(paperId)
+            // Add new tags
+            tagIds.forEach { tagId ->
+                tagQueries.linkPaperTag(paperId, tagId)
+            }
+        }
+    }
+
+    override suspend fun mergeTags(sourceTagId: String, targetTagId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            // Move all paper links from source to target
+            tagQueries.mergeTagLinks(targetTagId, sourceTagId)
+            // Delete any remaining links (duplicates were ignored)
+            tagQueries.deleteTagLinks(sourceTagId)
+            // Delete the source tag
+            tagQueries.delete(sourceTagId)
+        }
+    }
+
+    override suspend fun getCount(): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            tagQueries.countAll().executeAsOne().toInt()
+        }
+    }
+
+    override suspend fun searchByName(query: String): Result<List<Tag>> = withContext(Dispatchers.IO) {
+        runCatching {
+            tagQueries.searchByName(query).executeAsList().map { dbTag ->
+                Tag(
+                    id = dbTag.id,
+                    name = dbTag.name,
+                    color = dbTag.color ?: "#6366f1"
+                )
+            }
+        }
+    }
 }

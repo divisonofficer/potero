@@ -191,15 +191,15 @@ fun Route.uploadRoutes() {
                     val analyzer = PdfAnalyzer(targetFile.absolutePath)
                     val analysis = analyzer.analyze()
 
-                    pdfMetadataTitle = analysis.metadata.title
-                    pdfMetadataAuthor = analysis.metadata.author
+                    pdfMetadataTitle = analysis.metadata.title ?: analysis.extractedTitle
+                    pdfMetadataAuthor = analysis.metadata.author ?: analysis.extractedAuthors.joinToString(", ")
                     detectedDoi = analysis.detectedDoi
                     detectedArxivId = analysis.detectedArxivId
 
                     // Step 2: Try to resolve metadata from identifiers
                     if (detectedDoi != null) {
                         // Try DOI resolver first
-                        val doiResult = doiResolver.resolve(detectedDoi!!).getOrNull()
+                        val doiResult = doiResolver.resolve(detectedDoi).getOrNull()
                         if (doiResult != null) {
                             autoResolved = true
                             resolvedMetadata = ResolvedMetadataDto(
@@ -218,7 +218,7 @@ fun Route.uploadRoutes() {
 
                     if (!autoResolved && detectedArxivId != null) {
                         // Try arXiv resolver
-                        val arxivResult = arxivResolver.resolve(detectedArxivId!!).getOrNull()
+                        val arxivResult = arxivResolver.resolve(detectedArxivId).getOrNull()
                         if (arxivResult != null) {
                             autoResolved = true
                             resolvedMetadata = ResolvedMetadataDto(
@@ -272,6 +272,14 @@ fun Route.uploadRoutes() {
             val paperAuthors = when {
                 autoResolved && resolvedMetadata != null -> resolvedMetadata.authors.mapIndexed { index, name ->
                     Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                }
+                !pdfMetadataAuthor.isNullOrBlank() -> {
+                    // Parse authors from PDF metadata/extraction
+                    pdfMetadataAuthor.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+                        .filter { it.isNotBlank() }
+                        .mapIndexed { index, name ->
+                            Author(id = UUID.randomUUID().toString(), name = name.trim(), order = index)
+                        }
                 }
                 else -> emptyList()
             }
@@ -384,6 +392,200 @@ fun Route.uploadRoutes() {
                         )
                     )
                 }
+            )
+        }
+
+        // POST /api/upload/reanalyze/{paperId} - Re-analyze an existing paper's PDF
+        post("/reanalyze/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            // Check if paper exists
+            val existingPaper = paperRepository.getById(paperId).getOrNull()
+            if (existingPaper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "Paper not found: $paperId"
+                    )
+                )
+                return@post
+            }
+
+            // Check if paper has a PDF
+            val pdfPath = existingPaper.pdfPath
+            if (pdfPath.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "Paper does not have a PDF file"
+                    )
+                )
+                return@post
+            }
+
+            val pdfFile = java.io.File(pdfPath)
+            if (!pdfFile.exists()) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "PDF file not found at path: $pdfPath"
+                    )
+                )
+                return@post
+            }
+
+            // Re-analyze the PDF
+            var detectedDoi: String? = null
+            var detectedArxivId: String? = null
+            var pdfMetadataTitle: String? = null
+            var pdfMetadataAuthor: String? = null
+            var autoResolved = false
+            var resolvedMetadata: ResolvedMetadataDto? = null
+            var searchResults: List<SearchResult> = emptyList()
+
+            try {
+                // Step 1: Analyze PDF
+                val analyzer = PdfAnalyzer(pdfFile.absolutePath)
+                val analysis = analyzer.analyze()
+
+                pdfMetadataTitle = analysis.metadata.title ?: analysis.extractedTitle
+                pdfMetadataAuthor = analysis.metadata.author ?: analysis.extractedAuthors.joinToString(", ")
+                detectedDoi = analysis.detectedDoi
+                detectedArxivId = analysis.detectedArxivId
+
+                // Step 2: Try to resolve metadata from identifiers
+                val doi = detectedDoi
+                if (doi != null) {
+                    val doiResult = doiResolver.resolve(doi).getOrNull()
+                    if (doiResult != null) {
+                        autoResolved = true
+                        resolvedMetadata = ResolvedMetadataDto(
+                            title = doiResult.title,
+                            authors = doiResult.authors.map { it.name },
+                            abstract = doiResult.abstract,
+                            doi = doiResult.doi,
+                            arxivId = doiResult.arxivId,
+                            year = doiResult.year,
+                            venue = doiResult.venue,
+                            pdfUrl = doiResult.pdfUrl,
+                            citationsCount = doiResult.citationsCount
+                        )
+                    }
+                }
+
+                val arxivId = detectedArxivId
+                if (!autoResolved && arxivId != null) {
+                    val arxivResult = arxivResolver.resolve(arxivId).getOrNull()
+                    if (arxivResult != null) {
+                        autoResolved = true
+                        resolvedMetadata = ResolvedMetadataDto(
+                            title = arxivResult.title,
+                            authors = arxivResult.authors.map { it.name },
+                            abstract = arxivResult.abstract,
+                            doi = arxivResult.doi,
+                            arxivId = arxivResult.arxivId,
+                            year = arxivResult.year,
+                            venue = arxivResult.venue,
+                            pdfUrl = arxivResult.pdfUrl,
+                            citationsCount = arxivResult.citationsCount
+                        )
+                    }
+                }
+
+                // Step 3: If no identifier found, search by title
+                if (!autoResolved) {
+                    val searchTitle = analysis.bestTitle ?: existingPaper.title
+                    try {
+                        searchResults = semanticScholarResolver.search(searchTitle, limit = 5)
+                            .map { it.toSearchResult() }
+                    } catch (e: Exception) {
+                        // Search failed, continue without results
+                    }
+                }
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "Failed to analyze PDF: ${e.message}"
+                    )
+                )
+                return@post
+            }
+
+            // Update paper with best available metadata
+            val metadata = resolvedMetadata
+            if (autoResolved && metadata != null) {
+                // Auto-resolved: use external API metadata
+                val updatedPaper = existingPaper.copy(
+                    title = metadata.title,
+                    authors = metadata.authors.mapIndexed { index, name ->
+                        Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                    },
+                    abstract = metadata.abstract,
+                    doi = metadata.doi ?: detectedDoi,
+                    arxivId = metadata.arxivId ?: detectedArxivId,
+                    year = metadata.year,
+                    conference = metadata.venue,
+                    citationsCount = metadata.citationsCount ?: 0,
+                    updatedAt = Clock.System.now()
+                )
+                paperRepository.update(updatedPaper)
+            } else {
+                // Not auto-resolved: update with extracted PDF data if available
+                val extractedTitle = pdfMetadataTitle
+                val extractedAuthor = pdfMetadataAuthor
+
+                if (!extractedTitle.isNullOrBlank() || !extractedAuthor.isNullOrBlank()) {
+                    val extractedAuthors = if (!extractedAuthor.isNullOrBlank()) {
+                        extractedAuthor.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+                            .filter { it.isNotBlank() }
+                            .mapIndexed { index, name ->
+                                Author(id = UUID.randomUUID().toString(), name = name.trim(), order = index)
+                            }
+                    } else {
+                        existingPaper.authors
+                    }
+
+                    val updatedPaper = existingPaper.copy(
+                        title = extractedTitle?.takeIf { it.isNotBlank() } ?: existingPaper.title,
+                        authors = extractedAuthors.ifEmpty { existingPaper.authors },
+                        doi = detectedDoi ?: existingPaper.doi,
+                        arxivId = detectedArxivId ?: existingPaper.arxivId,
+                        updatedAt = Clock.System.now()
+                    )
+                    paperRepository.update(updatedPaper)
+                }
+            }
+
+            // Determine the final title to return in response
+            val finalTitle = when {
+                autoResolved && metadata != null -> metadata.title
+                !pdfMetadataTitle.isNullOrBlank() -> pdfMetadataTitle!!
+                else -> existingPaper.title
+            }
+
+            call.respond(
+                ApiResponse(
+                    data = UploadAnalysisResponse(
+                        paperId = existingPaper.id,
+                        fileName = pdfFile.name,
+                        filePath = pdfPath,
+                        title = finalTitle,
+                        detectedDoi = detectedDoi,
+                        detectedArxivId = detectedArxivId,
+                        pdfMetadataTitle = pdfMetadataTitle,
+                        pdfMetadataAuthor = pdfMetadataAuthor,
+                        autoResolved = autoResolved,
+                        resolvedMetadata = resolvedMetadata,
+                        searchResults = searchResults,
+                        needsUserConfirmation = !autoResolved && searchResults.isNotEmpty()
+                    )
+                )
             )
         }
 

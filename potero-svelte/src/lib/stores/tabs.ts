@@ -8,6 +8,13 @@ const initialTabs: Tab[] = [{ id: 'home', type: 'home', title: 'Library' }];
 export const tabs = writable<Tab[]>(initialTabs);
 export const activeTabId = writable('home');
 
+// Chat panel visibility (toggle state)
+export const isChatPanelOpen = writable(false);
+
+export function toggleChatPanel() {
+	isChatPanelOpen.update((v) => !v);
+}
+
 // Derived: active tab
 export const activeTab = derived([tabs, activeTabId], ([$tabs, $activeTabId]) =>
 	$tabs.find((t) => t.id === $activeTabId)

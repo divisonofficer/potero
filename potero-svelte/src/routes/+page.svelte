@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -14,7 +14,14 @@
 		uploadPdfs,
 		pendingUploadAnalysis,
 		clearPendingUploadAnalysis,
-		loadPapers
+		loadPapers,
+		reanalyzePaper,
+		autoTagPaper,
+		deletePaper,
+		onlineSearchResults,
+		isSearchingOnline,
+		searchOnlineIfNeeded,
+		importFromSearchResult
 	} from '$lib/stores/library';
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
@@ -22,6 +29,12 @@
 	import { browser } from '$app/environment';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
+	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
+	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
+	import { formatVenue } from '$lib/utils/venueAbbreviation';
+
+	// LLM log panel state
+	let showLLMLogPanel = $state(false);
 
 	// Dynamic import for PDF viewer (client-side only due to pdfjs)
 	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
@@ -42,6 +55,23 @@
 	// Drag and drop state
 	let isDragging = $state(false);
 
+	// Delete confirmation state
+	let paperToDelete = $state<Paper | null>(null);
+	let isDeleting = $state(false);
+
+	async function handleDeletePaper() {
+		if (!paperToDelete) return;
+		isDeleting = true;
+		const success = await deletePaper(paperToDelete.id);
+		if (success) {
+			toast.success(`Deleted "${paperToDelete.title}"`);
+		} else {
+			toast.error('Failed to delete paper');
+		}
+		paperToDelete = null;
+		isDeleting = false;
+	}
+
 	// Settings state
 	let settings = $state<Settings>({
 		llmApiKey: null,
@@ -55,6 +85,13 @@
 	onMount(() => {
 		initializeLibrary();
 		loadSettings();
+	});
+
+	// Trigger online search when local results are few
+	$effect(() => {
+		const query = $searchQuery;
+		const localCount = $filteredPapers.length;
+		searchOnlineIfNeeded(query, localCount);
 	});
 
 	async function loadSettings() {
@@ -323,9 +360,26 @@
 			</button>
 		{/each}
 
+		<!-- Chat toggle button (only show when PDF viewer is active) -->
+		{#if $activeTab?.type === 'viewer'}
+			<button
+				class="ml-auto rounded p-1.5 transition-colors {$isChatPanelOpen
+					? 'bg-primary text-primary-foreground'
+					: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+				onclick={() => toggleChatPanel()}
+				title={$isChatPanelOpen ? 'Close Chat' : 'Chat with Paper'}
+			>
+				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+				</svg>
+			</button>
+		{:else}
+			<div class="ml-auto"></div>
+		{/if}
+
 		<!-- Settings button -->
 		<button
-			class="ml-auto rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 			onclick={() => openSettings()}
 			title="Settings"
 		>
@@ -442,12 +496,25 @@
 							{#if $viewStyle === 'grid'}
 								<!-- Grid view card -->
 								<div
-									class="cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+									class="group relative cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
 									onclick={() => {
 										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
 									}}
 								>
-									<h3 class="mb-2 line-clamp-2 font-semibold">{paper.title}</h3>
+									<!-- Delete button (appears on hover) -->
+									<button
+										class="absolute right-2 top-2 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+										onclick={(e) => {
+											e.stopPropagation();
+											paperToDelete = paper;
+										}}
+										title="Delete paper"
+									>
+										<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+											<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+										</svg>
+									</button>
+									<h3 class="mb-2 line-clamp-2 pr-6 font-semibold">{paper.title}</h3>
 									<p class="mb-2 text-sm text-muted-foreground">
 										{paper.authors.slice(0, 3).join(', ')}
 										{paper.authors.length > 3 ? ` +${paper.authors.length - 3}` : ''}
@@ -457,7 +524,13 @@
 											<span>{paper.year}</span>
 										{/if}
 										{#if paper.conference}
-											<span class="rounded bg-muted px-2 py-0.5">{paper.conference}</span>
+											{@const venueInfo = formatVenue(paper.conference)}
+											<span
+												class="rounded bg-muted px-2 py-0.5"
+												title={venueInfo.full ?? undefined}
+											>
+												{venueInfo.display}
+											</span>
 										{/if}
 										{#if paper.pdfUrl}
 											<span class="ml-auto text-primary">PDF</span>
@@ -478,53 +551,148 @@
 							{:else if $viewStyle === 'list'}
 								<!-- List view -->
 								<div
-									class="flex cursor-pointer items-center gap-4 rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
+									class="group flex cursor-pointer items-center gap-4 rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
 									onclick={() => {
 										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
 									}}
 								>
-									<div class="flex-1">
-										<h3 class="font-semibold">{paper.title}</h3>
-										<p class="mt-1 text-sm text-muted-foreground">
+									<div class="flex-1 min-w-0">
+										<h3 class="font-semibold truncate">{paper.title}</h3>
+										<p class="mt-1 text-sm text-muted-foreground truncate">
 											{paper.authors.join(', ')}
 										</p>
 									</div>
-									<div class="flex items-center gap-4 text-sm text-muted-foreground">
+									<div class="flex items-center gap-4 text-sm text-muted-foreground shrink-0">
 										{#if paper.year}
 											<span>{paper.year}</span>
 										{/if}
 										{#if paper.conference}
-											<span class="rounded bg-muted px-2 py-0.5">{paper.conference}</span>
+											{@const venueInfo = formatVenue(paper.conference)}
+											<span class="rounded bg-muted px-2 py-0.5" title={venueInfo.full ?? undefined}>{venueInfo.display}</span>
 										{/if}
 										{#if paper.pdfUrl}
 											<span class="text-primary">PDF</span>
 										{:else}
 											<span>{paper.citations} citations</span>
 										{/if}
+										<!-- Delete button -->
+										<button
+											class="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+											onclick={(e) => {
+												e.stopPropagation();
+												paperToDelete = paper;
+											}}
+											title="Delete paper"
+										>
+											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+											</svg>
+										</button>
 									</div>
 								</div>
 							{:else}
 								<!-- Compact view -->
 								<div
-									class="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-muted"
+									class="group flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-muted"
 									onclick={() => {
 										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
 									}}
 								>
 									{#if paper.pdfUrl}
-										<svg class="h-4 w-4 text-primary" viewBox="0 0 24 24" fill="currentColor">
+										<svg class="h-4 w-4 shrink-0 text-primary" viewBox="0 0 24 24" fill="currentColor">
 											<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" />
 										</svg>
 									{/if}
 									<span class="flex-1 truncate font-medium">{paper.title}</span>
-									<span class="text-muted-foreground">{paper.authors[0]}</span>
+									<span class="shrink-0 text-muted-foreground">{paper.authors[0]}</span>
 									{#if paper.year}
-										<span class="text-muted-foreground">{paper.year}</span>
+										<span class="shrink-0 text-muted-foreground">{paper.year}</span>
 									{/if}
+									<!-- Delete button -->
+									<button
+										class="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+										onclick={(e) => {
+											e.stopPropagation();
+											paperToDelete = paper;
+										}}
+										title="Delete paper"
+									>
+										<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+											<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+										</svg>
+									</button>
 								</div>
 							{/if}
 						{/each}
 					</div>
+
+					<!-- Online Search Results Section -->
+					{#if $searchQuery.length >= 3 && $filteredPapers.length < 3}
+						<div class="mt-8">
+							<div class="mb-4 flex items-center justify-between">
+								<h2 class="text-lg font-medium">Available to Download</h2>
+								{#if $isSearchingOnline}
+									<div class="flex items-center gap-2 text-sm text-muted-foreground">
+										<div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+										Searching online...
+									</div>
+								{/if}
+							</div>
+
+							{#if $onlineSearchResults.length > 0}
+								<div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+									{#each $onlineSearchResults.slice(0, 6) as result}
+										<div class="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4">
+											<h3 class="mb-2 line-clamp-2 font-medium text-sm">{result.title}</h3>
+											<p class="mb-2 text-xs text-muted-foreground">
+												{result.authors.slice(0, 2).join(', ')}
+												{result.authors.length > 2 ? ` +${result.authors.length - 2}` : ''}
+											</p>
+											<div class="flex items-center gap-2 text-xs text-muted-foreground">
+												{#if result.year}
+													<span>{result.year}</span>
+												{/if}
+												{#if result.venue}
+													<span class="rounded bg-muted px-1.5 py-0.5">{result.venue}</span>
+												{/if}
+												{#if result.citationCount}
+													<span>{result.citationCount} citations</span>
+												{/if}
+											</div>
+											<div class="mt-3 flex items-center gap-2">
+												<button
+													class="flex-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90"
+													onclick={async () => {
+														const paper = await importFromSearchResult(result);
+														if (paper) {
+															toast.success(`Added "${paper.title}" to library`);
+														} else {
+															toast.error('Failed to import paper');
+														}
+													}}
+												>
+													Add to Library
+												</button>
+												{#if result.pdfUrl}
+													<a
+														href={result.pdfUrl}
+														target="_blank"
+														rel="noopener noreferrer"
+														class="rounded border px-3 py-1.5 text-xs hover:bg-muted"
+														onclick={(e) => e.stopPropagation()}
+													>
+														PDF
+													</a>
+												{/if}
+											</div>
+										</div>
+									{/each}
+								</div>
+							{:else if !$isSearchingOnline}
+								<p class="text-sm text-muted-foreground">No online results found for "{$searchQuery}"</p>
+							{/if}
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
@@ -534,6 +702,62 @@
 			<div class="flex h-full {$activeTabId === tab.id ? '' : 'hidden'}">
 				<!-- PDF Viewer -->
 				<div class="flex flex-1 flex-col">
+					<!-- Paper info bar with action buttons -->
+					<div class="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
+						<div class="flex items-center gap-2 min-w-0 flex-1">
+							<h2 class="truncate text-sm font-medium">{tab.paper?.title}</h2>
+							{#if tab.paper?.year}
+								<span class="shrink-0 text-xs text-muted-foreground">({tab.paper.year})</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-1 shrink-0">
+							<!-- Re-analyze button -->
+							<button
+								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+								onclick={async () => {
+									if (!tab.paper?.id) return;
+									toast.info('Re-analyzing PDF...');
+									const result = await reanalyzePaper(tab.paper.id);
+									if (result?.autoResolved) {
+										toast.success('Metadata updated successfully');
+									} else if (result?.needsUserConfirmation) {
+										toast.info('Please select the correct paper from search results');
+									} else if (result) {
+										toast.warning('No metadata found');
+									}
+								}}
+								title="Re-analyze PDF to update metadata"
+							>
+								<svg class="h-4 w-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<path d="M1 4v6h6M23 20v-6h-6" />
+									<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+								</svg>
+								Re-analyze
+							</button>
+							<!-- Auto-tag button -->
+							<button
+								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+								onclick={async () => {
+									if (!tab.paper?.id) return;
+									toast.info('Generating tags with AI...');
+									const result = await autoTagPaper(tab.paper.id);
+									if (result && result.assignedTags.length > 0) {
+										toast.success(`Added ${result.assignedTags.length} tags: ${result.assignedTags.map(t => t.name).join(', ')}`);
+									} else {
+										toast.warning('Could not generate tags');
+									}
+								}}
+								title="Auto-generate tags using AI"
+							>
+								<svg class="h-4 w-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+									<line x1="7" y1="7" x2="7.01" y2="7" />
+								</svg>
+								Auto-tag
+							</button>
+						</div>
+					</div>
+
 					{#if tab.paper?.pdfUrl && PdfViewer}
 						<svelte:component
 							this={PdfViewer}
@@ -570,10 +794,12 @@
 					{/if}
 				</div>
 
-				<!-- Chat panel -->
-				<div class="w-80 border-l">
-					<ChatPanel paper={tab.paper ?? null} />
-				</div>
+				<!-- Chat panel (toggleable) -->
+				{#if $isChatPanelOpen}
+					<div class="w-80 border-l">
+						<ChatPanel paper={tab.paper ?? null} />
+					</div>
+				{/if}
 			</div>
 		{/each}
 
@@ -670,6 +896,22 @@
 				</div>
 			</section>
 
+			<!-- LLM Usage Log -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">LLM Usage</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<p class="text-sm text-muted-foreground">
+						View LLM API usage logs for debugging and monitoring.
+					</p>
+					<button
+						class="rounded-md border px-4 py-2 text-sm hover:bg-muted"
+						onclick={() => (showLLMLogPanel = true)}
+					>
+						View LLM Logs
+					</button>
+				</div>
+			</section>
+
 			<!-- About -->
 			<section>
 				<h2 class="mb-4 text-lg font-semibold">About</h2>
@@ -699,4 +941,55 @@
 			clearPendingUploadAnalysis();
 		}}
 	/>
+{/if}
+
+<!-- Job Status Panel (bottom right, like Google Drive) -->
+<JobStatusPanel />
+
+<!-- Delete Confirmation Dialog -->
+{#if paperToDelete}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-md rounded-lg bg-background p-6 shadow-xl">
+			<h2 class="mb-2 text-lg font-semibold">Delete Paper</h2>
+			<p class="mb-4 text-sm text-muted-foreground">
+				Are you sure you want to delete <span class="font-medium text-foreground">"{paperToDelete.title}"</span>?
+			</p>
+			<p class="mb-6 text-xs text-destructive">
+				This will permanently remove the paper and its PDF file from your library. This action cannot be undone.
+			</p>
+			<div class="flex justify-end gap-2">
+				<button
+					class="rounded-md px-4 py-2 text-sm hover:bg-muted"
+					onclick={() => (paperToDelete = null)}
+					disabled={isDeleting}
+				>
+					Cancel
+				</button>
+				<button
+					class="rounded-md bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+					disabled={isDeleting}
+					onclick={handleDeletePaper}
+				>
+					{isDeleting ? 'Deleting...' : 'Delete'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- LLM Log Panel Modal -->
+{#if showLLMLogPanel}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="relative h-[80vh] w-full max-w-4xl rounded-lg bg-background shadow-xl overflow-hidden">
+			<button
+				class="absolute right-4 top-4 z-10 rounded p-1 hover:bg-muted"
+				onclick={() => (showLLMLogPanel = false)}
+			>
+				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<path d="M18 6L6 18M6 6l12 12" />
+				</svg>
+			</button>
+			<LLMLogPanel />
+		</div>
+	</div>
 {/if}

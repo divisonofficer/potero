@@ -20,6 +20,10 @@ fun Application.configureRouting() {
             searchRoutes()
             settingsRoutes()
             uploadRoutes()
+            jobRoutes()
         }
+
+        // LLM routes (separate from /api prefix for clarity)
+        llmRoutes()
     }
 }

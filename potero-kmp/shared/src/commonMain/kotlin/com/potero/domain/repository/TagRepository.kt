@@ -46,4 +46,40 @@ interface TagRepository {
      * Get tags with paper counts
      */
     suspend fun getTagsWithCounts(): Result<List<Pair<Tag, Int>>>
+
+    /**
+     * Get tags for a specific paper
+     */
+    suspend fun getTagsForPaper(paperId: String): Result<List<Tag>>
+
+    /**
+     * Link a tag to a paper
+     */
+    suspend fun linkTagToPaper(paperId: String, tagId: String): Result<Unit>
+
+    /**
+     * Unlink a tag from a paper
+     */
+    suspend fun unlinkTagFromPaper(paperId: String, tagId: String): Result<Unit>
+
+    /**
+     * Set tags for a paper (replace all existing)
+     */
+    suspend fun setTagsForPaper(paperId: String, tagIds: List<String>): Result<Unit>
+
+    /**
+     * Merge one tag into another (for tag consolidation)
+     * All papers with sourceTagId will be linked to targetTagId
+     */
+    suspend fun mergeTags(sourceTagId: String, targetTagId: String): Result<Unit>
+
+    /**
+     * Get total tag count
+     */
+    suspend fun getCount(): Result<Int>
+
+    /**
+     * Search tags by name (partial match)
+     */
+    suspend fun searchByName(query: String): Result<List<Tag>>
 }
