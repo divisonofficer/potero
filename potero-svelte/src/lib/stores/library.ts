@@ -1,12 +1,20 @@
 import { writable, derived } from 'svelte/store';
 import type { Paper, ViewStyle, SortBy, Tag } from '$lib/types';
-import { api } from '$lib/api/client';
+import { api, type UploadAnalysisResponse, type SearchResult } from '$lib/api/client';
 
 // Core state
 export const papers = writable<Paper[]>([]);
 export const tags = writable<Tag[]>([]);
 export const isLoading = writable(false);
 export const error = writable<string | null>(null);
+
+// Upload analysis state - for showing search results dialog
+export interface PendingUploadAnalysis {
+	paperId: string;
+	searchQuery: string;
+	searchResults: SearchResult[];
+}
+export const pendingUploadAnalysis = writable<PendingUploadAnalysis | null>(null);
 
 // Filter state
 export const searchQuery = writable('');
@@ -201,20 +209,34 @@ export async function deletePaper(id: string): Promise<boolean> {
 
 /**
  * Upload a PDF file and create a new paper
+ * Returns the analysis response which may contain search results for user confirmation
  */
-export async function uploadPdf(file: File, title?: string): Promise<Paper | null> {
+export async function uploadPdf(
+	file: File,
+	title?: string,
+	skipAnalysis?: boolean
+): Promise<UploadAnalysisResponse | null> {
 	isLoading.set(true);
 	error.set(null);
 
-	const result = await api.uploadPdf(file, title);
+	const result = await api.uploadPdf(file, title, skipAnalysis);
 
 	if (result.success && result.data) {
+		const analysisResult = result.data;
+
+		// If there are search results that need user confirmation, store them
+		if (analysisResult.needsUserConfirmation && analysisResult.searchResults.length > 0) {
+			pendingUploadAnalysis.set({
+				paperId: analysisResult.paperId,
+				searchQuery: analysisResult.pdfMetadataTitle || analysisResult.title,
+				searchResults: analysisResult.searchResults
+			});
+		}
+
 		// Reload papers to get the new entry
 		await loadPapers();
 		isLoading.set(false);
-		return papers.subscribe((list) => list.find((p) => p.id === result.data!.paperId))
-			? ({ id: result.data.paperId, title: result.data.title } as Paper)
-			: null;
+		return analysisResult;
 	} else {
 		error.set(result.error?.message ?? 'Failed to upload PDF');
 		isLoading.set(false);
@@ -223,14 +245,26 @@ export async function uploadPdf(file: File, title?: string): Promise<Paper | nul
 }
 
 /**
- * Upload multiple PDF files
+ * Clear pending upload analysis (after user confirms or cancels)
  */
-export async function uploadPdfs(files: FileList | File[]): Promise<number> {
+export function clearPendingUploadAnalysis() {
+	pendingUploadAnalysis.set(null);
+}
+
+/**
+ * Upload multiple PDF files
+ * Returns number of successful uploads and any pending analysis for user confirmation
+ */
+export async function uploadPdfs(files: FileList | File[]): Promise<{
+	successCount: number;
+	pendingAnalyses: PendingUploadAnalysis[];
+}> {
 	isLoading.set(true);
 	error.set(null);
 
 	let successCount = 0;
 	let lastError: string | null = null;
+	const pendingAnalyses: PendingUploadAnalysis[] = [];
 
 	const pdfFiles = Array.from(files).filter(
 		(f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
@@ -243,8 +277,16 @@ export async function uploadPdfs(files: FileList | File[]): Promise<number> {
 		try {
 			const result = await api.uploadPdf(file);
 			console.log('Upload result:', result);
-			if (result.success) {
+			if (result.success && result.data) {
 				successCount++;
+				// Collect pending analyses for later display
+				if (result.data.needsUserConfirmation && result.data.searchResults.length > 0) {
+					pendingAnalyses.push({
+						paperId: result.data.paperId,
+						searchQuery: result.data.pdfMetadataTitle || result.data.title,
+						searchResults: result.data.searchResults
+					});
+				}
 			} else {
 				lastError = result.error?.message ?? 'Upload failed';
 				console.error('Upload error:', lastError);
@@ -260,12 +302,17 @@ export async function uploadPdfs(files: FileList | File[]): Promise<number> {
 		await loadPapers();
 	}
 
+	// Set the first pending analysis for display (others will be handled later)
+	if (pendingAnalyses.length > 0) {
+		pendingUploadAnalysis.set(pendingAnalyses[0]);
+	}
+
 	if (lastError && successCount === 0) {
 		error.set(lastError);
 	}
 
 	isLoading.set(false);
-	return successCount;
+	return { successCount, pendingAnalyses };
 }
 
 /**

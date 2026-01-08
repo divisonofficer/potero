@@ -135,11 +135,19 @@ class ApiClient {
 	}
 
 	// File Upload - uses direct backend URL to avoid proxy issues with large files
-	async uploadPdf(file: File, title?: string): Promise<ApiResponse<UploadResponse>> {
+	// Now returns UploadAnalysisResponse with PDF analysis results
+	async uploadPdf(
+		file: File,
+		title?: string,
+		skipAnalysis?: boolean
+	): Promise<ApiResponse<UploadAnalysisResponse>> {
 		const formData = new FormData();
 		formData.append('file', file);
 		if (title) {
 			formData.append('title', title);
+		}
+		if (skipAnalysis) {
+			formData.append('skipAnalysis', 'true');
 		}
 
 		try {
@@ -148,7 +156,7 @@ class ApiClient {
 				method: 'POST',
 				body: formData
 			});
-			return (await response.json()) as ApiResponse<UploadResponse>;
+			return (await response.json()) as ApiResponse<UploadAnalysisResponse>;
 		} catch (error) {
 			console.error('Upload fetch error:', error);
 			return {
@@ -156,6 +164,26 @@ class ApiClient {
 				error: {
 					code: 'UPLOAD_ERROR',
 					message: error instanceof Error ? error.message : 'Upload failed'
+				}
+			};
+		}
+	}
+
+	// Confirm metadata selection for a paper
+	async confirmMetadata(request: ConfirmMetadataRequest): Promise<ApiResponse<UploadResponse>> {
+		try {
+			const response = await fetch(`${this.directUploadUrl}/upload/confirm`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(request)
+			});
+			return (await response.json()) as ApiResponse<UploadResponse>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'CONFIRM_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to confirm metadata'
 				}
 			};
 		}
@@ -196,6 +224,74 @@ export interface UploadResponse {
 	fileName: string;
 	filePath: string;
 	title: string;
+}
+
+/**
+ * Search result from Semantic Scholar or other sources
+ */
+export interface SearchResult {
+	id: string;
+	title: string;
+	authors: string[];
+	year: number | null;
+	venue: string | null;
+	citationCount: number | null;
+	abstract: string | null;
+	pdfUrl: string | null;
+	doi: string | null;
+	arxivId: string | null;
+	source: string; // "semantic_scholar", "google_scholar", etc.
+}
+
+/**
+ * Resolved metadata from DOI/arXiv lookup
+ */
+export interface ResolvedMetadata {
+	title: string;
+	authors: string[];
+	abstract: string | null;
+	doi: string | null;
+	arxivId: string | null;
+	year: number | null;
+	venue: string | null;
+	pdfUrl: string | null;
+	citationsCount: number | null;
+}
+
+/**
+ * Extended upload response with analysis results
+ */
+export interface UploadAnalysisResponse {
+	paperId: string;
+	fileName: string;
+	filePath: string;
+	title: string;
+	// Analysis results
+	detectedDoi: string | null;
+	detectedArxivId: string | null;
+	pdfMetadataTitle: string | null;
+	pdfMetadataAuthor: string | null;
+	// If DOI/arXiv found and resolved automatically
+	autoResolved: boolean;
+	resolvedMetadata: ResolvedMetadata | null;
+	// If no identifier found, search results for user selection
+	searchResults: SearchResult[];
+	needsUserConfirmation: boolean;
+}
+
+/**
+ * Request to confirm metadata selection
+ */
+export interface ConfirmMetadataRequest {
+	paperId: string;
+	title: string;
+	authors: string[];
+	abstract?: string;
+	doi?: string;
+	arxivId?: string;
+	year?: number;
+	venue?: string;
+	citationsCount?: number;
 }
 
 export const api = new ApiClient();

@@ -4,6 +4,8 @@ import com.potero.domain.model.Author
 import com.potero.domain.model.Paper
 import com.potero.domain.repository.SettingsKeys
 import com.potero.server.di.ServiceLocator
+import com.potero.service.metadata.SearchResult
+import com.potero.service.pdf.PdfAnalyzer
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.request.*
@@ -22,9 +24,64 @@ data class UploadResponse(
     val title: String
 )
 
+/**
+ * Response for PDF upload with analysis results
+ * If searchResults is not empty, the frontend should show a selection dialog
+ */
+@Serializable
+data class UploadAnalysisResponse(
+    val paperId: String,
+    val fileName: String,
+    val filePath: String,
+    val title: String,
+    // Analysis results
+    val detectedDoi: String? = null,
+    val detectedArxivId: String? = null,
+    val pdfMetadataTitle: String? = null,
+    val pdfMetadataAuthor: String? = null,
+    // If DOI/arXiv found and resolved automatically
+    val autoResolved: Boolean = false,
+    val resolvedMetadata: ResolvedMetadataDto? = null,
+    // If no identifier found, search results for user selection
+    val searchResults: List<SearchResult> = emptyList(),
+    val needsUserConfirmation: Boolean = false
+)
+
+@Serializable
+data class ResolvedMetadataDto(
+    val title: String,
+    val authors: List<String>,
+    val abstract: String? = null,
+    val doi: String? = null,
+    val arxivId: String? = null,
+    val year: Int? = null,
+    val venue: String? = null,
+    val pdfUrl: String? = null,
+    val citationsCount: Int? = null
+)
+
+/**
+ * Request to confirm/update paper with selected metadata
+ */
+@Serializable
+data class ConfirmMetadataRequest(
+    val paperId: String,
+    val title: String,
+    val authors: List<String> = emptyList(),
+    val abstract: String? = null,
+    val doi: String? = null,
+    val arxivId: String? = null,
+    val year: Int? = null,
+    val venue: String? = null,
+    val citationsCount: Int? = null
+)
+
 fun Route.uploadRoutes() {
     val paperRepository = ServiceLocator.paperRepository
     val settingsRepository = ServiceLocator.settingsRepository
+    val doiResolver = ServiceLocator.doiResolver
+    val arxivResolver = ServiceLocator.arxivResolver
+    val semanticScholarResolver = ServiceLocator.semanticScholarResolver
 
     // GET /api/pdf/file - Serve PDF file by path
     route("/pdf") {
@@ -66,13 +123,14 @@ fun Route.uploadRoutes() {
     }
 
     route("/upload") {
-        // POST /api/upload/pdf - Upload a PDF file
+        // POST /api/upload/pdf - Upload a PDF file with automatic analysis
         post("/pdf") {
             val multipart = call.receiveMultipart()
 
             var fileName: String? = null
             var fileBytes: ByteArray? = null
             var title: String? = null
+            var skipAnalysis = false
 
             multipart.forEachPart { part ->
                 when (part) {
@@ -81,8 +139,9 @@ fun Route.uploadRoutes() {
                         fileBytes = part.streamProvider().readBytes()
                     }
                     is PartData.FormItem -> {
-                        if (part.name == "title") {
-                            title = part.value
+                        when (part.name) {
+                            "title" -> title = part.value
+                            "skipAnalysis" -> skipAnalysis = part.value.toBoolean()
                         }
                     }
                     else -> {}
@@ -93,7 +152,7 @@ fun Route.uploadRoutes() {
             if (fileName == null || fileBytes == null) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    ApiResponse<UploadResponse>(
+                    ApiResponse<UploadAnalysisResponse>(
                         success = false,
                         error = "No file uploaded"
                     )
@@ -117,12 +176,105 @@ fun Route.uploadRoutes() {
             // Save file
             targetFile.writeBytes(fileBytes!!)
 
-            // Extract title from filename if not provided
-            val paperTitle = title ?: fileName!!
-                .removeSuffix(".pdf")
-                .removeSuffix(".PDF")
-                .replace("_", " ")
-                .replace("-", " ")
+            // === PDF Analysis Pipeline ===
+            var detectedDoi: String? = null
+            var detectedArxivId: String? = null
+            var pdfMetadataTitle: String? = null
+            var pdfMetadataAuthor: String? = null
+            var autoResolved = false
+            var resolvedMetadata: ResolvedMetadataDto? = null
+            var searchResults: List<SearchResult> = emptyList()
+
+            if (!skipAnalysis) {
+                try {
+                    // Step 1: Analyze PDF
+                    val analyzer = PdfAnalyzer(targetFile.absolutePath)
+                    val analysis = analyzer.analyze()
+
+                    pdfMetadataTitle = analysis.metadata.title
+                    pdfMetadataAuthor = analysis.metadata.author
+                    detectedDoi = analysis.detectedDoi
+                    detectedArxivId = analysis.detectedArxivId
+
+                    // Step 2: Try to resolve metadata from identifiers
+                    if (detectedDoi != null) {
+                        // Try DOI resolver first
+                        val doiResult = doiResolver.resolve(detectedDoi!!).getOrNull()
+                        if (doiResult != null) {
+                            autoResolved = true
+                            resolvedMetadata = ResolvedMetadataDto(
+                                title = doiResult.title,
+                                authors = doiResult.authors.map { it.name },
+                                abstract = doiResult.abstract,
+                                doi = doiResult.doi,
+                                arxivId = doiResult.arxivId,
+                                year = doiResult.year,
+                                venue = doiResult.venue,
+                                pdfUrl = doiResult.pdfUrl,
+                                citationsCount = doiResult.citationsCount
+                            )
+                        }
+                    }
+
+                    if (!autoResolved && detectedArxivId != null) {
+                        // Try arXiv resolver
+                        val arxivResult = arxivResolver.resolve(detectedArxivId!!).getOrNull()
+                        if (arxivResult != null) {
+                            autoResolved = true
+                            resolvedMetadata = ResolvedMetadataDto(
+                                title = arxivResult.title,
+                                authors = arxivResult.authors.map { it.name },
+                                abstract = arxivResult.abstract,
+                                doi = arxivResult.doi,
+                                arxivId = arxivResult.arxivId,
+                                year = arxivResult.year,
+                                venue = arxivResult.venue,
+                                pdfUrl = arxivResult.pdfUrl,
+                                citationsCount = arxivResult.citationsCount
+                            )
+                        }
+                    }
+
+                    // Step 3: If no identifier found, search by title
+                    if (!autoResolved) {
+                        val searchTitle = analysis.bestTitle ?: fileName!!
+                            .removeSuffix(".pdf")
+                            .removeSuffix(".PDF")
+                            .replace("_", " ")
+                            .replace("-", " ")
+
+                        // Search Semantic Scholar
+                        try {
+                            searchResults = semanticScholarResolver.search(searchTitle, limit = 5)
+                                .map { it.toSearchResult() }
+                        } catch (e: Exception) {
+                            // Search failed, continue without results
+                        }
+                    }
+                } catch (e: Exception) {
+                    // PDF analysis failed, continue with basic upload
+                }
+            }
+
+            // Determine paper title
+            val paperTitle = when {
+                autoResolved && resolvedMetadata != null -> resolvedMetadata!!.title
+                title != null -> title!!
+                pdfMetadataTitle != null -> pdfMetadataTitle!!
+                else -> fileName!!
+                    .removeSuffix(".pdf")
+                    .removeSuffix(".PDF")
+                    .replace("_", " ")
+                    .replace("-", " ")
+            }
+
+            // Determine authors
+            val paperAuthors = when {
+                autoResolved && resolvedMetadata != null -> resolvedMetadata.authors.mapIndexed { index, name ->
+                    Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                }
+                else -> emptyList()
+            }
 
             // Create paper entry
             val now = Clock.System.now()
@@ -130,8 +282,14 @@ fun Route.uploadRoutes() {
                 id = paperId,
                 title = paperTitle,
                 pdfPath = targetFile.absolutePath,
-                authors = emptyList(),
+                authors = paperAuthors,
                 tags = emptyList(),
+                abstract = resolvedMetadata?.abstract,
+                doi = resolvedMetadata?.doi ?: detectedDoi,
+                arxivId = resolvedMetadata?.arxivId ?: detectedArxivId,
+                year = resolvedMetadata?.year,
+                conference = resolvedMetadata?.venue,
+                citationsCount = resolvedMetadata?.citationsCount ?: 0,
                 createdAt = now,
                 updatedAt = now
             )
@@ -142,11 +300,19 @@ fun Route.uploadRoutes() {
                     call.respond(
                         HttpStatusCode.Created,
                         ApiResponse(
-                            data = UploadResponse(
+                            data = UploadAnalysisResponse(
                                 paperId = insertedPaper.id,
                                 fileName = safeFileName,
                                 filePath = targetFile.absolutePath,
-                                title = insertedPaper.title
+                                title = insertedPaper.title,
+                                detectedDoi = detectedDoi,
+                                detectedArxivId = detectedArxivId,
+                                pdfMetadataTitle = pdfMetadataTitle,
+                                pdfMetadataAuthor = pdfMetadataAuthor,
+                                autoResolved = autoResolved,
+                                resolvedMetadata = resolvedMetadata,
+                                searchResults = searchResults,
+                                needsUserConfirmation = !autoResolved && searchResults.isNotEmpty()
                             )
                         )
                     )
@@ -156,9 +322,65 @@ fun Route.uploadRoutes() {
                     targetFile.delete()
                     call.respond(
                         HttpStatusCode.InternalServerError,
-                        ApiResponse<UploadResponse>(
+                        ApiResponse<UploadAnalysisResponse>(
                             success = false,
                             error = error.message ?: "Failed to create paper entry"
+                        )
+                    )
+                }
+            )
+        }
+
+        // POST /api/upload/confirm - Confirm metadata selection for a paper
+        post("/confirm") {
+            val request = call.receive<ConfirmMetadataRequest>()
+
+            val existingPaper = paperRepository.getById(request.paperId).getOrNull()
+            if (existingPaper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<UploadResponse>(
+                        success = false,
+                        error = "Paper not found: ${request.paperId}"
+                    )
+                )
+                return@post
+            }
+
+            val updatedPaper = existingPaper.copy(
+                title = request.title,
+                authors = request.authors.mapIndexed { index, name ->
+                    Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                },
+                abstract = request.abstract,
+                doi = request.doi,
+                arxivId = request.arxivId,
+                year = request.year,
+                conference = request.venue,
+                citationsCount = request.citationsCount ?: 0,
+                updatedAt = Clock.System.now()
+            )
+
+            val result = paperRepository.update(updatedPaper)
+            result.fold(
+                onSuccess = { paper ->
+                    call.respond(
+                        ApiResponse(
+                            data = UploadResponse(
+                                paperId = paper.id,
+                                fileName = File(paper.pdfPath ?: "").name,
+                                filePath = paper.pdfPath ?: "",
+                                title = paper.title
+                            )
+                        )
+                    )
+                },
+                onFailure = { error ->
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<UploadResponse>(
+                            success = false,
+                            error = error.message ?: "Failed to update paper"
                         )
                     )
                 }

@@ -15,6 +15,7 @@ import com.potero.service.llm.PostechLLMService
 import com.potero.service.metadata.ArxivResolver
 import com.potero.service.metadata.DOIResolver
 import com.potero.service.metadata.MetadataResolver
+import com.potero.service.metadata.SemanticScholarResolver
 import io.ktor.client.HttpClient
 
 /**
@@ -52,6 +53,10 @@ object ServiceLocator {
 
     val arxivResolver: MetadataResolver by lazy {
         ArxivResolver(httpClient)
+    }
+
+    val semanticScholarResolver: SemanticScholarResolver by lazy {
+        SemanticScholarResolver(httpClient)
     }
 
     val metadataResolvers: List<MetadataResolver> by lazy {

@@ -208,16 +208,23 @@
 			const page = await pdfDoc.getPage(pageNum);
 			const viewport = page.getViewport({ scale });
 
+			// HiDPI support - get device pixel ratio for sharp rendering
+			const dpr = window.devicePixelRatio || 1;
+
 			// Create container for canvas and text layer
 			const pageContainer = document.createElement('div');
 			pageContainer.className = 'page-container relative';
 			pageContainer.style.width = `${viewport.width}px`;
 			pageContainer.style.height = `${viewport.height}px`;
 
-			// Create canvas
+			// Create canvas with HiDPI support
 			const canvas = document.createElement('canvas');
-			canvas.height = viewport.height;
-			canvas.width = viewport.width;
+			// Set actual canvas size to scaled dimensions for sharp rendering
+			canvas.width = Math.floor(viewport.width * dpr);
+			canvas.height = Math.floor(viewport.height * dpr);
+			// Set display size via CSS
+			canvas.style.width = `${viewport.width}px`;
+			canvas.style.height = `${viewport.height}px`;
 			canvas.className = 'shadow-lg bg-white block';
 			pageContainer.appendChild(canvas);
 
@@ -232,12 +239,16 @@
 			pageWrapper.innerHTML = '';
 			pageWrapper.appendChild(pageContainer);
 
-			// Render canvas
+			// Render canvas with HiDPI scaling
 			const context = canvas.getContext('2d');
 			if (context) {
+				// Scale context for HiDPI
+				context.scale(dpr, dpr);
+
 				const renderTask = page.render({
 					canvasContext: context,
-					viewport: viewport
+					viewport: viewport,
+					canvas: canvas
 				});
 				renderTasks.set(pageNum, renderTask);
 				await renderTask.promise;
@@ -288,16 +299,21 @@
 			const page = await pdfDoc.getPage(pageNum);
 			const viewport = page.getViewport({ scale });
 
+			// HiDPI support
+			const dpr = window.devicePixelRatio || 1;
+
 			// Create container
 			const pageContainer = document.createElement('div');
 			pageContainer.className = 'page-container relative';
 			pageContainer.style.width = `${viewport.width}px`;
 			pageContainer.style.height = `${viewport.height}px`;
 
-			// Create canvas
+			// Create canvas with HiDPI support
 			const canvas = document.createElement('canvas');
-			canvas.height = viewport.height;
-			canvas.width = viewport.width;
+			canvas.width = Math.floor(viewport.width * dpr);
+			canvas.height = Math.floor(viewport.height * dpr);
+			canvas.style.width = `${viewport.width}px`;
+			canvas.style.height = `${viewport.height}px`;
 			canvas.className = 'shadow-lg bg-white block';
 			pageContainer.appendChild(canvas);
 
@@ -310,12 +326,14 @@
 
 			pageWrapper.appendChild(pageContainer);
 
-			// Render canvas
+			// Render canvas with HiDPI scaling
 			const context = canvas.getContext('2d');
 			if (context) {
+				context.scale(dpr, dpr);
 				const renderTask = page.render({
 					canvasContext: context,
-					viewport: viewport
+					viewport: viewport,
+					canvas: canvas
 				});
 				await renderTask.promise;
 			}

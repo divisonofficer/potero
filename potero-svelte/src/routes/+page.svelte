@@ -11,13 +11,17 @@
 		initializeLibrary,
 		importByDoi,
 		importByArxiv,
-		uploadPdfs
+		uploadPdfs,
+		pendingUploadAnalysis,
+		clearPendingUploadAnalysis,
+		loadPapers
 	} from '$lib/stores/library';
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
 	import type { Paper } from '$lib/types';
 	import { browser } from '$app/environment';
 	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
 
 	// Dynamic import for PDF viewer (client-side only due to pdfjs)
 	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
@@ -104,8 +108,8 @@
 		const files = target.files;
 		if (files && files.length > 0) {
 			isImporting = true;
-			const count = await uploadPdfs(files);
-			if (count > 0) {
+			const result = await uploadPdfs(files);
+			if (result.successCount > 0) {
 				showImportDialog = false;
 			}
 			isImporting = false;
@@ -155,9 +159,9 @@
 					return;
 				}
 
-				const count = await uploadPdfs(pdfFiles);
-				if (count > 0) {
-					toast.success(`Successfully uploaded ${count} file${count > 1 ? 's' : ''}`);
+				const result = await uploadPdfs(pdfFiles);
+				if (result.successCount > 0) {
+					toast.success(`Successfully uploaded ${result.successCount} file${result.successCount > 1 ? 's' : ''}`);
 				} else if ($error) {
 					toast.error($error);
 				}
@@ -680,3 +684,19 @@
 		</div>
 	</div>
 </div>
+
+<!-- Search Results Dialog for metadata confirmation -->
+{#if $pendingUploadAnalysis}
+	<SearchResultsDialog
+		paperId={$pendingUploadAnalysis.paperId}
+		searchQuery={$pendingUploadAnalysis.searchQuery}
+		results={$pendingUploadAnalysis.searchResults}
+		onConfirm={async () => {
+			clearPendingUploadAnalysis();
+			await loadPapers();
+		}}
+		onCancel={() => {
+			clearPendingUploadAnalysis();
+		}}
+	/>
+{/if}
