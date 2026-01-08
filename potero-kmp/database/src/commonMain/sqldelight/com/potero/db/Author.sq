@@ -1,0 +1,54 @@
+CREATE TABLE Author (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    affiliation TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE PaperAuthor (
+    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL REFERENCES Author(id) ON DELETE CASCADE,
+    author_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (paper_id, author_id)
+);
+
+CREATE INDEX author_name_idx ON Author(name);
+
+-- Queries
+selectById:
+SELECT * FROM Author WHERE id = ?;
+
+selectByName:
+SELECT * FROM Author WHERE name LIKE '%' || ? || '%';
+
+selectByPaper:
+SELECT a.* FROM Author a
+INNER JOIN PaperAuthor pa ON a.id = pa.author_id
+WHERE pa.paper_id = ?
+ORDER BY pa.author_order;
+
+selectPapersByAuthor:
+SELECT p.* FROM Paper p
+INNER JOIN PaperAuthor pa ON p.id = pa.paper_id
+WHERE pa.author_id = ?;
+
+insert:
+INSERT INTO Author(id, name, affiliation, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?);
+
+update:
+UPDATE Author SET name = ?, affiliation = ?, updated_at = ? WHERE id = ?;
+
+linkPaperAuthor:
+INSERT OR REPLACE INTO PaperAuthor(paper_id, author_id, author_order)
+VALUES (?, ?, ?);
+
+unlinkPaperAuthor:
+DELETE FROM PaperAuthor WHERE paper_id = ? AND author_id = ?;
+
+unlinkAllFromPaper:
+DELETE FROM PaperAuthor WHERE paper_id = ?;
+
+delete:
+DELETE FROM Author WHERE id = ?;

@@ -1,0 +1,72 @@
+CREATE TABLE Paper (
+    id TEXT NOT NULL PRIMARY KEY,
+    title TEXT NOT NULL,
+    abstract TEXT,
+    doi TEXT UNIQUE,
+    arxiv_id TEXT,
+    url TEXT,
+    year INTEGER,
+    conference TEXT,
+    citations_count INTEGER NOT NULL DEFAULT 0,
+    pdf_path TEXT,
+    thumbnail_path TEXT,
+    has_blog_view INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX paper_title_idx ON Paper(title);
+CREATE INDEX paper_doi_idx ON Paper(doi);
+CREATE INDEX paper_year_idx ON Paper(year);
+CREATE INDEX paper_conference_idx ON Paper(conference);
+
+-- Queries
+selectAll:
+SELECT * FROM Paper ORDER BY updated_at DESC;
+
+selectById:
+SELECT * FROM Paper WHERE id = ?;
+
+selectByDoi:
+SELECT * FROM Paper WHERE doi = ?;
+
+selectByArxivId:
+SELECT * FROM Paper WHERE arxiv_id = ?;
+
+searchByTitle:
+SELECT * FROM Paper WHERE title LIKE '%' || ? || '%';
+
+selectByConference:
+SELECT * FROM Paper WHERE conference = ?;
+
+selectByYear:
+SELECT * FROM Paper WHERE year = ?;
+
+selectByYearRange:
+SELECT * FROM Paper WHERE year >= ? AND year <= ?;
+
+insert:
+INSERT INTO Paper(id, title, abstract, doi, arxiv_id, url, year, conference, citations_count, pdf_path, thumbnail_path, has_blog_view, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+update:
+UPDATE Paper SET
+    title = ?,
+    abstract = ?,
+    doi = ?,
+    arxiv_id = ?,
+    url = ?,
+    year = ?,
+    conference = ?,
+    citations_count = ?,
+    pdf_path = ?,
+    thumbnail_path = ?,
+    has_blog_view = ?,
+    updated_at = ?
+WHERE id = ?;
+
+delete:
+DELETE FROM Paper WHERE id = ?;
+
+countAll:
+SELECT COUNT(*) FROM Paper;

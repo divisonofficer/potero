@@ -1,0 +1,31 @@
+{
+  "name": "potero-svelte",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.8",
+    "@sveltejs/kit": "^2.16.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.10.5",
+    "svelte": "^5.16.6",
+    "svelte-check": "^4.1.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  },
+  "dependencies": {
+    "bits-ui": "^1.0.0-next.79",
+    "clsx": "^2.1.1",
+    "lucide-svelte": "^0.474.0",
+    "tailwind-merge": "^2.6.0",
+    "tailwind-variants": "^0.3.1"
+  }
+}

@@ -1,0 +1,4 @@
+.gradle
+database/build/*
+server/build/*
+shared/build/*

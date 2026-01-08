@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(npm create:*)",
+      "Bash(npx sv create:*)",
+      "Bash(pkill:*)",
+      "Bash(chmod:*)",
+      "Bash(curl:*)",
+      "Bash(./gradlew:*)",
+      "Bash(npm install:*)"
+    ]
+  }
+}

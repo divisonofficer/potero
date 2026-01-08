@@ -1,0 +1,63 @@
+CREATE TABLE ChatMessage (
+    id TEXT NOT NULL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    model TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE ChatSession (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX chat_session_idx ON ChatMessage(session_id);
+CREATE INDEX chat_paper_idx ON ChatMessage(paper_id);
+CREATE INDEX session_paper_idx ON ChatSession(paper_id);
+
+-- Queries
+selectBySession:
+SELECT * FROM ChatMessage WHERE session_id = ? ORDER BY created_at ASC;
+
+selectRecentBySession:
+SELECT * FROM ChatMessage WHERE session_id = ? ORDER BY created_at DESC LIMIT ?;
+
+selectSessionById:
+SELECT * FROM ChatSession WHERE id = ?;
+
+selectSessionsByPaper:
+SELECT * FROM ChatSession WHERE paper_id = ? ORDER BY updated_at DESC;
+
+selectAllSessions:
+SELECT * FROM ChatSession ORDER BY updated_at DESC;
+
+selectRecentSessions:
+SELECT * FROM ChatSession ORDER BY updated_at DESC LIMIT ?;
+
+insertMessage:
+INSERT INTO ChatMessage(id, session_id, paper_id, role, content, model, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertSession:
+INSERT INTO ChatSession(id, paper_id, title, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?);
+
+updateSessionTimestamp:
+UPDATE ChatSession SET updated_at = ? WHERE id = ?;
+
+deleteSession:
+DELETE FROM ChatSession WHERE id = ?;
+
+deleteMessagesBySession:
+DELETE FROM ChatMessage WHERE session_id = ?;
+
+countMessagesBySession:
+SELECT COUNT(*) FROM ChatMessage WHERE session_id = ?;
+
+lastMessageBySession:
+SELECT * FROM ChatMessage WHERE session_id = ? ORDER BY created_at DESC LIMIT 1;

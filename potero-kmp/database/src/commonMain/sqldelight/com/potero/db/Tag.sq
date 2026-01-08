@@ -1,0 +1,59 @@
+CREATE TABLE Tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT NOT NULL DEFAULT '#6366f1',
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE PaperTag (
+    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+    tag_id TEXT NOT NULL REFERENCES Tag(id) ON DELETE CASCADE,
+    PRIMARY KEY (paper_id, tag_id)
+);
+
+CREATE INDEX tag_name_idx ON Tag(name);
+
+-- Queries
+selectAll:
+SELECT * FROM Tag ORDER BY name;
+
+selectById:
+SELECT * FROM Tag WHERE id = ?;
+
+selectByName:
+SELECT * FROM Tag WHERE name = ?;
+
+selectByPaper:
+SELECT t.* FROM Tag t
+INNER JOIN PaperTag pt ON t.id = pt.tag_id
+WHERE pt.paper_id = ?;
+
+selectPapersByTag:
+SELECT p.* FROM Paper p
+INNER JOIN PaperTag pt ON p.id = pt.paper_id
+WHERE pt.tag_id = ?;
+
+selectAllWithCount:
+SELECT t.*, COUNT(pt.paper_id) AS paper_count
+FROM Tag t
+LEFT JOIN PaperTag pt ON t.id = pt.tag_id
+GROUP BY t.id
+ORDER BY paper_count DESC;
+
+insert:
+INSERT INTO Tag(id, name, color, created_at) VALUES (?, ?, ?, ?);
+
+update:
+UPDATE Tag SET name = ?, color = ? WHERE id = ?;
+
+linkPaperTag:
+INSERT OR IGNORE INTO PaperTag(paper_id, tag_id) VALUES (?, ?);
+
+unlinkPaperTag:
+DELETE FROM PaperTag WHERE paper_id = ? AND tag_id = ?;
+
+unlinkAllFromPaper:
+DELETE FROM PaperTag WHERE paper_id = ?;
+
+delete:
+DELETE FROM Tag WHERE id = ?;

@@ -1,0 +1,49 @@
+CREATE TABLE Note (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'general',
+    page_number INTEGER,
+    position_x REAL,
+    position_y REAL,
+    width REAL,
+    height REAL,
+    color TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX note_paper_idx ON Note(paper_id);
+CREATE INDEX note_type_idx ON Note(type);
+
+-- Queries
+selectByPaper:
+SELECT * FROM Note WHERE paper_id = ? ORDER BY page_number, position_y;
+
+selectById:
+SELECT * FROM Note WHERE id = ?;
+
+selectByPaperAndType:
+SELECT * FROM Note WHERE paper_id = ? AND type = ?;
+
+insert:
+INSERT INTO Note(id, paper_id, content, type, page_number, position_x, position_y, width, height, color, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+update:
+UPDATE Note SET
+    content = ?,
+    page_number = ?,
+    position_x = ?,
+    position_y = ?,
+    width = ?,
+    height = ?,
+    color = ?,
+    updated_at = ?
+WHERE id = ?;
+
+delete:
+DELETE FROM Note WHERE id = ?;
+
+deleteByPaper:
+DELETE FROM Note WHERE paper_id = ?;
