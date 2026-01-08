@@ -13,7 +13,8 @@ data class SettingsDto(
     val llmApiKey: String? = null,
     val llmProvider: String = "gpt",
     val pdfStoragePath: String? = null,
-    val theme: String = "system"
+    val theme: String = "system",
+    val semanticScholarApiKey: String? = null
 )
 
 @Serializable
@@ -21,7 +22,8 @@ data class UpdateSettingsRequest(
     val llmApiKey: String? = null,
     val llmProvider: String? = null,
     val pdfStoragePath: String? = null,
-    val theme: String? = null
+    val theme: String? = null,
+    val semanticScholarApiKey: String? = null
 )
 
 fun Route.settingsRoutes() {
@@ -40,7 +42,11 @@ fun Route.settingsRoutes() {
                         },
                         llmProvider = settings[SettingsKeys.LLM_PROVIDER] ?: "gpt",
                         pdfStoragePath = settings[SettingsKeys.PDF_STORAGE_PATH],
-                        theme = settings[SettingsKeys.THEME] ?: "system"
+                        theme = settings[SettingsKeys.THEME] ?: "system",
+                        semanticScholarApiKey = settings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
+                            // Mask API key for security
+                            if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
+                        }
                     )
                     call.respond(ApiResponse(data = dto))
                 },
@@ -74,6 +80,9 @@ fun Route.settingsRoutes() {
                 request.theme?.let {
                     settingsRepository.set(SettingsKeys.THEME, it)
                 }
+                request.semanticScholarApiKey?.let {
+                    settingsRepository.set(SettingsKeys.SEMANTIC_SCHOLAR_API_KEY, it)
+                }
 
                 // Return updated settings
                 val allSettings = settingsRepository.getAll().getOrDefault(emptyMap())
@@ -83,7 +92,10 @@ fun Route.settingsRoutes() {
                     },
                     llmProvider = allSettings[SettingsKeys.LLM_PROVIDER] ?: "gpt",
                     pdfStoragePath = allSettings[SettingsKeys.PDF_STORAGE_PATH],
-                    theme = allSettings[SettingsKeys.THEME] ?: "system"
+                    theme = allSettings[SettingsKeys.THEME] ?: "system",
+                    semanticScholarApiKey = allSettings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
+                        if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
+                    }
                 )
                 call.respond(ApiResponse(data = dto))
             } catch (e: Exception) {

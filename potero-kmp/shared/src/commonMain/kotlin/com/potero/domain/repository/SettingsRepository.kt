@@ -38,4 +38,5 @@ object SettingsKeys {
     const val LLM_PROVIDER = "llm.provider"
     const val PDF_STORAGE_PATH = "storage.pdfPath"
     const val THEME = "ui.theme"
+    const val SEMANTIC_SCHOLAR_API_KEY = "semanticScholar.apiKey"
 }

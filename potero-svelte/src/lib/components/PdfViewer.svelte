@@ -3,20 +3,28 @@
 	import { updateViewerState } from '$lib/stores/tabs';
 	import type { PdfViewerState } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
+	import FloatingOutline from './FloatingOutline.svelte';
+	import { api, type Reference } from '$lib/api/client';
+	import { List } from 'lucide-svelte';
 
 	interface Props {
 		pdfUrl: string;
+		paperId?: string; // Paper ID for backend API calls
 		tabId?: string;
 		initialState?: PdfViewerState;
 		onPageChange?: (page: number, total: number) => void;
 		onTextSelect?: (text: string) => void;
+		onOpenPaper?: (paperId: string) => void;
 	}
 
-	let { pdfUrl, tabId, initialState, onPageChange, onTextSelect }: Props = $props();
+	let { pdfUrl, paperId, tabId, initialState, onPageChange, onTextSelect, onOpenPaper }: Props = $props();
 
 	// Citation modal state
 	let showCitationModal = $state(false);
 	let citationQuery = $state('');
+
+	// Outline panel state
+	let showOutlinePanel = $state(false);
 
 	let container: HTMLDivElement;
 	let scrollContainer: HTMLDivElement;
@@ -38,6 +46,12 @@
 	let renderTasks: Map<number, RenderTask> = new Map();
 	let pdfjsLib: typeof import('pdfjs-dist') | null = null;
 	let renderedPages: Set<number> = new Set();
+
+	// References section detection (using backend API when available)
+	let referencesStartPage = $state<number | null>(null);
+	let parsedReferences = $state<Reference[]>([]);
+	let isDetectingReferences = $state(false);
+	let referencesSource = $state<'backend' | 'frontend' | null>(null);
 
 	async function initPdfJs() {
 		if (pdfjsLib) return;
@@ -96,11 +110,460 @@
 			} else {
 				await renderSinglePage(currentPage);
 			}
+
+			// Detect References section in background (don't block rendering)
+			detectReferencesSection();
+
+			// Build figure/table index in background for navigation
+			buildFigureIndex();
 		} catch (e) {
 			console.error('Failed to load PDF:', e);
 			error = e instanceof Error ? e.message : 'Failed to load PDF';
 		} finally {
 			isLoading = false;
+		}
+	}
+
+	/**
+	 * Detect References/Bibliography section.
+	 * First tries to load existing references from backend (saved from re-analysis),
+	 * then falls back to analysis API, then to frontend PDF.js parsing.
+	 * Can be called manually via "Refresh References" button.
+	 */
+	async function detectReferencesSection() {
+		isDetectingReferences = true;
+		referencesStartPage = null;
+		parsedReferences = [];
+		referencesSource = null;
+
+		// Try backend API if we have a paperId
+		if (paperId) {
+			try {
+				// Step 1: Try to get existing references (from previous re-analysis)
+				console.log(`[PDF] Fetching existing references for paper: ${paperId}`);
+				const existingResult = await api.getReferences(paperId);
+
+				if (existingResult.success && existingResult.data) {
+					const { references, referencesStartPage: existingStartPage, totalCount } = existingResult.data;
+
+					if (totalCount > 0) {
+						parsedReferences = references;
+						referencesStartPage = existingStartPage;
+						referencesSource = 'backend';
+						isDetectingReferences = false;
+						console.log(`[PDF] Loaded ${totalCount} existing references from backend`);
+
+						if (references.length > 0 && scrollContainer) {
+							reAnnotateReferencesPages();
+						}
+						return;
+					}
+				}
+
+				// Step 2: No existing references, trigger analysis
+				console.log(`[PDF] No existing references, analyzing...`);
+				const analyzeResult = await api.analyzeReferences(paperId);
+
+				if (analyzeResult.success && analyzeResult.data) {
+					const { references, referencesStartPage: apiStartPage, totalCount } = analyzeResult.data;
+					console.log(`[PDF] Backend analysis returned ${totalCount} references starting at page ${apiStartPage}`);
+					if (totalCount > 0) {
+						parsedReferences = references;
+						referencesStartPage = apiStartPage;
+						referencesSource = 'backend';
+						isDetectingReferences = false;
+						console.log(`[PDF] Backend found ${totalCount} references starting at page ${apiStartPage}`);
+
+						if (references.length > 0 && scrollContainer) {
+							reAnnotateReferencesPages();
+						}
+						return;
+					}
+				} else {
+					console.warn('[PDF] Backend analysis failed:', analyzeResult.error);
+				}
+			} catch (e) {
+				console.warn('[PDF] Backend API error, falling back to frontend:', e);
+			}
+		}
+
+		// Fallback to frontend PDF.js parsing
+		await detectReferencesSectionFrontend();
+	}
+
+	/**
+	 * Frontend-only References detection using PDF.js
+	 * Used as fallback when backend API is not available or fails
+	 */
+	async function detectReferencesSectionFrontend() {
+		if (!pdfDoc) {
+			isDetectingReferences = false;
+			return;
+		}
+
+		const referencesSectionHeaders = [
+			/\breferences\b/i,
+			/\bbibliography\b/i,
+			/\bworks cited\b/i,
+			/\bliterature cited\b/i,
+			/\bcited literature\b/i,
+			/\breference list\b/i,
+		];
+
+		// Scan from last pages (references are usually at the end)
+		const pagesToScan = Math.min(pdfDoc.numPages, 10);
+		const startPage = Math.max(1, pdfDoc.numPages - pagesToScan + 1);
+
+		for (let pageNum = startPage; pageNum <= pdfDoc.numPages; pageNum++) {
+			try {
+				const page = await pdfDoc.getPage(pageNum);
+				const textContent = await page.getTextContent();
+				const textItems = textContent.items as Array<{ str: string }>;
+				const pageText = textItems.map(item => item.str).join(' ');
+
+				// Check if this page contains a References section header
+				for (const pattern of referencesSectionHeaders) {
+					if (pattern.test(pageText.substring(0, 500))) { // Check near the top
+						referencesStartPage = pageNum;
+						referencesSource = 'frontend';
+						console.log(`[PDF] Frontend: References section detected on page ${pageNum}`);
+
+						// Parse references from this page onwards
+						await parseReferencesFromPage(pageNum);
+						return;
+					}
+				}
+			} catch (e) {
+				console.warn(`[PDF] Error scanning page ${pageNum}:`, e);
+			}
+		}
+
+		console.log('[PDF] No References section detected');
+		isDetectingReferences = false;
+	}
+
+	/**
+	 * Parse individual references from the References section (frontend fallback)
+	 */
+	async function parseReferencesFromPage(startPage: number) {
+		if (!pdfDoc) return;
+
+		const refs: Reference[] = [];
+
+		// Reference patterns: [1], 1., (1), etc.
+		const refNumberPatterns = [
+			/^\[(\d+)\]/,      // [1] Author...
+			/^(\d+)\./,        // 1. Author...
+			/^\((\d+)\)/,      // (1) Author...
+		];
+
+		for (let pageNum = startPage; pageNum <= pdfDoc.numPages; pageNum++) {
+			try {
+				const page = await pdfDoc.getPage(pageNum);
+				const textContent = await page.getTextContent();
+				const textItems = textContent.items as Array<{ str: string }>;
+
+				// Join text items to form lines
+				let currentLine = '';
+				const lines: string[] = [];
+
+				for (const item of textItems) {
+					const text = item.str;
+					if (text.trim() === '') {
+						if (currentLine.trim()) {
+							lines.push(currentLine.trim());
+							currentLine = '';
+						}
+					} else {
+						currentLine += text + ' ';
+					}
+				}
+				if (currentLine.trim()) {
+					lines.push(currentLine.trim());
+				}
+
+				// Parse each line for reference numbers
+				for (const line of lines) {
+					for (const pattern of refNumberPatterns) {
+						const match = line.match(pattern);
+						if (match) {
+							const refNum = parseInt(match[1], 10);
+							const refText = line.substring(match[0].length).trim();
+
+							// Try to extract author and title
+							// Common patterns: "Author. Title." or "Author, Title,"
+							const parts = refText.split(/[.]\s*/);
+							const authors = parts[0] || '';
+							const title = parts[1] || refText;
+
+							// Create Reference object compatible with backend format
+							refs.push({
+								id: `frontend-ref-${refNum}`,
+								paperId: paperId || '',
+								number: refNum,
+								rawText: refText,
+								authors: authors || null,
+								title: title.substring(0, 100) || null, // Limit title length
+								venue: null,
+								year: null,
+								doi: null,
+								pageNum: pageNum,
+								createdAt: new Date().toISOString()
+							});
+							break;
+						}
+					}
+				}
+			} catch (e) {
+				console.warn(`[PDF] Error parsing references on page ${pageNum}:`, e);
+			}
+		}
+
+		parsedReferences = refs;
+		isDetectingReferences = false;
+		console.log(`[PDF] Frontend parsed ${refs.length} references`);
+
+		// Re-annotate pages in the References section to highlight reference entries
+		if (refs.length > 0 && scrollContainer) {
+			reAnnotateReferencesPages();
+		}
+	}
+
+	/**
+	 * Re-annotate text layers on References section pages after detection completes.
+	 * This ensures reference entries are highlighted even if pages were rendered
+	 * before the detection finished.
+	 */
+	function reAnnotateReferencesPages() {
+		if (!scrollContainer || referencesStartPage === null) return;
+
+		const pageWrappers = scrollContainer.querySelectorAll('.page-wrapper');
+		for (const wrapper of pageWrappers) {
+			const pageNum = parseInt((wrapper as HTMLElement).dataset.page || '0', 10);
+			if (pageNum >= referencesStartPage) {
+				const textLayer = wrapper.querySelector('.textLayer');
+				if (textLayer) {
+					// Re-annotate this text layer
+					annotateTextLayer(textLayer as HTMLElement, pageNum);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Look up a reference by its number (e.g., from [1] citation)
+	 */
+	function lookupReferenceByNumber(refNum: number): Reference | undefined {
+		return parsedReferences.find(ref => ref.number === refNum);
+	}
+
+	/**
+	 * Normalize figure/table ID for consistent lookup
+	 * "Fig. 1", "FIG. 1", "Figure 1" → "fig-1"
+	 * "Table I" → "table-i" (roman preserved for later conversion)
+	 */
+	function normalizeId(id: string): string {
+		return id.toLowerCase()
+			.replace(/figure|fig\.?/gi, 'fig')
+			.replace(/table|tbl\.?/gi, 'table')
+			.replace(/algorithm|alg\.?/gi, 'alg')
+			.replace(/equation|eq\.?/gi, 'eq')
+			.replace(/section|sec\.?/gi, 'sec')
+			.replace(/\s+/g, '-')
+			.replace(/[^a-z0-9-]/g, '');
+	}
+
+	/**
+	 * Convert Roman numerals to Arabic: I→1, II→2, IV→4, etc.
+	 */
+	function romanToArabic(roman: string): number {
+		const map: Record<string, number> = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+		let result = 0;
+		for (let i = 0; i < roman.length; i++) {
+			const current = map[roman[i].toUpperCase()] || 0;
+			const next = map[roman[i + 1]?.toUpperCase()] || 0;
+			result += current < next ? -current : current;
+		}
+		return result;
+	}
+
+	/**
+	 * Detect figure type from ID string
+	 */
+	function detectFigureType(id: string): FigureLocation['type'] {
+		const lower = id.toLowerCase();
+		if (lower.includes('fig')) return 'figure';
+		if (lower.includes('tab')) return 'table';
+		if (lower.includes('alg')) return 'algorithm';
+		if (lower.includes('eq')) return 'equation';
+		if (lower.includes('sec')) return 'section';
+		return 'figure';
+	}
+
+	// Section header patterns for outline detection
+	const SECTION_PATTERNS = [
+		// Numbered sections: "1. Introduction", "2.1 Background", "1 Introduction"
+		/^(\d+(?:\.\d+)*\.?)\s+([A-Z][A-Za-z\s]+)$/,
+		// Roman numeral sections: "I. INTRODUCTION", "II. RELATED WORK"
+		/^([IVX]+)\.\s+([A-Z][A-Z\s]+)$/,
+		// Common section names (standalone)
+		/^(Abstract|Introduction|Conclusion|References|Bibliography|Acknowledgments?|Appendix)$/i,
+		// "Section X" style
+		/^(Section\s+\d+(?:\.\d+)?)[.:\s]+(.+)$/i,
+	];
+
+	/**
+	 * Build figure/table location index by scanning entire PDF
+	 * Also detects section headers for outline navigation
+	 * Called after PDF load for efficient caption lookup
+	 */
+	async function buildFigureIndex(): Promise<void> {
+		if (!pdfDoc || isBuildingFigureIndex) return;
+
+		isBuildingFigureIndex = true;
+		const newIndex = new Map<string, FigureLocation>();
+
+		console.log('[PDF] Building figure index...');
+
+		for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+			try {
+				const page = await pdfDoc.getPage(pageNum);
+				const textContent = await page.getTextContent();
+				const viewport = page.getViewport({ scale: 1 });
+
+				// Group text items by line (based on Y position)
+				const items = textContent.items as Array<{ str: string; transform: number[]; height?: number }>;
+				const lines: Array<{ text: string; y: number; height?: number }> = [];
+				let currentLine = '';
+				let currentY = 0;
+				let currentHeight = 0;
+
+				for (const item of items) {
+					const y = item.transform[5]; // Y position from transform matrix
+					const height = item.height || 0;
+					// New line if Y position differs significantly
+					if (currentLine && Math.abs(y - currentY) > 3) {
+						lines.push({ text: currentLine.trim(), y: currentY, height: currentHeight });
+						currentLine = '';
+					}
+					currentLine += item.str + ' ';
+					currentY = y;
+					currentHeight = Math.max(currentHeight, height);
+				}
+				if (currentLine.trim()) {
+					lines.push({ text: currentLine.trim(), y: currentY, height: currentHeight });
+				}
+
+				// Check each line for caption patterns
+				for (const line of lines) {
+					// Figure/Table/Algorithm captions
+					for (const pattern of CAPTION_PATTERNS) {
+						const match = pattern.exec(line.text);
+						if (match) {
+							const id = match[1];
+							const normalizedId = normalizeId(id);
+							const yPosition = viewport.height - line.y; // Convert to top-down coordinate
+
+							// Only add if not already found (first occurrence wins)
+							if (!newIndex.has(normalizedId)) {
+								newIndex.set(normalizedId, {
+									type: detectFigureType(id),
+									id,
+									normalizedId,
+									pageNum,
+									yPosition,
+									caption: line.text.substring(match[0].length).trim().substring(0, 100)
+								});
+
+								// Also add Roman numeral variant if applicable
+								if (/[IVX]+/i.test(id)) {
+									const arabicId = normalizedId.replace(/[ivx]+/gi, (m) =>
+										String(romanToArabic(m))
+									);
+									if (arabicId !== normalizedId && !newIndex.has(arabicId)) {
+										newIndex.set(arabicId, {
+											type: detectFigureType(id),
+											id,
+											normalizedId: arabicId,
+											pageNum,
+											yPosition,
+											caption: line.text.substring(match[0].length).trim().substring(0, 100)
+										});
+									}
+								}
+							}
+							break;
+						}
+					}
+
+					// Section headers (check if text could be a section)
+					for (const pattern of SECTION_PATTERNS) {
+						const match = pattern.exec(line.text);
+						if (match) {
+							// Create a unique ID for sections
+							const sectionNum = match[1] || line.text.substring(0, 20);
+							const sectionTitle = match[2] || match[1] || line.text;
+							const normalizedId = `sec-${sectionNum.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+							const yPosition = viewport.height - line.y;
+
+							// Avoid duplicates and very short text
+							if (!newIndex.has(normalizedId) && line.text.length >= 3) {
+								newIndex.set(normalizedId, {
+									type: 'section',
+									id: line.text,
+									normalizedId,
+									pageNum,
+									yPosition,
+									caption: sectionTitle
+								});
+							}
+							break;
+						}
+					}
+				}
+			} catch (e) {
+				console.warn(`[PDF] Error scanning page ${pageNum} for figures:`, e);
+			}
+		}
+
+		figureIndex = newIndex;
+		isBuildingFigureIndex = false;
+		console.log(`[PDF] Figure index built: ${newIndex.size} items found`);
+	}
+
+	/**
+	 * Ensure a page is rendered before navigating to it
+	 */
+	async function ensurePageRendered(pageNum: number): Promise<void> {
+		if (renderedPages.has(pageNum)) return;
+		await renderPage(pageNum);
+		// Small delay to ensure DOM is updated
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+
+	/**
+	 * Highlight figure caption temporarily after navigation
+	 */
+	function highlightFigureCaption(location: FigureLocation): void {
+		if (!scrollContainer) return;
+
+		const pageWrapper = scrollContainer.querySelector(`[data-page="${location.pageNum}"]`);
+		if (!pageWrapper) return;
+
+		const textLayer = pageWrapper.querySelector('.textLayer');
+		if (!textLayer) return;
+
+		const spans = textLayer.querySelectorAll('span');
+		for (const span of spans) {
+			const spanText = span.textContent || '';
+			// Match the figure ID in the caption
+			if (spanText.toLowerCase().includes(location.id.toLowerCase().replace(/\s+/g, ' ').trim().substring(0, 10))) {
+				span.classList.add('figure-highlight');
+				setTimeout(() => {
+					span.classList.remove('figure-highlight');
+				}, 2000);
+				break;
+			}
 		}
 	}
 
@@ -274,7 +737,7 @@
 				await textLayer.render();
 
 				// Annotate clickable references (citations and figures)
-				annotateTextLayer(textLayerDiv);
+				annotateTextLayer(textLayerDiv, pageNum);
 			}
 
 		} catch (e) {
@@ -284,30 +747,144 @@
 		}
 	}
 
-	// Annotate text layer spans with citation/figure classes for visual indication
-	function annotateTextLayer(textLayerDiv: HTMLElement) {
-		const spans = textLayerDiv.querySelectorAll('span');
+	/**
+	 * Span info for aggregation - helps match patterns across multiple spans
+	 * when PDF.js splits text like "Fig. 1" into "Fig." + " " + "1"
+	 */
+	interface SpanInfo {
+		span: HTMLSpanElement;
+		text: string;
+		startPos: number; // Position in aggregated line text
+		endPos: number;
+	}
 
-		for (const span of spans) {
+	/**
+	 * Aggregate adjacent spans by Y position to form lines
+	 * Returns array of lines, each containing spans with their positions
+	 */
+	function aggregateSpansToLines(textLayerDiv: HTMLElement): SpanInfo[][] {
+		const allSpans = Array.from(textLayerDiv.querySelectorAll('span')) as HTMLSpanElement[];
+		if (allSpans.length === 0) return [];
+
+		const lines: SpanInfo[][] = [];
+		let currentLine: SpanInfo[] = [];
+		let lastBottom = 0;
+		let charPos = 0;
+
+		for (const span of allSpans) {
+			const rect = span.getBoundingClientRect();
 			const text = span.textContent || '';
 
-			// Check for citation patterns
-			for (const pattern of CITATION_PATTERNS) {
-				pattern.lastIndex = 0;
-				if (pattern.test(text)) {
-					span.classList.add('citation-ref');
-					span.title = 'Click to look up citation';
-					break;
+			// New line if Y position differs significantly (>5px)
+			if (currentLine.length > 0 && Math.abs(rect.bottom - lastBottom) > 5) {
+				lines.push(currentLine);
+				currentLine = [];
+				charPos = 0;
+			}
+
+			currentLine.push({
+				span,
+				text,
+				startPos: charPos,
+				endPos: charPos + text.length
+			});
+			charPos += text.length;
+			lastBottom = rect.bottom;
+		}
+
+		if (currentLine.length > 0) {
+			lines.push(currentLine);
+		}
+
+		return lines;
+	}
+
+	/**
+	 * Apply class to all spans that overlap with a match range
+	 */
+	function applyClassToSpansInRange(
+		line: SpanInfo[],
+		matchStart: number,
+		matchEnd: number,
+		className: string,
+		tooltip: string
+	): void {
+		for (const spanInfo of line) {
+			// Check if this span overlaps with the match range
+			if (spanInfo.endPos > matchStart && spanInfo.startPos < matchEnd) {
+				spanInfo.span.classList.add(className);
+				if (tooltip && !spanInfo.span.title) {
+					spanInfo.span.title = tooltip;
+				}
+			}
+		}
+	}
+
+	// Annotate text layer spans with citation/figure classes for visual indication
+	// Uses span aggregation to match patterns that span multiple elements
+	function annotateTextLayer(textLayerDiv: HTMLElement, pageNum: number) {
+		const isInReferencesSection = referencesStartPage !== null && pageNum >= referencesStartPage;
+
+		// Aggregate spans into lines for cross-span pattern matching
+		const lines = aggregateSpansToLines(textLayerDiv);
+
+		for (const line of lines) {
+			const lineText = line.map(s => s.text).join('');
+
+			// === Citation patterns (exact match on entire span content) ===
+			// These are typically single spans like "[1]" or "(Smith, 2024)"
+			for (const spanInfo of line) {
+				const text = spanInfo.text.trim();
+				for (const pattern of CITATION_PATTERNS) {
+					pattern.lastIndex = 0;
+					if (pattern.test(text)) {
+						spanInfo.span.classList.add('citation-ref');
+						spanInfo.span.title = 'Click to look up citation';
+						break;
+					}
 				}
 			}
 
-			// Check for figure patterns
+			// === Figure/Table patterns (can span multiple elements) ===
+			// Match against aggregated line text, then apply to overlapping spans
 			for (const pattern of FIGURE_PATTERNS) {
 				pattern.lastIndex = 0;
-				if (pattern.test(text)) {
-					span.classList.add('figure-ref');
-					span.title = 'Click to jump to figure';
-					break;
+				let match;
+				while ((match = pattern.exec(lineText)) !== null) {
+					const matchStart = match.index;
+					const matchEnd = matchStart + match[0].length;
+					const figRef = match[1] || match[0];
+
+					applyClassToSpansInRange(
+						line,
+						matchStart,
+						matchEnd,
+						'figure-ref',
+						`Click to jump to ${figRef}`
+					);
+				}
+			}
+
+			// === Reference entry patterns (in References section) ===
+			if (isInReferencesSection) {
+				for (const spanInfo of line) {
+					const text = spanInfo.text;
+					for (const pattern of REFERENCE_ENTRY_PATTERNS) {
+						if (pattern.test(text)) {
+							spanInfo.span.classList.add('reference-entry');
+							const numMatch = text.match(/\d+/);
+							if (numMatch) {
+								const refNum = parseInt(numMatch[0], 10);
+								const parsedRef = lookupReferenceByNumber(refNum);
+								if (parsedRef) {
+									spanInfo.span.title = `Click to search: ${parsedRef.title || parsedRef.authors}`;
+								} else {
+									spanInfo.span.title = 'Click to search for this reference';
+								}
+							}
+							break;
+						}
+					}
 				}
 			}
 		}
@@ -387,7 +964,7 @@
 				await textLayer.render();
 
 				// Annotate clickable references (citations and figures)
-				annotateTextLayer(textLayerDiv);
+				annotateTextLayer(textLayerDiv, pageNum);
 			}
 
 			onPageChange?.(currentPage, totalPages);
@@ -568,30 +1145,231 @@
 		}
 	}
 
-	// Patterns for citation and figure references
+	// Citation patterns for visual annotation (highlighting in text layer)
 	const CITATION_PATTERNS = [
-		/\[(\d+(?:,\s*\d+)*)\]/g,          // [1], [1, 2, 3]
-		/\[(\d+)\s*[-–]\s*(\d+)\]/g,       // [1-3], [1–5]
-		/\(([A-Z][a-z]+(?:\s+(?:et\s+al\.?|&\s+[A-Z][a-z]+))?(?:,?\s*\d{4}))\)/gi  // (Author et al., 2024)
+		/^\[\d+(?:,\s*\d+)*\]$/,                  // [1], [1,2,3]
+		/^\[\d+\s*[-–]\s*\d+\]$/,                 // [1-5], [1–5]
+		/\([A-Z][a-z]+(?:\s+(?:et\s+al\.?|&\s+[A-Z][a-z]+))?,\s*\d{4}\)$/,  // (Smith et al., 2024)
 	];
 
+	// IEEE + ACM unified Figure/Table reference patterns
 	const FIGURE_PATTERNS = [
-		/\b(Fig(?:ure)?\.?\s*\d+(?:\.\d+)?(?:\s*[a-z])?)/gi,  // Fig. 1, Figure 1, Fig. 1a, Fig. 1.2
-		/\b(Table\s*\d+(?:\.\d+)?)/gi,                        // Table 1, Table 1.2
-		/\b(Algorithm\s*\d+)/gi,                               // Algorithm 1
-		/\b(Equation\s*\d+)/gi,                                // Equation 1
+		// === Figure References ===
+		// IEEE: Fig. 1, FIG. 1, Figure 1, FIGURE 1, Fig. 1(a), Fig. 1a
+		/\b(FIG(?:URE)?\.?\s*\d+(?:\.\d+)?(?:\s*\([a-z]\)|\s*[a-z])?)/gi,
+		// IEEE plural: Figs. 1-3, Figs. 1, 2, and 3
+		/\b(FIGS?\.?\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+)*(?:\s*(?:and|&)\s*\d+)?)/gi,
+		// ACM: Figure 1, Figures 1 and 2
+		/\b(Figures?\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+)*(?:\s*(?:and|&)\s*\d+)?)/gi,
+
+		// === Table References ===
+		// IEEE: Table I, TABLE I (Roman numerals), Table 1
+		/\b(TABLE\s*(?:[IVX]+|\d+)(?:\.\d+)?)/gi,
+		// ACM: Table 1, Tables 1-3
+		/\b(Tables?\s*\d+(?:\s*[-–]\s*\d+)?)/gi,
+
+		// === Algorithm References ===
+		/\b(Alg(?:orithm)?\.?\s*\d+)/gi,
+
+		// === Equation References ===
+		/\b(Eq(?:uation)?\.?\s*\(?\d+\)?)/gi,
+
+		// === Section References ===
+		/\b(Sec(?:tion)?\.?\s*(?:[IVX]+|\d+(?:\.\d+)*))/gi,
 	];
 
-	// Handle click on text layer to detect citations and figures
+	// Caption patterns for Figure/Table definition locations
+	const CAPTION_PATTERNS = [
+		// IEEE Figure caption: "Fig. 1. Title" or "Fig. 1: Title"
+		/^(FIG(?:URE)?\.?\s*\d+(?:\.\d+)?(?:\s*\([a-z]\))?)[.:\s]/i,
+		// ACM Figure caption: "Figure 1: Title"
+		/^(Figure\s*\d+)[.:]/i,
+		// IEEE Table caption: "TABLE I:" or "TABLE 1:"
+		/^(TABLE\s*(?:[IVX]+|\d+))[.:]/i,
+		// ACM Table caption: "Table 1:"
+		/^(Table\s*\d+)[.:]/i,
+		// Algorithm caption
+		/^(Algorithm\s*\d+)[.:]/i,
+	];
+
+	// Reference entry patterns (for References section items)
+	const REFERENCE_ENTRY_PATTERNS = [
+		/^\[\d+\]/,      // [1] Author...
+		/^\d+\.\s/,      // 1. Author...
+		/^\(\d+\)/,      // (1) Author...
+	];
+
+	// Figure location index (built after PDF load)
+	interface FigureLocation {
+		type: 'figure' | 'table' | 'algorithm' | 'equation' | 'section';
+		id: string;           // "Fig. 1", "Table I" etc.
+		normalizedId: string; // "fig-1", "table-1" (normalized)
+		pageNum: number;
+		yPosition: number;    // Y coordinate within page
+		caption?: string;
+	}
+
+	let figureIndex = $state<Map<string, FigureLocation>>(new Map());
+	let isBuildingFigureIndex = $state(false);
+
+	// Outline item type for FloatingOutline component
+	interface OutlineItem {
+		id: string;
+		type: 'equation' | 'figure' | 'table' | 'section' | 'reference' | 'algorithm';
+		title: string;
+		content?: string;
+		page: number;
+		yPosition?: number;
+	}
+
+	// Derived outline data from figureIndex and references
+	// Uses Map to deduplicate by title (first occurrence wins)
+	let outlineFigures = $derived.by(() => {
+		const items: OutlineItem[] = [];
+		for (const [, loc] of figureIndex) {
+			if (loc.type === 'figure') {
+				items.push({
+					id: loc.normalizedId,
+					type: 'figure',
+					title: loc.id,
+					content: loc.caption,
+					page: loc.pageNum,
+					yPosition: loc.yPosition
+				});
+			}
+		}
+		const sorted = items.sort((a, b) => a.page - b.page || (a.yPosition || 0) - (b.yPosition || 0));
+		// Deduplicate by title (keep first occurrence)
+		return Array.from(new Map(sorted.map(item => [item.title, item])).values());
+	});
+
+	let outlineTables = $derived.by(() => {
+		const items: OutlineItem[] = [];
+		for (const [, loc] of figureIndex) {
+			if (loc.type === 'table') {
+				items.push({
+					id: loc.normalizedId,
+					type: 'table',
+					title: loc.id,
+					content: loc.caption,
+					page: loc.pageNum,
+					yPosition: loc.yPosition
+				});
+			}
+		}
+		const sorted = items.sort((a, b) => a.page - b.page || (a.yPosition || 0) - (b.yPosition || 0));
+		return Array.from(new Map(sorted.map(item => [item.title, item])).values());
+	});
+
+	let outlineEquations = $derived.by(() => {
+		const items: OutlineItem[] = [];
+		for (const [, loc] of figureIndex) {
+			if (loc.type === 'equation') {
+				items.push({
+					id: loc.normalizedId,
+					type: 'equation',
+					title: loc.id,
+					content: loc.caption,
+					page: loc.pageNum,
+					yPosition: loc.yPosition
+				});
+			}
+		}
+		const sorted = items.sort((a, b) => a.page - b.page || (a.yPosition || 0) - (b.yPosition || 0));
+		return Array.from(new Map(sorted.map(item => [item.title, item])).values());
+	});
+
+	let outlineSections = $derived.by(() => {
+		const items: OutlineItem[] = [];
+		for (const [, loc] of figureIndex) {
+			if (loc.type === 'section') {
+				items.push({
+					id: loc.normalizedId,
+					type: 'section',
+					title: loc.id,
+					content: loc.caption,
+					page: loc.pageNum,
+					yPosition: loc.yPosition
+				});
+			}
+		}
+		const sorted = items.sort((a, b) => a.page - b.page || (a.yPosition || 0) - (b.yPosition || 0));
+		return Array.from(new Map(sorted.map(item => [item.title, item])).values());
+	});
+
+	let outlineReferences = $derived.by(() => {
+		// Filter out invalid references (e.g., years parsed as reference numbers)
+		return parsedReferences
+			.filter(ref => ref.number > 0 && ref.number < 1000) // Valid ref numbers are typically < 1000
+			.map(ref => ({
+				id: `ref-${ref.number}`,
+				type: 'reference' as const,
+				title: `[${ref.number}] ${ref.authors || ''}`,
+				content: ref.title || ref.rawText.substring(0, 80),
+				page: ref.pageNum,
+				yPosition: 0
+			}));
+	});
+
+	// Handle outline item click - navigate to location or open modal
+	function handleOutlineItemClick(item: OutlineItem) {
+		if (item.type === 'reference') {
+			// Open citation modal for reference lookup instead of navigating
+			// Extract reference number from title (e.g., "[1] Author Name" -> 1)
+			const refNumMatch = item.title.match(/^\[(\d+)\]/);
+			const refNum = refNumMatch ? parseInt(refNumMatch[1]) : null;
+
+			// Find the parsed reference by number
+			const parsedRef = refNum ? parsedReferences.find(r => r.number === refNum) : null;
+
+			// Use title or content for search query
+			const searchQuery = parsedRef?.title || parsedRef?.authors || item.content || item.title;
+			if (searchQuery && searchQuery.length >= 3) {
+				citationQuery = searchQuery;
+				showCitationModal = true;
+			}
+		} else {
+			// Navigate to figure/table/section
+			scrollToFigure(item.title);
+		}
+	}
+
+	// Check if text is a standalone citation (must be the entire text or surrounded by punctuation)
+	function isStandaloneCitation(text: string): { isCitation: boolean; query: string } {
+		const trimmed = text.trim();
+
+		// IEEE numeric style: [1], [1,2,3], [1-5], [1–5]
+		// Must be the ENTIRE text content (not part of a sentence)
+		const numericMatch = trimmed.match(/^\[(\d+(?:,\s*\d+)*)\]$/);
+		if (numericMatch) {
+			return { isCitation: true, query: trimmed };
+		}
+
+		const rangeMatch = trimmed.match(/^\[(\d+)\s*[-–]\s*(\d+)\]$/);
+		if (rangeMatch) {
+			return { isCitation: true, query: trimmed };
+		}
+
+		// Author-year style: (Smith et al., 2024), (Smith & Jones, 2024)
+		// Must be the entire text or end of text
+		const authorYearMatch = trimmed.match(/\(([A-Z][a-z]+(?:\s+(?:et\s+al\.?|&\s+[A-Z][a-z]+))?,\s*\d{4})\)$/);
+		if (authorYearMatch) {
+			return { isCitation: true, query: authorYearMatch[1] };
+		}
+
+		return { isCitation: false, query: '' };
+	}
+
+	// Handle click on text layer - figure references, citations, and reference entries
 	function handleTextLayerClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
 		if (!target.closest('.textLayer')) return;
 
-		// Get surrounding text context (expand selection to get full reference)
+		// Get the exact text of the clicked element
 		const text = target.textContent || '';
 		const clickedText = text.trim();
 
-		// Check for figure/table references first (navigate to figure)
+		// Check for figure/table references (navigate to figure)
 		for (const pattern of FIGURE_PATTERNS) {
 			pattern.lastIndex = 0;
 			const match = pattern.exec(clickedText);
@@ -602,33 +1380,30 @@
 			}
 		}
 
-		// Check for citation patterns (show lookup modal)
-		for (const pattern of CITATION_PATTERNS) {
-			pattern.lastIndex = 0;
-			const match = pattern.exec(clickedText);
-			if (match) {
-				// For numbered citations, we need to look up in references section
-				// For now, use the selected text or broader context for search
-				handleCitationClick(event, clickedText);
-				return;
+		// Check if this is a reference entry in the References section (clickable to search)
+		if (target.classList.contains('reference-entry')) {
+			// Extract reference number and look up the parsed reference
+			const numMatch = clickedText.match(/\d+/);
+			if (numMatch) {
+				const refNum = parseInt(numMatch[0], 10);
+				const parsedRef = lookupReferenceByNumber(refNum);
+				if (parsedRef) {
+					// Use parsed reference info for search
+					const query = parsedRef.title || parsedRef.authors || parsedRef.rawText;
+					if (query && query.length >= 5) {
+						citationQuery = query;
+						showCitationModal = true;
+						return;
+					}
+				}
 			}
 		}
 
-		// Check if we're near a citation by expanding context
-		const selection = window.getSelection();
-		if (selection) {
-			const range = document.createRange();
-			range.selectNodeContents(target);
-			const fullText = range.toString();
-
-			// Look for patterns in full text
-			for (const pattern of CITATION_PATTERNS) {
-				pattern.lastIndex = 0;
-				if (pattern.test(fullText)) {
-					handleCitationClick(event, fullText);
-					return;
-				}
-			}
+		// Only show citation modal if the clicked text is EXACTLY a citation
+		// (not text that happens to contain citation-like patterns)
+		const citationCheck = isStandaloneCitation(clickedText);
+		if (citationCheck.isCitation) {
+			handleCitationClick(event, citationCheck.query);
 		}
 	}
 
@@ -638,53 +1413,38 @@
 		event.stopPropagation();
 
 		// Extract meaningful search query from citation context
-		// For author citations like "(Smith et al., 2024)", use as-is
-		// For numeric citations, we need to find the referenced paper title from References section
 		let query = text;
 
-		// Clean up the query
-		query = query.replace(/[\[\]()]/g, '').trim();
+		// Clean up the query - remove brackets/parentheses
+		const cleanedText = text.replace(/[\[\]()]/g, '').trim();
 
-		// If it's just numbers, try to get surrounding context
-		if (/^\d+(?:,\s*\d+)*$/.test(query) || /^\d+\s*[-–]\s*\d+$/.test(query)) {
-			// Get broader text context for numbered citations
-			const selection = window.getSelection();
-			if (selection && selection.rangeCount > 0) {
-				// Try to expand selection to sentence
-				const range = selection.getRangeAt(0);
-				const container = range.startContainer.parentElement;
-				if (container) {
-					// Look at sibling text nodes for context
-					const parent = container.parentElement;
-					if (parent) {
-						const siblings = Array.from(parent.children);
-						const currentIndex = siblings.indexOf(container);
+		// For numeric citations like [1], [1,2,3], [1-5]:
+		// Try to look up in parsed references first
+		if (/^\d+(?:,\s*\d+)*$/.test(cleanedText) || /^\d+\s*[-–]\s*\d+$/.test(cleanedText)) {
+			// Extract the first number from the citation
+			const firstNumMatch = cleanedText.match(/\d+/);
+			if (firstNumMatch) {
+				const refNum = parseInt(firstNumMatch[0], 10);
+				const parsedRef = lookupReferenceByNumber(refNum);
 
-						// Collect text from surrounding elements
-						let contextText = '';
-						for (let i = Math.max(0, currentIndex - 3); i <= Math.min(siblings.length - 1, currentIndex + 3); i++) {
-							contextText += ' ' + (siblings[i].textContent || '');
-						}
-
-						// Extract sentence containing the citation
-						const sentences = contextText.split(/[.!?]+/);
-						for (const sentence of sentences) {
-							if (sentence.includes(text)) {
-								// Use key terms from the sentence
-								query = sentence.replace(/\[\d+(?:,\s*\d+)*\]/g, '').trim();
-								break;
-							}
-						}
-					}
+				if (parsedRef) {
+					// Use the parsed reference title/authors for search
+					console.log(`[Citation] Found reference ${refNum}:`, parsedRef.title);
+					query = parsedRef.title || parsedRef.authors || parsedRef.rawText;
+				} else {
+					console.log(`[Citation] Reference ${refNum} not found in parsed references`);
+					// Fall back to context-based search
+					query = getContextualQuery(text) || cleanedText;
 				}
 			}
+		} else {
+			// For author-year style citations, use as-is
+			query = cleanedText;
 		}
 
-		// If query is still just numbers or too short, use generic approach
-		if (query.length < 10 || /^[\d\s,\-–]+$/.test(query)) {
-			// For numbered references, we'd ideally look up in the References section
-			// For now, show a message that we need more context
-			console.log('Citation reference detected:', text);
+		// If query is still just numbers or too short, skip
+		if (query.length < 5 || /^[\d\s,\-–]+$/.test(query)) {
+			console.log('[Citation] Query too short or just numbers:', query);
 			return;
 		}
 
@@ -693,55 +1453,156 @@
 		showCitationModal = true;
 	}
 
-	// Scroll to figure/table in the document
-	function scrollToFigure(figRef: string) {
-		if (!scrollContainer || !pdfDoc) return;
+	/**
+	 * Get contextual search query from surrounding text (fallback for when references aren't parsed)
+	 */
+	function getContextualQuery(text: string): string | null {
+		const selection = window.getSelection();
+		if (!selection || selection.rangeCount === 0) return null;
 
-		// Extract figure number
+		const range = selection.getRangeAt(0);
+		const container = range.startContainer.parentElement;
+		if (!container) return null;
+
+		const parent = container.parentElement;
+		if (!parent) return null;
+
+		const siblings = Array.from(parent.children);
+		const currentIndex = siblings.indexOf(container);
+
+		// Collect text from surrounding elements
+		let contextText = '';
+		for (let i = Math.max(0, currentIndex - 3); i <= Math.min(siblings.length - 1, currentIndex + 3); i++) {
+			contextText += ' ' + (siblings[i].textContent || '');
+		}
+
+		// Extract sentence containing the citation
+		const sentences = contextText.split(/[.!?]+/);
+		for (const sentence of sentences) {
+			if (sentence.includes(text)) {
+				// Use key terms from the sentence, removing citation markers
+				return sentence.replace(/\[\d+(?:,\s*\d+)*\]/g, '').trim();
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Scroll to figure/table in the document using indexed locations
+	 * Falls back to real-time search if not found in index
+	 */
+	async function scrollToFigure(figRef: string): Promise<boolean> {
+		if (!scrollContainer || !pdfDoc) return false;
+
+		const normalizedId = normalizeId(figRef);
+		console.log(`[PDF] Looking up figure: "${figRef}" → normalized: "${normalizedId}"`);
+
+		// 1. Try index lookup
+		let location = figureIndex.get(normalizedId);
+
+		// 2. Try Roman numeral conversion (Table I → table-1)
+		if (!location && /[IVX]+/i.test(figRef)) {
+			const arabicId = normalizedId.replace(/[ivx]+/gi, (m) =>
+				String(romanToArabic(m))
+			);
+			console.log(`[PDF] Trying Roman→Arabic conversion: "${arabicId}"`);
+			location = figureIndex.get(arabicId);
+		}
+
+		// 3. Fallback: real-time search through rendered pages
+		if (!location) {
+			console.log(`[PDF] Not in index, searching rendered pages...`);
+			location = await searchFigureInRenderedPages(figRef);
+		}
+
+		if (!location) {
+			console.warn(`[PDF] ${figRef} not found`);
+			return false;
+		}
+
+		console.log(`[PDF] Found ${figRef} on page ${location.pageNum} at y=${location.yPosition}`);
+
+		// 4. Ensure page is rendered
+		await ensurePageRendered(location.pageNum);
+
+		// 5. Scroll to page and position
+		const pageWrapper = scrollContainer.querySelector(`[data-page="${location.pageNum}"]`) as HTMLElement;
+		if (!pageWrapper) return false;
+
+		// Calculate scroll position based on Y coordinate
+		const pageRect = pageWrapper.getBoundingClientRect();
+		const containerRect = scrollContainer.getBoundingClientRect();
+		const pageTop = pageWrapper.offsetTop;
+
+		// yPosition is from top of page (0 = top)
+		// Use larger offset (300px) since captions are typically below figures
+		// This ensures the figure itself is visible, not just the caption
+		const scrollTarget = pageTop + (location.yPosition / 792) * pageRect.height - 300; // 792 is standard PDF page height
+
+		scrollContainer.scrollTo({
+			top: Math.max(0, scrollTarget),
+			behavior: 'smooth'
+		});
+
+		// 6. Highlight caption after scroll completes
+		setTimeout(() => {
+			highlightFigureCaption(location!);
+		}, 500);
+
+		return true;
+	}
+
+	/**
+	 * Fallback: Search for figure caption in currently rendered pages
+	 */
+	async function searchFigureInRenderedPages(figRef: string): Promise<FigureLocation | null> {
+		if (!scrollContainer) return null;
+
 		const numMatch = figRef.match(/\d+(?:\.\d+)?/);
-		if (!numMatch) return;
+		if (!numMatch) return null;
 
 		const figNum = numMatch[0];
-		const figType = figRef.toLowerCase().startsWith('tab') ? 'table' :
-		                figRef.toLowerCase().startsWith('alg') ? 'algorithm' :
-		                figRef.toLowerCase().startsWith('eq') ? 'equation' : 'figure';
+		const figType = detectFigureType(figRef);
 
-		// Search through rendered pages for the figure
 		const textLayers = scrollContainer.querySelectorAll('.textLayer');
 		for (const textLayer of textLayers) {
+			const pageWrapper = textLayer.closest('.page-wrapper') as HTMLElement;
+			const pageNum = parseInt(pageWrapper?.dataset.page || '0', 10);
+			if (!pageNum) continue;
+
 			const spans = textLayer.querySelectorAll('span');
 			for (const span of spans) {
 				const spanText = span.textContent?.toLowerCase() || '';
 
-				// Look for figure caption patterns
+				// Check for caption patterns
 				const captionPatterns = [
-					new RegExp(`${figType}\\s*${figNum}[.:]`, 'i'),
-					new RegExp(`${figType}\\s*${figNum}\\s`, 'i'),
-					new RegExp(`^${figType}\\s*${figNum}`, 'i'),
+					new RegExp(`^${figType}\\s*${figNum}[.:]`, 'i'),
+					new RegExp(`^fig(?:ure)?\\.?\\s*${figNum}[.:]`, 'i'),
+					new RegExp(`^table\\s*${figNum}[.:]`, 'i'),
 				];
 
 				for (const pattern of captionPatterns) {
 					if (pattern.test(spanText)) {
-						// Found the figure caption - scroll to it
-						const pageWrapper = span.closest('.page-wrapper');
-						if (pageWrapper) {
-							pageWrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+						// Found! Calculate Y position
+						const rect = span.getBoundingClientRect();
+						const pageRect = pageWrapper.getBoundingClientRect();
+						const yPosition = rect.top - pageRect.top;
 
-							// Highlight the figure temporarily
-							span.style.backgroundColor = 'rgba(255, 255, 0, 0.5)';
-							setTimeout(() => {
-								span.style.backgroundColor = '';
-							}, 2000);
-
-							return;
-						}
+						return {
+							type: figType,
+							id: figRef,
+							normalizedId: normalizeId(figRef),
+							pageNum,
+							yPosition,
+							caption: spanText.substring(0, 100)
+						};
 					}
 				}
 			}
 		}
 
-		// If not found in rendered pages, show notification
-		console.log(`${figRef} not found in currently rendered pages`);
+		return null;
 	}
 
 	// Save viewer state to tab store
@@ -890,6 +1751,29 @@
 		.textLayer span.figure-ref:hover {
 			background-color: rgba(34, 197, 94, 0.25);
 		}
+
+		/* Reference entry styles (items in References section) */
+		.textLayer span.reference-entry {
+			cursor: pointer !important;
+			color: transparent;
+			background-color: rgba(168, 85, 247, 0.1); /* Purple tint */
+			border-radius: 2px;
+			transition: background-color 0.15s ease;
+		}
+
+		.textLayer span.reference-entry:hover {
+			background-color: rgba(168, 85, 247, 0.25);
+		}
+
+		/* Figure caption highlight animation (after navigation) */
+		.textLayer span.figure-highlight {
+			animation: figure-pulse 2s ease-out;
+		}
+
+		@keyframes figure-pulse {
+			0% { background-color: rgba(251, 191, 36, 0.6); }
+			100% { background-color: transparent; }
+		}
 	</style>
 </svelte:head>
 
@@ -1012,8 +1896,48 @@
 			</button>
 		</div>
 
+		<!-- References detection status & refresh -->
+		<div class="flex items-center gap-2">
+			{#if parsedReferences.length > 0}
+				<span
+					class="flex items-center gap-1 rounded px-2 py-1 text-xs {referencesSource === 'backend' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300'}"
+					title={referencesSource === 'backend' ? 'References analyzed by backend (stored in database)' : 'References parsed by frontend (not stored)'}
+				>
+					<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M5 13l4 4L19 7" />
+					</svg>
+					{parsedReferences.length} refs
+					{#if referencesSource === 'backend'}
+						<span class="text-[10px] opacity-70">(DB)</span>
+					{/if}
+				</span>
+			{:else if isDetectingReferences}
+				<span class="flex items-center gap-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+					<svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+					</svg>
+					Loading refs...
+				</span>
+			{/if}
+		</div>
+
+		<div class="mx-2 h-5 w-px bg-neutral-300 dark:bg-neutral-600"></div>
+
 		<!-- Reader/Blog mode toggle -->
 		<div class="ml-auto flex items-center gap-1">
+			<!-- Outline toggle button -->
+			<button
+				class="rounded p-1.5 transition-colors {showOutlinePanel
+					? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300'
+					: 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700'}"
+				onclick={() => showOutlinePanel = !showOutlinePanel}
+				title="Toggle Outline Panel"
+			>
+				<List class="h-5 w-5" />
+			</button>
+
+			<div class="mx-2 h-5 w-px bg-neutral-300 dark:bg-neutral-600"></div>
+
 			<button
 				class="rounded bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300"
 				title="Reader view (current)"
@@ -1072,5 +1996,23 @@
 			showCitationModal = false;
 			citationQuery = '';
 		}}
+		onOpenPaper={(paperId) => {
+			showCitationModal = false;
+			citationQuery = '';
+			onOpenPaper?.(paperId);
+		}}
+	/>
+{/if}
+
+<!-- Floating Outline Panel -->
+{#if showOutlinePanel}
+	<FloatingOutline
+		sections={outlineSections}
+		figures={outlineFigures}
+		tables={outlineTables}
+		equations={outlineEquations}
+		references={outlineReferences}
+		onClose={() => showOutlinePanel = false}
+		onItemClick={handleOutlineItemClick}
 	/>
 {/if}

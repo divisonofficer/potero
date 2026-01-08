@@ -1,18 +1,25 @@
 <script lang="ts">
-	import { api, type SearchResult } from '$lib/api/client';
+	import { api, type SearchResult, type ImportFromUrlRequest } from '$lib/api/client';
+	import type { Paper } from '$lib/types';
 	import { getErrorMessage } from '$lib/types';
 
 	interface Props {
 		query: string;
 		onClose: () => void;
 		onImport?: (result: SearchResult) => void;
+		onOpenPaper?: (paperId: string) => void;
 	}
 
-	let { query, onClose, onImport }: Props = $props();
+	let { query, onClose, onImport, onOpenPaper }: Props = $props();
 
 	let results = $state<SearchResult[]>([]);
 	let isLoading = $state(true);
 	let error = $state<string | null>(null);
+
+	// Track which results exist in library (by DOI or arXiv)
+	let existingPapers = $state<Map<string, Paper>>(new Map());
+	// Track which results are being imported
+	let importingResults = $state<Set<string>>(new Set());
 
 	$effect(() => {
 		searchCitation();
@@ -27,11 +34,14 @@
 
 		isLoading = true;
 		error = null;
+		existingPapers = new Map();
 
 		try {
 			const response = await api.searchOnline(query, 'semantic');
 			if (response.success && response.data) {
 				results = response.data;
+				// Check which papers already exist in library
+				await checkExistingPapers(response.data);
 			} else {
 				error = getErrorMessage(response.error) || 'Search failed';
 			}
@@ -42,9 +52,74 @@
 		}
 	}
 
+	async function checkExistingPapers(searchResults: SearchResult[]) {
+		const existing = new Map<string, Paper>();
+
+		for (const result of searchResults) {
+			// Check by DOI
+			if (result.doi) {
+				const doiResponse = await api.findPaperByDoi(result.doi);
+				if (doiResponse.success && doiResponse.data) {
+					existing.set(result.id, doiResponse.data);
+					continue;
+				}
+			}
+			// Check by arXiv ID
+			if (result.arxivId) {
+				const arxivResponse = await api.findPaperByArxiv(result.arxivId);
+				if (arxivResponse.success && arxivResponse.data) {
+					existing.set(result.id, arxivResponse.data);
+				}
+			}
+		}
+
+		existingPapers = existing;
+	}
+
 	function handleImport(result: SearchResult) {
 		onImport?.(result);
 		onClose();
+	}
+
+	function handleOpenInViewer(result: SearchResult) {
+		const paper = existingPapers.get(result.id);
+		if (paper) {
+			onOpenPaper?.(paper.id);
+			onClose();
+		}
+	}
+
+	async function handleAddToLibrary(result: SearchResult) {
+		if (!result.pdfUrl) return;
+
+		importingResults = new Set([...importingResults, result.id]);
+
+		try {
+			const request: ImportFromUrlRequest = {
+				pdfUrl: result.pdfUrl,
+				title: result.title,
+				authors: result.authors,
+				abstract: result.abstract ?? undefined,
+				doi: result.doi ?? undefined,
+				arxivId: result.arxivId ?? undefined,
+				year: result.year ?? undefined,
+				venue: result.venue ?? undefined,
+				citationsCount: result.citationCount ?? undefined
+			};
+
+			const response = await api.importFromUrl(request);
+			if (response.success && response.data) {
+				// Paper added successfully, open in viewer
+				onOpenPaper?.(response.data.paperId);
+				onClose();
+			} else {
+				error = getErrorMessage(response.error) || 'Failed to add paper';
+			}
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to add paper';
+		} finally {
+			importingResults = new Set([...importingResults].filter(id => id !== result.id));
+		}
 	}
 
 	function handleBackdropClick(e: MouseEvent) {
@@ -152,7 +227,16 @@
 
 							<!-- Actions -->
 							<div class="flex items-center gap-2 mt-4 pt-3 border-t border-neutral-100 dark:border-neutral-700">
-								{#if result.pdfUrl}
+								{#if existingPapers.has(result.id)}
+									<!-- Paper exists in library - show badge -->
+									<span class="flex items-center gap-1 rounded-md bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs text-green-700 dark:text-green-300">
+										<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+											<path d="M5 13l4 4L19 7" />
+										</svg>
+										In Library
+									</span>
+								{/if}
+								{#if result.pdfUrl && !existingPapers.has(result.id)}
 									<a
 										href={result.pdfUrl}
 										target="_blank"
@@ -189,17 +273,53 @@
 									</svg>
 									Semantic Scholar
 								</a>
-								{#if onImport}
-									<button
-										onclick={() => handleImport(result)}
-										class="ml-auto flex items-center gap-1 rounded-md bg-blue-500 px-3 py-1.5 text-sm text-white hover:bg-blue-600"
-									>
-										<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<path d="M12 4v16m8-8H4" />
-										</svg>
-										Add to Library
-									</button>
-								{/if}
+
+								<!-- Primary action button (right side) -->
+								<div class="ml-auto flex items-center gap-2">
+									{#if existingPapers.has(result.id)}
+										<!-- Paper exists - Open in Viewer -->
+										<button
+											onclick={() => handleOpenInViewer(result)}
+											class="flex items-center gap-1 rounded-md bg-green-500 px-3 py-1.5 text-sm text-white hover:bg-green-600"
+										>
+											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+												<path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+											</svg>
+											Open in Viewer
+										</button>
+									{:else if result.pdfUrl}
+										<!-- PDF available - Add to Library (download PDF) -->
+										<button
+											onclick={() => handleAddToLibrary(result)}
+											disabled={importingResults.has(result.id)}
+											class="flex items-center gap-1 rounded-md bg-blue-500 px-3 py-1.5 text-sm text-white hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+										>
+											{#if importingResults.has(result.id)}
+												<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+												</svg>
+												Downloading...
+											{:else}
+												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+												</svg>
+												Add to Library
+											{/if}
+										</button>
+									{:else if onImport}
+										<!-- No PDF - simple import (metadata only) -->
+										<button
+											onclick={() => handleImport(result)}
+											class="flex items-center gap-1 rounded-md bg-neutral-500 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
+										>
+											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<path d="M12 4v16m8-8H4" />
+											</svg>
+											Add (No PDF)
+										</button>
+									{/if}
+								</div>
 							</div>
 						</div>
 					{/each}

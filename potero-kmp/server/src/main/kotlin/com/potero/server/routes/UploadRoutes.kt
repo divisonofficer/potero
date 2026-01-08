@@ -8,6 +8,8 @@ import com.potero.service.job.GlobalJobQueue
 import com.potero.service.job.JobType
 import com.potero.service.metadata.SearchResult
 import com.potero.service.pdf.PdfAnalyzer
+import io.ktor.client.call.*
+import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.request.*
@@ -102,7 +104,13 @@ data class ReanalyzeResult(
     val detectedDoi: String? = null,
     val detectedArxivId: String? = null,
     val searchResultCount: Int = 0,
-    val needsUserConfirmation: Boolean = false
+    val needsUserConfirmation: Boolean = false,
+    // References analysis result (integrated)
+    val referencesCount: Int = 0,
+    val referencesStartPage: Int? = null,
+    // Auto-tagging result (integrated)
+    val autoTaggedCount: Int = 0,
+    val autoTaggedTags: List<String> = emptyList()
 )
 
 fun Route.uploadRoutes() {
@@ -313,12 +321,28 @@ fun Route.uploadRoutes() {
                 else -> emptyList()
             }
 
+            // Generate thumbnail
+            var thumbnailPath: String? = null
+            try {
+                val thumbnailDir = File(storagePath, "thumbnails")
+                thumbnailDir.mkdirs()
+                val thumbnailFile = File(thumbnailDir, "${paperId}.png")
+                val analyzer = PdfAnalyzer(targetFile.absolutePath)
+                if (analyzer.generateThumbnail(thumbnailFile.absolutePath, width = 200)) {
+                    thumbnailPath = thumbnailFile.absolutePath
+                    println("[Upload] Generated thumbnail: $thumbnailPath")
+                }
+            } catch (e: Exception) {
+                println("[Upload] Thumbnail generation failed: ${e.message}")
+            }
+
             // Create paper entry
             val now = Clock.System.now()
             val paper = Paper(
                 id = paperId,
                 title = paperTitle,
                 pdfPath = targetFile.absolutePath,
+                thumbnailPath = thumbnailPath,
                 authors = paperAuthors,
                 tags = emptyList(),
                 abstract = resolvedMetadata?.abstract,
@@ -595,6 +619,120 @@ fun Route.uploadRoutes() {
                     }
                 }
 
+                // Step 4: Generate thumbnail if missing
+                ctx.updateProgress(82, "Generating thumbnail...")
+                try {
+                    val freshPaper = paperRepository.getById(paperId).getOrNull()
+                    if (freshPaper != null && (freshPaper.thumbnailPath.isNullOrBlank() || !File(freshPaper.thumbnailPath!!).exists())) {
+                        val pdfFile = File(pdfPath)
+                        val thumbnailDir = File(pdfFile.parentFile, "thumbnails")
+                        thumbnailDir.mkdirs()
+                        val thumbnailPath = File(thumbnailDir, "${paperId}.png").absolutePath
+
+                        val pdfThumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+                        val generatedPath = pdfThumbnailExtractor.extractThumbnail(pdfPath, thumbnailPath)
+                        if (generatedPath != null) {
+                            val updatedWithThumb = freshPaper.copy(
+                                thumbnailPath = generatedPath,
+                                updatedAt = Clock.System.now()
+                            )
+                            paperRepository.update(updatedWithThumb)
+                            println("[Re-analysis] Generated thumbnail: $generatedPath")
+                        } else {
+                            println("[Re-analysis] Thumbnail extraction returned null for $paperId")
+                        }
+                    }
+                } catch (e: Exception) {
+                    println("[Re-analysis] Thumbnail generation failed: ${e.message}")
+                    e.printStackTrace()
+                }
+
+                // Step 5: Analyze references section
+                ctx.updateProgress(85, "Analyzing references section...")
+
+                var referencesCount = 0
+                var referencesStartPage: Int? = null
+                try {
+                    val referenceRepository = ServiceLocator.referenceRepository
+                    val referencesResult = analyzer.analyzeReferences()
+
+                    // Delete existing references for this paper
+                    referenceRepository.deleteByPaperId(paperId)
+
+                    // Convert and save new references
+                    val refNow = Clock.System.now()
+                    val references = referencesResult.references.map { parsed ->
+                        com.potero.domain.model.Reference(
+                            id = UUID.randomUUID().toString(),
+                            paperId = paperId,
+                            number = parsed.number,
+                            rawText = parsed.rawText,
+                            authors = parsed.authors,
+                            title = parsed.title,
+                            venue = parsed.venue,
+                            year = parsed.year,
+                            doi = parsed.doi,
+                            pageNum = parsed.pageNum,
+                            createdAt = refNow
+                        )
+                    }
+
+                    if (references.isNotEmpty()) {
+                        referenceRepository.insertAll(references)
+                    }
+
+                    referencesCount = references.size
+                    referencesStartPage = referencesResult.startPage
+                    println("[Re-analysis] Extracted $referencesCount references starting at page $referencesStartPage")
+                } catch (e: Exception) {
+                    println("[Re-analysis] References extraction failed: ${e.message}")
+                    // Continue even if references fail
+                }
+
+                // Step 6: Auto-tagging with LLM
+                ctx.updateProgress(92, "Auto-tagging with LLM...")
+
+                var autoTaggedCount = 0
+                var autoTaggedTags = emptyList<String>()
+                try {
+                    val tagService = ServiceLocator.tagService
+                    val tagRepository = ServiceLocator.tagRepository
+
+                    // Get updated paper (may have new abstract from metadata resolution)
+                    val updatedPaper = paperRepository.getById(paperId).getOrNull() ?: currentPaper
+
+                    // Extract full text for better tagging
+                    val fullText = try {
+                        analyzer.extractFirstPagesText(maxPages = 3)
+                    } catch (e: Exception) {
+                        null
+                    }
+
+                    // Auto-tag the paper
+                    val autoTagResult = tagService.autoTagPaper(
+                        paperId = paperId,
+                        title = updatedPaper.title,
+                        abstract = updatedPaper.abstract,
+                        fullText = fullText
+                    )
+
+                    if (autoTagResult.isSuccess) {
+                        val assignedTags = autoTagResult.getOrThrow()
+                        autoTaggedCount = assignedTags.size
+                        autoTaggedTags = assignedTags.map { it.name }
+
+                        // Link tags to paper
+                        for (tag in assignedTags) {
+                            tagRepository.linkTagToPaper(paperId, tag.id)
+                        }
+
+                        println("[Re-analysis] Auto-tagged with ${assignedTags.size} tags: ${autoTaggedTags.joinToString(", ")}")
+                    }
+                } catch (e: Exception) {
+                    println("[Re-analysis] Auto-tagging failed: ${e.message}")
+                    // Continue even if auto-tagging fails
+                }
+
                 ctx.updateProgress(100, "Re-analysis complete")
 
                 // Return result as JSON
@@ -604,7 +742,11 @@ fun Route.uploadRoutes() {
                     detectedDoi = detectedDoi,
                     detectedArxivId = detectedArxivId,
                     searchResultCount = searchResults.size,
-                    needsUserConfirmation = !autoResolved && searchResults.isNotEmpty()
+                    needsUserConfirmation = !autoResolved && searchResults.isNotEmpty(),
+                    referencesCount = referencesCount,
+                    referencesStartPage = referencesStartPage,
+                    autoTaggedCount = autoTaggedCount,
+                    autoTaggedTags = autoTaggedTags
                 )
                 Json.encodeToString(result)
             }
@@ -841,6 +983,269 @@ fun Route.uploadRoutes() {
             }
         }
 
+        // POST /api/upload/thumbnail/{paperId} - Generate thumbnail for a paper (async job)
+        post("/thumbnail/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val paper = paperRepository.getById(paperId).getOrNull()
+            if (paper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<ThumbnailJobResponse>(
+                        success = false,
+                        error = "Paper not found: $paperId"
+                    )
+                )
+                return@post
+            }
+
+            val pdfPath = paper.pdfPath
+            if (pdfPath.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<ThumbnailJobResponse>(
+                        success = false,
+                        error = "Paper has no PDF file"
+                    )
+                )
+                return@post
+            }
+
+            val pdfFile = File(pdfPath)
+            if (!pdfFile.exists()) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<ThumbnailJobResponse>(
+                        success = false,
+                        error = "PDF file not found"
+                    )
+                )
+                return@post
+            }
+
+            // Submit async job
+            val jobQueue = GlobalJobQueue.instance
+            val job = jobQueue.submitJob(
+                type = JobType.THUMBNAIL_GENERATION,
+                title = "Generating thumbnail: ${paper.title.take(50)}...",
+                description = "Extracting thumbnail from PDF",
+                paperId = paperId
+            ) { ctx ->
+                ctx.updateProgress(20, "Loading PDF...")
+
+                val pdfThumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+
+                val thumbnailDir = File(pdfFile.parentFile, "thumbnails")
+                thumbnailDir.mkdirs()
+                val thumbnailPath = File(thumbnailDir, "${paperId}.png").absolutePath
+
+                ctx.updateProgress(50, "Extracting thumbnail image...")
+
+                val generatedPath = pdfThumbnailExtractor.extractThumbnail(pdfPath, thumbnailPath)
+                    ?: throw Exception("Failed to extract thumbnail from PDF")
+
+                ctx.updateProgress(80, "Updating paper record...")
+
+                // Update paper with thumbnail path
+                val currentPaper = paperRepository.getById(paperId).getOrNull() ?: paper
+                val updatedPaper = currentPaper.copy(
+                    thumbnailPath = generatedPath,
+                    updatedAt = Clock.System.now()
+                )
+                paperRepository.update(updatedPaper)
+
+                ctx.updateProgress(100, "Thumbnail generated")
+
+                Json.encodeToString(ThumbnailResult(paperId = paperId, thumbnailPath = generatedPath))
+            }
+
+            call.respond(
+                HttpStatusCode.Accepted,
+                ApiResponse(
+                    data = ThumbnailJobResponse(
+                        jobId = job.id,
+                        paperId = paperId,
+                        message = "Thumbnail generation started"
+                    )
+                )
+            )
+        }
+
+        // POST /api/upload/from-url - Download PDF from URL and create paper entry
+        post("/from-url") {
+            val request = call.receive<ImportFromUrlRequest>()
+
+            if (request.pdfUrl.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "PDF URL is required"
+                    )
+                )
+                return@post
+            }
+
+            // Validate URL
+            val url = try {
+                java.net.URL(request.pdfUrl)
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "Invalid URL: ${request.pdfUrl}"
+                    )
+                )
+                return@post
+            }
+
+            // Get storage path
+            val storagePath = settingsRepository.get(SettingsKeys.PDF_STORAGE_PATH).getOrNull()
+                ?: "${System.getProperty("user.home")}/.potero/pdfs"
+            val storageDir = File(storagePath)
+            storageDir.mkdirs()
+
+            // Generate paper ID and filename
+            val paperId = UUID.randomUUID().toString()
+            val urlFileName = url.path.substringAfterLast('/').takeIf { it.isNotBlank() } ?: "paper.pdf"
+            val safeFileName = urlFileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                .let { if (!it.lowercase().endsWith(".pdf")) "$it.pdf" else it }
+            val targetFile = File(storageDir, "${paperId}_$safeFileName")
+
+            try {
+                // Download PDF with validation
+                val httpClient = ServiceLocator.httpClient
+                val response = httpClient.get(request.pdfUrl)
+
+                // Check response status
+                if (response.status.value !in 200..299) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiResponse<UploadAnalysisResponse>(
+                            success = false,
+                            error = "Failed to download PDF: HTTP ${response.status.value} from ${request.pdfUrl}"
+                        )
+                    )
+                    return@post
+                }
+
+                val pdfBytes: ByteArray = response.body()
+
+                // Validate PDF magic bytes (PDF files start with %PDF-)
+                if (pdfBytes.size < 5 ||
+                    pdfBytes[0] != 0x25.toByte() || // %
+                    pdfBytes[1] != 0x50.toByte() || // P
+                    pdfBytes[2] != 0x44.toByte() || // D
+                    pdfBytes[3] != 0x46.toByte() || // F
+                    pdfBytes[4] != 0x2D.toByte()) { // -
+
+                    // Check if it's HTML (might be a login page or error page)
+                    val firstChars = String(pdfBytes.take(100).toByteArray())
+                    val isHtml = firstChars.contains("<!DOCTYPE", ignoreCase = true) ||
+                                 firstChars.contains("<html", ignoreCase = true)
+
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiResponse<UploadAnalysisResponse>(
+                            success = false,
+                            error = if (isHtml) {
+                                "Download returned HTML instead of PDF. The PDF might require authentication or the link may have expired."
+                            } else {
+                                "Downloaded file is not a valid PDF (invalid magic bytes). The URL might not point to an actual PDF file."
+                            }
+                        )
+                    )
+                    return@post
+                }
+
+                // Check minimum size (PDFs should be at least a few KB)
+                if (pdfBytes.size < 1024) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiResponse<UploadAnalysisResponse>(
+                            success = false,
+                            error = "Downloaded PDF is too small (${pdfBytes.size} bytes). It might be corrupted or incomplete."
+                        )
+                    )
+                    return@post
+                }
+
+                targetFile.writeBytes(pdfBytes)
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<UploadAnalysisResponse>(
+                        success = false,
+                        error = "Failed to download PDF: ${e.message}"
+                    )
+                )
+                return@post
+            }
+
+            // Create paper entry with provided metadata
+            val now = Clock.System.now()
+            val paper = Paper(
+                id = paperId,
+                title = request.title ?: safeFileName.removeSuffix(".pdf").replace("_", " "),
+                pdfPath = targetFile.absolutePath,
+                authors = request.authors?.mapIndexed { index, name ->
+                    Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                } ?: emptyList(),
+                tags = emptyList(),
+                abstract = request.abstract,
+                doi = request.doi,
+                arxivId = request.arxivId,
+                year = request.year,
+                conference = request.venue,
+                citationsCount = request.citationsCount ?: 0,
+                createdAt = now,
+                updatedAt = now
+            )
+
+            val result = paperRepository.insert(paper)
+            result.fold(
+                onSuccess = { insertedPaper ->
+                    call.respond(
+                        HttpStatusCode.Created,
+                        ApiResponse(
+                            data = UploadAnalysisResponse(
+                                paperId = insertedPaper.id,
+                                fileName = safeFileName,
+                                filePath = targetFile.absolutePath,
+                                title = insertedPaper.title,
+                                autoResolved = true,
+                                resolvedMetadata = if (request.title != null) {
+                                    ResolvedMetadataDto(
+                                        title = request.title,
+                                        authors = request.authors ?: emptyList(),
+                                        abstract = request.abstract,
+                                        doi = request.doi,
+                                        arxivId = request.arxivId,
+                                        year = request.year,
+                                        venue = request.venue,
+                                        citationsCount = request.citationsCount
+                                    )
+                                } else null
+                            )
+                        )
+                    )
+                },
+                onFailure = { error ->
+                    // Clean up downloaded file on failure
+                    targetFile.delete()
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<UploadAnalysisResponse>(
+                            success = false,
+                            error = error.message ?: "Failed to create paper entry"
+                        )
+                    )
+                }
+            )
+        }
+
         // GET /api/upload/thumbnail/{paperId} - Get or generate thumbnail for a paper
         get("/thumbnail/{paperId}") {
             val paperId = call.parameters["paperId"]
@@ -897,6 +1302,262 @@ fun Route.uploadRoutes() {
                 call.respond(HttpStatusCode.InternalServerError, "Failed to generate thumbnail")
             }
         }
+
+        // POST /api/upload/bulk-reanalyze - Bulk re-analyze papers based on criteria
+        post("/bulk-reanalyze") {
+            val request = call.receive<BulkReanalyzeRequest>()
+
+            // Get all papers to determine which need re-analysis
+            val allPapers = paperRepository.getAll().getOrNull() ?: emptyList()
+
+            val papersToProcess = if (!request.paperIds.isNullOrEmpty()) {
+                // Specific paper IDs provided
+                allPapers.filter { it.id in request.paperIds }
+            } else {
+                // Filter by criteria
+                val criteria = request.criteria.ifEmpty { listOf("all") }
+                allPapers.filter { paper ->
+                    criteria.any { criterion ->
+                        when (criterion) {
+                            "missing_thumbnail" -> paper.thumbnailPath.isNullOrBlank()
+                            "missing_venue" -> paper.conference.isNullOrBlank()
+                            "missing_doi" -> paper.doi.isNullOrBlank()
+                            "missing_abstract" -> paper.abstract.isNullOrBlank()
+                            "missing_year" -> paper.year == null
+                            "all" -> true
+                            else -> false
+                        }
+                    }
+                }
+            }.filter { it.pdfPath != null && File(it.pdfPath!!).exists() } // Only papers with valid PDFs
+
+            if (papersToProcess.isEmpty()) {
+                call.respond(
+                    ApiResponse(
+                        data = BulkReanalyzeResponse(
+                            jobId = "",
+                            papersQueued = 0,
+                            message = "No papers match the criteria"
+                        )
+                    )
+                )
+                return@post
+            }
+
+            // Submit async bulk job
+            val jobQueue = GlobalJobQueue.instance
+            val pdfThumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+
+            val job = jobQueue.submitJob(
+                type = JobType.BULK_IMPORT,  // Reuse BULK_IMPORT type for bulk operations
+                title = "Bulk Re-analysis: ${papersToProcess.size} papers",
+                description = "Re-analyzing papers with criteria: ${request.criteria.joinToString(", ")}"
+            ) { ctx ->
+                var successful = 0
+                var failed = 0
+                val failures = mutableListOf<BulkReanalyzeFailure>()
+
+                papersToProcess.forEachIndexed { index, paper ->
+                    val progress = ((index + 1) * 100) / papersToProcess.size
+                    ctx.updateProgress(progress, "Processing: ${paper.title.take(40)}...")
+
+                    try {
+                        val pdfPath = paper.pdfPath!!
+                        val pdfFile = File(pdfPath)
+
+                        // Generate thumbnail if missing
+                        if (paper.thumbnailPath.isNullOrBlank() || !File(paper.thumbnailPath!!).exists()) {
+                            val thumbnailDir = File(pdfFile.parentFile, "thumbnails")
+                            thumbnailDir.mkdirs()
+                            val thumbnailPath = File(thumbnailDir, "${paper.id}.png").absolutePath
+                            val generatedPath = pdfThumbnailExtractor.extractThumbnail(pdfPath, thumbnailPath)
+                            if (generatedPath != null) {
+                                val updatedPaper = paper.copy(
+                                    thumbnailPath = generatedPath,
+                                    updatedAt = Clock.System.now()
+                                )
+                                paperRepository.update(updatedPaper)
+                            }
+                        }
+
+                        // Try to extract DOI/arXiv and resolve metadata if missing key fields
+                        if (paper.doi.isNullOrBlank() || paper.conference.isNullOrBlank() || paper.abstract.isNullOrBlank()) {
+                            val analyzer = PdfAnalyzer(pdfPath)
+                            val firstPagesText = analyzer.extractFirstPagesText(2)
+                            val doi = analyzer.findDOI(firstPagesText)
+                            val arxivId = analyzer.findArxivId(firstPagesText)
+
+                            // Try to resolve from DOI
+                            if (doi != null && paper.doi.isNullOrBlank()) {
+                                val resolved = ServiceLocator.doiResolver.resolve(doi).getOrNull()
+                                if (resolved != null) {
+                                    val currentPaper = paperRepository.getById(paper.id).getOrNull() ?: paper
+                                    val updatedPaper = currentPaper.copy(
+                                        doi = doi,
+                                        conference = resolved.venue ?: currentPaper.conference,
+                                        year = resolved.year ?: currentPaper.year,
+                                        citationsCount = resolved.citationsCount ?: currentPaper.citationsCount,
+                                        abstract = resolved.abstract ?: currentPaper.abstract,
+                                        updatedAt = Clock.System.now()
+                                    )
+                                    paperRepository.update(updatedPaper)
+                                }
+                            }
+
+                            // Try to resolve from arXiv
+                            if (arxivId != null && paper.arxivId.isNullOrBlank()) {
+                                val resolved = ServiceLocator.arxivResolver.resolve(arxivId).getOrNull()
+                                if (resolved != null) {
+                                    val currentPaper = paperRepository.getById(paper.id).getOrNull() ?: paper
+                                    val updatedPaper = currentPaper.copy(
+                                        arxivId = arxivId,
+                                        year = resolved.year ?: currentPaper.year,
+                                        abstract = resolved.abstract ?: currentPaper.abstract,
+                                        updatedAt = Clock.System.now()
+                                    )
+                                    paperRepository.update(updatedPaper)
+                                }
+                            }
+
+                            // Also analyze references
+                            try {
+                                val referenceRepository = ServiceLocator.referenceRepository
+                                val referencesResult = analyzer.analyzeReferences()
+
+                                // Delete existing and save new references
+                                referenceRepository.deleteByPaperId(paper.id)
+                                val refNow = Clock.System.now()
+                                val references = referencesResult.references.map { parsed ->
+                                    com.potero.domain.model.Reference(
+                                        id = UUID.randomUUID().toString(),
+                                        paperId = paper.id,
+                                        number = parsed.number,
+                                        rawText = parsed.rawText,
+                                        authors = parsed.authors,
+                                        title = parsed.title,
+                                        venue = parsed.venue,
+                                        year = parsed.year,
+                                        doi = parsed.doi,
+                                        pageNum = parsed.pageNum,
+                                        createdAt = refNow
+                                    )
+                                }
+                                if (references.isNotEmpty()) {
+                                    referenceRepository.insertAll(references)
+                                }
+                            } catch (refError: Exception) {
+                                // References extraction failed, continue
+                                println("[Bulk Re-analysis] References failed for ${paper.id}: ${refError.message}")
+                            }
+
+                            // Auto-tagging with LLM
+                            try {
+                                val tagService = ServiceLocator.tagService
+                                val tagRepository = ServiceLocator.tagRepository
+                                val updatedPaper = paperRepository.getById(paper.id).getOrNull() ?: paper
+
+                                val fullText = try {
+                                    analyzer.extractFirstPagesText(maxPages = 3)
+                                } catch (e: Exception) { null }
+
+                                val autoTagResult = tagService.autoTagPaper(
+                                    paperId = paper.id,
+                                    title = updatedPaper.title,
+                                    abstract = updatedPaper.abstract,
+                                    fullText = fullText
+                                )
+
+                                if (autoTagResult.isSuccess) {
+                                    val assignedTags = autoTagResult.getOrThrow()
+                                    for (tag in assignedTags) {
+                                        tagRepository.linkTagToPaper(paper.id, tag.id)
+                                    }
+                                    println("[Bulk Re-analysis] Auto-tagged ${paper.id} with ${assignedTags.size} tags")
+                                }
+                            } catch (tagError: Exception) {
+                                println("[Bulk Re-analysis] Auto-tagging failed for ${paper.id}: ${tagError.message}")
+                            }
+                        }
+
+                        successful++
+                    } catch (e: Exception) {
+                        failed++
+                        failures.add(BulkReanalyzeFailure(
+                            paperId = paper.id,
+                            title = paper.title,
+                            error = e.message ?: "Unknown error"
+                        ))
+                    }
+                }
+
+                ctx.updateProgress(100, "Completed: $successful success, $failed failed")
+
+                Json.encodeToString(BulkReanalyzeResult(
+                    totalProcessed = papersToProcess.size,
+                    successful = successful,
+                    failed = failed,
+                    failures = failures
+                ))
+            }
+
+            call.respond(
+                HttpStatusCode.Accepted,
+                ApiResponse(
+                    data = BulkReanalyzeResponse(
+                        jobId = job.id,
+                        papersQueued = papersToProcess.size,
+                        message = "Bulk re-analysis started for ${papersToProcess.size} papers"
+                    )
+                )
+            )
+        }
+
+        // GET /api/upload/bulk-reanalyze/preview - Preview which papers would be affected
+        post("/bulk-reanalyze/preview") {
+            val request = call.receive<BulkReanalyzeRequest>()
+
+            val allPapers = paperRepository.getAll().getOrNull() ?: emptyList()
+
+            val papersToProcess = if (!request.paperIds.isNullOrEmpty()) {
+                allPapers.filter { it.id in request.paperIds }
+            } else {
+                val criteria = request.criteria.ifEmpty { listOf("all") }
+                allPapers.filter { paper ->
+                    criteria.any { criterion ->
+                        when (criterion) {
+                            "missing_thumbnail" -> paper.thumbnailPath.isNullOrBlank()
+                            "missing_venue" -> paper.conference.isNullOrBlank()
+                            "missing_doi" -> paper.doi.isNullOrBlank()
+                            "missing_abstract" -> paper.abstract.isNullOrBlank()
+                            "missing_year" -> paper.year == null
+                            "all" -> true
+                            else -> false
+                        }
+                    }
+                }
+            }.filter { it.pdfPath != null && File(it.pdfPath!!).exists() }
+
+            call.respond(
+                ApiResponse(
+                    data = BulkReanalyzePreview(
+                        totalPapers = papersToProcess.size,
+                        papers = papersToProcess.map { paper ->
+                            BulkReanalyzePaperPreview(
+                                id = paper.id,
+                                title = paper.title,
+                                missingFields = buildList {
+                                    if (paper.thumbnailPath.isNullOrBlank()) add("thumbnail")
+                                    if (paper.conference.isNullOrBlank()) add("venue")
+                                    if (paper.doi.isNullOrBlank()) add("doi")
+                                    if (paper.abstract.isNullOrBlank()) add("abstract")
+                                    if (paper.year == null) add("year")
+                                }
+                            )
+                        }
+                    )
+                )
+            )
+        }
     }
 }
 
@@ -908,4 +1569,92 @@ data class LLMAnalysisResponse(
     val abstract: String? = null,
     val abstractKorean: String? = null,
     val thumbnailPath: String? = null
+)
+
+/**
+ * Response for thumbnail generation job submission
+ */
+@Serializable
+data class ThumbnailJobResponse(
+    val jobId: String,
+    val paperId: String,
+    val message: String
+)
+
+/**
+ * Result data stored in job after thumbnail generation completes
+ */
+@Serializable
+data class ThumbnailResult(
+    val paperId: String,
+    val thumbnailPath: String
+)
+
+/**
+ * Request to import a paper by downloading PDF from URL
+ */
+@Serializable
+data class ImportFromUrlRequest(
+    val pdfUrl: String,
+    val title: String? = null,
+    val authors: List<String>? = null,
+    val abstract: String? = null,
+    val doi: String? = null,
+    val arxivId: String? = null,
+    val year: Int? = null,
+    val venue: String? = null,
+    val citationsCount: Int? = null
+)
+
+/**
+ * Request for bulk re-analysis
+ */
+@Serializable
+data class BulkReanalyzeRequest(
+    val criteria: List<String> = emptyList(),  // "missing_thumbnail", "missing_venue", "missing_doi", "missing_abstract", "all"
+    val paperIds: List<String>? = null  // If specified, only these papers (overrides criteria)
+)
+
+/**
+ * Response for bulk re-analysis job
+ */
+@Serializable
+data class BulkReanalyzeResponse(
+    val jobId: String,
+    val papersQueued: Int,
+    val message: String
+)
+
+/**
+ * Result of bulk re-analysis
+ */
+@Serializable
+data class BulkReanalyzeResult(
+    val totalProcessed: Int,
+    val successful: Int,
+    val failed: Int,
+    val failures: List<BulkReanalyzeFailure>
+)
+
+@Serializable
+data class BulkReanalyzeFailure(
+    val paperId: String,
+    val title: String,
+    val error: String
+)
+
+/**
+ * Preview of papers that would be affected by bulk re-analysis
+ */
+@Serializable
+data class BulkReanalyzePreview(
+    val totalPapers: Int,
+    val papers: List<BulkReanalyzePaperPreview>
+)
+
+@Serializable
+data class BulkReanalyzePaperPreview(
+    val id: String,
+    val title: String,
+    val missingFields: List<String>
 )

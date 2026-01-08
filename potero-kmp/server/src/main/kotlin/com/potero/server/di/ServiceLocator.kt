@@ -1,10 +1,12 @@
 package com.potero.server.di
 
 import com.potero.data.repository.PaperRepositoryImpl
+import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
 import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.SettingsKeys
 import com.potero.domain.repository.SettingsRepository
 import com.potero.domain.repository.TagRepository
@@ -52,6 +54,10 @@ object ServiceLocator {
         TagRepositoryImpl(database)
     }
 
+    val referenceRepository: ReferenceRepository by lazy {
+        ReferenceRepositoryImpl(database)
+    }
+
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepositoryImpl(database)
     }
@@ -65,7 +71,13 @@ object ServiceLocator {
     }
 
     val semanticScholarResolver: SemanticScholarResolver by lazy {
-        SemanticScholarResolver(httpClient)
+        SemanticScholarResolver(
+            httpClient = httpClient,
+            apiKeyProvider = {
+                // Dynamically load API key from settings database
+                settingsRepository.get(SettingsKeys.SEMANTIC_SCHOLAR_API_KEY).getOrNull()
+            }
+        )
     }
 
     val metadataResolvers: List<MetadataResolver> by lazy {

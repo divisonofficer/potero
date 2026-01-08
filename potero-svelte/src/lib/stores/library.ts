@@ -171,9 +171,12 @@ export function clearFilters() {
 
 /**
  * Load papers from the API
+ * @param showLoading - If true, shows full-screen loading indicator (default true for initial load)
  */
-export async function loadPapers() {
-	isLoading.set(true);
+export async function loadPapers(showLoading: boolean = true) {
+	if (showLoading) {
+		isLoading.set(true);
+	}
 	error.set(null);
 
 	const result = await api.listPapers();
@@ -184,7 +187,9 @@ export async function loadPapers() {
 		error.set(result.error?.message ?? 'Failed to load papers');
 	}
 
-	isLoading.set(false);
+	if (showLoading) {
+		isLoading.set(false);
+	}
 }
 
 /**
@@ -282,8 +287,8 @@ export async function uploadPdf(
 			});
 		}
 
-		// Reload papers to get the new entry
-		await loadPapers();
+		// Reload papers to get the new entry (without full-screen loading)
+		await loadPapers(false);
 		isLoading.set(false);
 
 		// Auto-tag the paper in background (fire and forget)
@@ -292,9 +297,9 @@ export async function uploadPdf(
 			// Trigger immediate job panel refresh
 			triggerJobRefresh();
 			if (tagResult.success) {
-				// Reload tags and papers after auto-tagging completes
+				// Reload tags and papers after auto-tagging completes (silently)
 				await loadTags();
-				await loadPapers();
+				await loadPapers(false);
 			}
 		});
 		// Also trigger refresh immediately when the request starts
@@ -324,7 +329,7 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
 	successCount: number;
 	pendingAnalyses: PendingUploadAnalysis[];
 }> {
-	isLoading.set(true);
+	// Don't set global isLoading - upload happens in background
 	error.set(null);
 
 	let successCount = 0;
@@ -364,9 +369,9 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
 		}
 	}
 
-	// Reload papers after all uploads
+	// Reload papers after all uploads (without full-screen loading)
 	if (successCount > 0) {
-		await loadPapers();
+		await loadPapers(false);
 	}
 
 	// Set the first pending analysis for display (others will be handled later)

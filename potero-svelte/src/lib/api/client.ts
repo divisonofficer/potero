@@ -388,6 +388,72 @@ class ApiClient {
 	async getAuthorById(authorId: string): Promise<ApiResponse<AuthorProfileResponse>> {
 		return this.request('GET', `/authors/${authorId}`);
 	}
+
+	// Find paper by DOI (returns null if not found, doesn't create)
+	async findPaperByDoi(doi: string): Promise<ApiResponse<Paper | null>> {
+		return this.request('GET', `/papers/find/doi?doi=${encodeURIComponent(doi)}`);
+	}
+
+	// Find paper by arXiv ID (returns null if not found, doesn't create)
+	async findPaperByArxiv(arxivId: string): Promise<ApiResponse<Paper | null>> {
+		return this.request('GET', `/papers/find/arxiv?arxivId=${encodeURIComponent(arxivId)}`);
+	}
+
+	// Import paper by downloading PDF from URL
+	async importFromUrl(request: ImportFromUrlRequest): Promise<ApiResponse<UploadAnalysisResponse>> {
+		try {
+			const response = await fetch(`${this.directUploadUrl}/upload/from-url`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(request)
+			});
+			return (await response.json()) as ApiResponse<UploadAnalysisResponse>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'IMPORT_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to import from URL'
+				}
+			};
+		}
+	}
+
+	// References API - Backend-based references extraction
+	// Returns ReferencesAnalysisResult with references array and metadata
+	async getReferences(paperId: string): Promise<ApiResponse<ReferencesAnalysisResult>> {
+		return this.request('GET', `/papers/${paperId}/references`);
+	}
+
+	async getReferenceByNumber(paperId: string, number: number): Promise<ApiResponse<Reference>> {
+		return this.request('GET', `/papers/${paperId}/references/${number}`);
+	}
+
+	async analyzeReferences(paperId: string): Promise<ApiResponse<ReferencesAnalysisResult>> {
+		return this.request('POST', `/papers/${paperId}/references/analyze`);
+	}
+
+	async deleteReferences(paperId: string): Promise<ApiResponse<{ deleted: boolean }>> {
+		return this.request('DELETE', `/papers/${paperId}/references`);
+	}
+
+	async searchReferences(
+		query: string,
+		type: 'title' | 'authors' = 'title'
+	): Promise<ApiResponse<Reference[]>> {
+		return this.request('GET', `/references/search?q=${encodeURIComponent(query)}&type=${type}`);
+	}
+
+	// Bulk Re-analyze API
+	async bulkReanalyze(request: BulkReanalyzeRequest): Promise<ApiResponse<BulkReanalyzeResponse>> {
+		return this.request('POST', '/upload/bulk-reanalyze', request);
+	}
+
+	async bulkReanalyzePreview(
+		request: BulkReanalyzeRequest
+	): Promise<ApiResponse<BulkReanalyzePreview>> {
+		return this.request('POST', '/upload/bulk-reanalyze/preview', request);
+	}
 }
 
 // Types
@@ -426,6 +492,7 @@ export interface Settings {
 	llmProvider: string;
 	pdfStoragePath: string | null;
 	theme: string;
+	semanticScholarApiKey: string | null;
 }
 
 export interface UploadResponse {
@@ -495,6 +562,21 @@ export interface ConfirmMetadataRequest {
 	paperId: string;
 	title: string;
 	authors: string[];
+	abstract?: string;
+	doi?: string;
+	arxivId?: string;
+	year?: number;
+	venue?: string;
+	citationsCount?: number;
+}
+
+/**
+ * Request to import paper by downloading PDF from URL
+ */
+export interface ImportFromUrlRequest {
+	pdfUrl: string;
+	title?: string;
+	authors?: string[];
 	abstract?: string;
 	doi?: string;
 	arxivId?: string;
@@ -630,6 +712,37 @@ export interface LLMStatus {
 }
 
 /**
+ * Reference entry from a paper's References/Bibliography section
+ * Matches backend ReferenceDto
+ */
+export interface Reference {
+	id: string;
+	paperId: string;
+	number: number;
+	rawText: string;
+	authors: string | null;
+	title: string | null;
+	venue: string | null;
+	year: number | null;
+	doi: string | null;
+	pageNum: number;
+	searchQuery?: string;  // Backend returns searchQuery instead of createdAt
+	createdAt?: string;    // For frontend-created references
+}
+
+/**
+ * Result from backend references analysis
+ * Matches backend ReferencesResponse
+ */
+export interface ReferencesAnalysisResult {
+	paperId: string;
+	totalCount: number;           // Backend uses totalCount
+	referencesCount?: number;     // Alias for compatibility
+	references: Reference[];
+	referencesStartPage: number | null;
+}
+
+/**
  * Background job DTO
  */
 export interface JobDto {
@@ -645,6 +758,37 @@ export interface JobDto {
 	completedAt: string | null;
 	error: string | null;
 	paperId: string | null;
+}
+
+/**
+ * Request for bulk re-analysis
+ */
+export interface BulkReanalyzeRequest {
+	criteria?: string[]; // "missing_thumbnail", "missing_venue", "missing_doi", "missing_abstract", "missing_year", "all"
+	paperIds?: string[]; // If specified, only these papers (overrides criteria)
+}
+
+/**
+ * Response for bulk re-analysis job
+ */
+export interface BulkReanalyzeResponse {
+	jobId: string;
+	papersQueued: number;
+	message: string;
+}
+
+/**
+ * Preview of papers that would be affected by bulk re-analysis
+ */
+export interface BulkReanalyzePreview {
+	totalPapers: number;
+	papers: BulkReanalyzePaperPreview[];
+}
+
+export interface BulkReanalyzePaperPreview {
+	id: string;
+	title: string;
+	missingFields: string[];
 }
 
 export const api = new ApiClient();

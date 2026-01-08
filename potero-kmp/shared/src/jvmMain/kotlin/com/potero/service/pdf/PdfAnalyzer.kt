@@ -20,6 +20,29 @@ class PdfAnalyzer(private val pdfPath: String) {
             Regex("""arxiv\.org/abs/(\d{4}\.\d{4,5}(?:v\d+)?)""", RegexOption.IGNORE_CASE),
             Regex("""(?<!\d)(\d{4}\.\d{4,5}(?:v\d+)?)(?!\d)""")
         )
+
+        // References section header patterns
+        private val REFERENCES_HEADER_PATTERNS = listOf(
+            Regex("""^references\s*$""", RegexOption.IGNORE_CASE),
+            Regex("""^bibliography\s*$""", RegexOption.IGNORE_CASE),
+            Regex("""^works\s+cited\s*$""", RegexOption.IGNORE_CASE),
+            Regex("""^literature\s+cited\s*$""", RegexOption.IGNORE_CASE),
+            Regex("""^cited\s+literature\s*$""", RegexOption.IGNORE_CASE),
+            Regex("""^r\s*e\s*f\s*e\s*r\s*e\s*n\s*c\s*e\s*s\s*$""", RegexOption.IGNORE_CASE), // Spaced letters
+            Regex("""^\d+\.?\s*references\s*$""", RegexOption.IGNORE_CASE), // "7. References" or "7 References"
+            Regex("""^references\s*\[\d+\]""", RegexOption.IGNORE_CASE) // "References [1]"
+        )
+
+        // Reference entry number patterns
+        private val REFERENCE_NUMBER_PATTERNS = listOf(
+            Regex("""^\[(\d+)\]\s*(.+)"""),           // [1] Author...
+            Regex("""^(\d+)\.\s+(.+)"""),             // 1. Author...
+            Regex("""^\((\d+)\)\s*(.+)"""),           // (1) Author...
+            Regex("""^(\d+)\s+(.+)""")                // 1 Author... (fallback)
+        )
+
+        // Year pattern in references
+        private val YEAR_PATTERN = Regex("""(?:19|20)\d{2}""")
     }
 
     private var document: PDDocument? = null
@@ -91,7 +114,7 @@ class PdfAnalyzer(private val pdfPath: String) {
     /**
      * Perform full analysis: metadata + DOI/arXiv detection + title/author extraction
      */
-    fun analyze(): PdfAnalysisResult {
+    fun analyze(includeReferences: Boolean = false): PdfAnalysisResult {
         val metadata = extractBuiltInMetadata()
         val firstPagesText = extractFirstPagesText()
 
@@ -108,14 +131,210 @@ class PdfAnalyzer(private val pdfPath: String) {
             extractAuthorsFromText(firstPagesText)
         } else emptyList()
 
+        // Optionally analyze references section
+        val referencesResult = if (includeReferences) {
+            analyzeReferences()
+        } else null
+
         return PdfAnalysisResult(
             metadata = metadata,
             detectedDoi = doi,
             detectedArxivId = arxivId,
             extractedTitle = extractedTitle,
             extractedAuthors = extractedAuthors,
-            firstPagesText = firstPagesText
+            firstPagesText = firstPagesText,
+            referencesResult = referencesResult
         )
+    }
+
+    /**
+     * Analyze References section: detect location and parse individual references
+     */
+    fun analyzeReferences(): ReferencesAnalysisResult {
+        return withDocument { doc ->
+            val totalPages = doc.numberOfPages
+            var startPage: Int? = null
+            var sectionHeader: String? = null
+            val references = mutableListOf<ParsedReference>()
+
+            // Scan last 15 pages for References section (usually at the end)
+            val scanStart = maxOf(1, totalPages - 14)
+
+            // First pass: find References section header
+            for (pageNum in scanStart..totalPages) {
+                val stripper = PDFTextStripper().apply {
+                    this.startPage = pageNum
+                    this.endPage = pageNum
+                }
+                val pageText = stripper.getText(doc)
+                val lines = pageText.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+                // Check each line for references header
+                for (line in lines.take(30)) { // Check first 30 lines of each page
+                    for (pattern in REFERENCES_HEADER_PATTERNS) {
+                        if (pattern.matches(line)) {
+                            startPage = pageNum
+                            sectionHeader = line
+                            break
+                        }
+                    }
+                    if (startPage != null) break
+                }
+                if (startPage != null) break
+            }
+
+            // Second pass: parse references from the detected section
+            if (startPage != null) {
+                var currentRefNumber = 0
+                var currentRefText = StringBuilder()
+                var currentRefPageNum: Int = startPage
+
+                for (pageNum in startPage..totalPages) {
+                    val stripper = PDFTextStripper().apply {
+                        this.startPage = pageNum
+                        this.endPage = pageNum
+                    }
+                    val pageText = stripper.getText(doc)
+                    val lines = pageText.lines()
+
+                    var foundReferencesHeader = false
+
+                    for (line in lines) {
+                        val trimmedLine = line.trim()
+                        if (trimmedLine.isBlank()) continue
+
+                        // Skip until we find the references header on the first page
+                        if (pageNum == startPage && !foundReferencesHeader) {
+                            for (pattern in REFERENCES_HEADER_PATTERNS) {
+                                if (pattern.matches(trimmedLine)) {
+                                    foundReferencesHeader = true
+                                    break
+                                }
+                            }
+                            if (!foundReferencesHeader) continue
+                            continue // Skip the header line itself
+                        }
+
+                        // Check if this line starts a new reference entry
+                        var matchedNewRef = false
+                        for (pattern in REFERENCE_NUMBER_PATTERNS) {
+                            val match = pattern.find(trimmedLine)
+                            if (match != null) {
+                                val refNum = match.groupValues[1].toIntOrNull() ?: continue
+                                val refContent = match.groupValues.getOrNull(2) ?: ""
+
+                                // Save previous reference if exists
+                                if (currentRefNumber > 0 && currentRefText.isNotBlank()) {
+                                    references.add(parseReferenceText(currentRefNumber, currentRefText.toString().trim(), currentRefPageNum))
+                                }
+
+                                // Start new reference
+                                currentRefNumber = refNum
+                                currentRefText = StringBuilder(refContent)
+                                currentRefPageNum = pageNum
+                                matchedNewRef = true
+                                break
+                            }
+                        }
+
+                        // If not a new reference, append to current reference
+                        if (!matchedNewRef && currentRefNumber > 0) {
+                            currentRefText.append(" ").append(trimmedLine)
+                        }
+                    }
+                }
+
+                // Don't forget the last reference
+                if (currentRefNumber > 0 && currentRefText.isNotBlank()) {
+                    references.add(parseReferenceText(currentRefNumber, currentRefText.toString().trim(), currentRefPageNum))
+                }
+            }
+
+            ReferencesAnalysisResult(
+                startPage = startPage,
+                references = references,
+                sectionHeader = sectionHeader
+            )
+        }
+    }
+
+    /**
+     * Parse a single reference text to extract structured information
+     */
+    private fun parseReferenceText(number: Int, rawText: String, pageNum: Int): ParsedReference {
+        // Extract year
+        val yearMatch = YEAR_PATTERN.findAll(rawText).lastOrNull()
+        val year = yearMatch?.value?.toIntOrNull()
+
+        // Extract DOI if present
+        val doi = findDOI(rawText)
+
+        // Try to split into authors, title, venue
+        // Common patterns:
+        // 1. "Authors. Title. Venue, Year." (period-separated)
+        // 2. "Authors, Title, Venue (Year)" (comma-separated with parenthesized year)
+        val parts = rawText.split(Regex("""\.\s+"""))
+
+        val authors: String?
+        val title: String?
+        val venue: String?
+
+        if (parts.size >= 3) {
+            // Period-separated format
+            authors = parts[0].takeIf { it.length <= 200 }
+            title = parts[1].takeIf { it.length <= 300 }
+            venue = parts.drop(2).joinToString(". ").takeIf { it.length <= 200 }
+        } else if (parts.size == 2) {
+            authors = parts[0].takeIf { it.length <= 200 }
+            title = parts[1].takeIf { it.length <= 300 }
+            venue = null
+        } else {
+            // Can't parse cleanly, try to extract at least the title
+            // Title is often in quotes or is the longest meaningful segment
+            val quotedMatch = Regex(""""([^"]+)"""").find(rawText)
+            if (quotedMatch != null) {
+                title = quotedMatch.groupValues[1]
+                authors = rawText.substringBefore(quotedMatch.value).trim().trimEnd(',', '.', ':')
+                venue = rawText.substringAfter(quotedMatch.value).trim().trimStart(',', '.', ':').takeIf { it.isNotBlank() }
+            } else {
+                // Fallback: use full text
+                authors = null
+                title = rawText.take(200)
+                venue = null
+            }
+        }
+
+        return ParsedReference(
+            number = number,
+            rawText = rawText,
+            authors = authors?.trim()?.trimEnd(',', '.'),
+            title = title?.trim()?.trimEnd(',', '.'),
+            venue = venue?.trim()?.trimEnd(',', '.'),
+            year = year,
+            doi = doi,
+            pageNum = pageNum
+        )
+    }
+
+    /**
+     * Generate thumbnail from first page
+     */
+    fun generateThumbnail(outputPath: String, width: Int = 200): Boolean {
+        return try {
+            withDocument { doc ->
+                val renderer = org.apache.pdfbox.rendering.PDFRenderer(doc)
+                val scale = width.toFloat() / doc.getPage(0).mediaBox.width
+                val image = renderer.renderImage(0, scale)
+
+                val outputFile = File(outputPath)
+                outputFile.parentFile?.mkdirs()
+                javax.imageio.ImageIO.write(image, "png", outputFile)
+                true
+            }
+        } catch (e: Exception) {
+            println("[PdfAnalyzer] Failed to generate thumbnail: ${e.message}")
+            false
+        }
     }
 
     /**
@@ -269,6 +488,29 @@ data class PdfMetadata(
 )
 
 /**
+ * Parsed reference entry from References section
+ */
+data class ParsedReference(
+    val number: Int,
+    val rawText: String,
+    val authors: String? = null,
+    val title: String? = null,
+    val venue: String? = null,
+    val year: Int? = null,
+    val doi: String? = null,
+    val pageNum: Int = 0
+)
+
+/**
+ * Result of References section analysis
+ */
+data class ReferencesAnalysisResult(
+    val startPage: Int?,
+    val references: List<ParsedReference>,
+    val sectionHeader: String? = null
+)
+
+/**
  * Result of PDF analysis
  */
 data class PdfAnalysisResult(
@@ -277,7 +519,8 @@ data class PdfAnalysisResult(
     val detectedArxivId: String? = null,
     val extractedTitle: String? = null,
     val extractedAuthors: List<String> = emptyList(),
-    val firstPagesText: String = ""
+    val firstPagesText: String = "",
+    val referencesResult: ReferencesAnalysisResult? = null
 ) {
     /**
      * Best title: metadata > extracted > null

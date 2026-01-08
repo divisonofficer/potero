@@ -407,5 +407,63 @@ fun Route.paperRoutes() {
                 }
             )
         }
+
+        // GET /api/papers/find/doi - Find paper by DOI (returns null if not found, doesn't create)
+        get("/find/doi") {
+            val doi = call.request.queryParameters["doi"]
+            if (doi.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<PaperDto>(success = false, error = "Missing doi parameter")
+                )
+                return@get
+            }
+
+            val result = repository.getByDoi(doi)
+            result.fold(
+                onSuccess = { paper ->
+                    if (paper != null) {
+                        call.respond(ApiResponse(data = paper.toDto()))
+                    } else {
+                        call.respond(ApiResponse<PaperDto>(data = null))
+                    }
+                },
+                onFailure = { error ->
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<PaperDto>(success = false, error = error.message ?: "Search failed")
+                    )
+                }
+            )
+        }
+
+        // GET /api/papers/find/arxiv - Find paper by arXiv ID (returns null if not found, doesn't create)
+        get("/find/arxiv") {
+            val arxivId = call.request.queryParameters["arxivId"]
+            if (arxivId.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<PaperDto>(success = false, error = "Missing arxivId parameter")
+                )
+                return@get
+            }
+
+            val result = repository.getByArxivId(arxivId)
+            result.fold(
+                onSuccess = { paper ->
+                    if (paper != null) {
+                        call.respond(ApiResponse(data = paper.toDto()))
+                    } else {
+                        call.respond(ApiResponse<PaperDto>(data = null))
+                    }
+                },
+                onFailure = { error ->
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<PaperDto>(success = false, error = error.message ?: "Search failed")
+                    )
+                }
+            )
+        }
     }
 }

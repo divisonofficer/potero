@@ -22,6 +22,7 @@ fun Application.configureRouting() {
             uploadRoutes()
             jobRoutes()
             authorRoutes()
+            referenceRoutes()
         }
 
         // LLM routes (separate from /api prefix for clarity)

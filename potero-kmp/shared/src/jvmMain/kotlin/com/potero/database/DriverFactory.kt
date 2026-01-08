@@ -61,6 +61,23 @@ object DriverFactory {
             println("[DB Migration] Adding abstract_korean column to Paper table")
             driver.execute(null, "ALTER TABLE Paper ADD COLUMN abstract_korean TEXT", 0)
         }
+
+        // Migration 2: Add google_scholar_id and semantic_scholar_id columns to Author table
+        try {
+            driver.execute(null, "SELECT google_scholar_id FROM Author LIMIT 1", 0)
+        } catch (e: Exception) {
+            // Column doesn't exist, add it
+            println("[DB Migration] Adding google_scholar_id column to Author table")
+            driver.execute(null, "ALTER TABLE Author ADD COLUMN google_scholar_id TEXT", 0)
+        }
+
+        try {
+            driver.execute(null, "SELECT semantic_scholar_id FROM Author LIMIT 1", 0)
+        } catch (e: Exception) {
+            // Column doesn't exist, add it
+            println("[DB Migration] Adding semantic_scholar_id column to Author table")
+            driver.execute(null, "ALTER TABLE Author ADD COLUMN semantic_scholar_id TEXT", 0)
+        }
     }
 
     /**

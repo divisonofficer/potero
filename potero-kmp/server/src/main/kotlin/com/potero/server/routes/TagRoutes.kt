@@ -2,16 +2,17 @@ package com.potero.server.routes
 
 import com.potero.domain.model.Tag
 import com.potero.server.di.ServiceLocator
+import com.potero.service.job.GlobalJobQueue
+import com.potero.service.job.JobType
 import com.potero.service.pdf.PdfAnalyzer
 import com.potero.service.tag.TagSuggestion
 import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -370,7 +371,7 @@ fun Route.tagRoutes() {
             )
         }
 
-        // POST /api/papers/{paperId}/tags/auto - Auto-tag a paper using LLM (async)
+        // POST /api/papers/{paperId}/tags/auto - Auto-tag a paper using LLM (async via GlobalJobQueue)
         post("/auto") {
             val paperId = call.parameters["paperId"]
                 ?: throw IllegalArgumentException("Missing paper ID")
@@ -388,102 +389,100 @@ fun Route.tagRoutes() {
                 return@post
             }
 
-            // Create job ID and start background processing
-            val jobId = UUID.randomUUID().toString()
-            val job = AutoTagJob(paperId = paperId)
-            autoTagJobs[jobId] = job
+            // Submit to GlobalJobQueue for unified job management
+            val jobQueue = GlobalJobQueue.instance
+            val job = jobQueue.submitJob(
+                type = JobType.AUTO_TAGGING,
+                title = "Auto-tagging: ${paper.title.take(50)}...",
+                description = "Generating tags using LLM analysis",
+                paperId = paperId
+            ) { ctx ->
+                ctx.updateProgress(10, "Extracting text from PDF...")
 
-            println("[AutoTag] Starting async job $jobId for paper: ${paper.title}")
+                val tagService = ServiceLocator.tagService
 
-            // Launch background task
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    val tagService = ServiceLocator.tagService
-
-                    // Extract text from PDF if available
-                    var fullText: String? = null
-                    val pdfPath = paper.pdfPath
-                    if (!pdfPath.isNullOrBlank()) {
-                        try {
-                            val pdfFile = File(pdfPath)
-                            if (pdfFile.exists()) {
-                                val analyzer = PdfAnalyzer(pdfFile.absolutePath)
-                                fullText = analyzer.extractFirstPagesText(maxPages = 3)
-                            }
-                        } catch (e: Exception) {
-                            println("[AutoTag] PDF extraction failed: ${e.message}")
+                // Extract text from PDF if available
+                var fullText: String? = null
+                val pdfPath = paper.pdfPath
+                if (!pdfPath.isNullOrBlank()) {
+                    try {
+                        val pdfFile = File(pdfPath)
+                        if (pdfFile.exists()) {
+                            val analyzer = PdfAnalyzer(pdfFile.absolutePath)
+                            fullText = analyzer.extractFirstPagesText(maxPages = 3)
                         }
+                    } catch (e: Exception) {
+                        println("[AutoTag] PDF extraction failed: ${e.message}")
                     }
-
-                    // Get tag suggestions
-                    val suggestionsResult = tagService.suggestTags(
-                        title = paper.title,
-                        abstract = paper.abstract
-                    )
-
-                    if (suggestionsResult.isFailure) {
-                        job.status = "failed"
-                        job.error = suggestionsResult.exceptionOrNull()?.message ?: "Failed to suggest tags"
-                        println("[AutoTag] Job $jobId failed: ${job.error}")
-                        return@launch
-                    }
-
-                    val suggestions: List<TagSuggestion> = suggestionsResult.getOrThrow()
-                    val suggestionDtos: List<TagSuggestionDto> = suggestions.map { suggestion ->
-                        TagSuggestionDto(
-                            name = suggestion.name,
-                            existingTagId = suggestion.existingTag?.id,
-                            existingTagName = suggestion.existingTag?.name,
-                            isNew = suggestion.isNew
-                        )
-                    }
-
-                    // Auto-tag the paper
-                    val autoTagResult = tagService.autoTagPaper(
-                        paperId = paperId,
-                        title = paper.title,
-                        abstract = paper.abstract,
-                        fullText = fullText
-                    )
-
-                    if (autoTagResult.isFailure) {
-                        job.status = "failed"
-                        job.error = autoTagResult.exceptionOrNull()?.message ?: "Failed to auto-tag paper"
-                        println("[AutoTag] Job $jobId failed: ${job.error}")
-                        return@launch
-                    }
-
-                    val assignedTags: List<Tag> = autoTagResult.getOrThrow()
-
-                    // Link tags to paper
-                    for (tag in assignedTags) {
-                        tagRepository.linkTagToPaper(paperId, tag.id)
-                    }
-
-                    val assignedTagDtos: List<TagDto> = assignedTags.map { tag -> tag.toDto() }
-
-                    // Update job with result
-                    job.status = "completed"
-                    job.result = AutoTagResponse(
-                        paperId = paperId,
-                        suggestedTags = suggestionDtos,
-                        assignedTags = assignedTagDtos
-                    )
-                    println("[AutoTag] Job $jobId completed with ${assignedTags.size} tags")
-
-                } catch (e: Exception) {
-                    job.status = "failed"
-                    job.error = e.message ?: "Unknown error"
-                    println("[AutoTag] Job $jobId failed with exception: ${e.message}")
                 }
+
+                ctx.updateProgress(30, "Getting tag suggestions from LLM...")
+
+                // Get tag suggestions
+                val suggestionsResult = tagService.suggestTags(
+                    title = paper.title,
+                    abstract = paper.abstract
+                )
+
+                if (suggestionsResult.isFailure) {
+                    throw Exception(suggestionsResult.exceptionOrNull()?.message ?: "Failed to suggest tags")
+                }
+
+                val suggestions: List<TagSuggestion> = suggestionsResult.getOrThrow()
+                val suggestionDtos: List<TagSuggestionDto> = suggestions.map { suggestion ->
+                    TagSuggestionDto(
+                        name = suggestion.name,
+                        existingTagId = suggestion.existingTag?.id,
+                        existingTagName = suggestion.existingTag?.name,
+                        isNew = suggestion.isNew
+                    )
+                }
+
+                ctx.updateProgress(60, "Auto-tagging paper...")
+
+                // Auto-tag the paper
+                val autoTagResult = tagService.autoTagPaper(
+                    paperId = paperId,
+                    title = paper.title,
+                    abstract = paper.abstract,
+                    fullText = fullText
+                )
+
+                if (autoTagResult.isFailure) {
+                    throw Exception(autoTagResult.exceptionOrNull()?.message ?: "Failed to auto-tag paper")
+                }
+
+                val assignedTags: List<Tag> = autoTagResult.getOrThrow()
+
+                ctx.updateProgress(80, "Linking tags to paper...")
+
+                // Link tags to paper
+                for (tag in assignedTags) {
+                    tagRepository.linkTagToPaper(paperId, tag.id)
+                }
+
+                val assignedTagDtos: List<TagDto> = assignedTags.map { tag -> tag.toDto() }
+
+                ctx.updateProgress(100, "Auto-tagging complete")
+
+                // Return JSON result for job storage
+                val result = AutoTagResponse(
+                    paperId = paperId,
+                    suggestedTags = suggestionDtos,
+                    assignedTags = assignedTagDtos
+                )
+                Json.encodeToString(result)
             }
+
+            // Store job reference for backward compatibility with status endpoint
+            autoTagJobs[job.id] = AutoTagJob(paperId = paperId, status = "processing")
 
             // Return immediately with job ID
             call.respond(
                 HttpStatusCode.Accepted,
                 ApiResponse(
                     data = AutoTagJobResponse(
-                        jobId = jobId,
+                        jobId = job.id,
                         paperId = paperId,
                         status = "processing"
                     )

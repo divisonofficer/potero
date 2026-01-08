@@ -1,0 +1,44 @@
+-- References extracted from paper's References/Bibliography section
+CREATE TABLE Reference (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    raw_text TEXT NOT NULL,
+    authors TEXT,
+    title TEXT,
+    venue TEXT,
+    year INTEGER,
+    doi TEXT,
+    page_num INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX reference_paper_id_idx ON Reference(paper_id);
+CREATE INDEX reference_number_idx ON Reference(paper_id, number);
+CREATE INDEX reference_doi_idx ON Reference(doi);
+
+-- Queries
+selectByPaperId:
+SELECT * FROM Reference WHERE paper_id = ? ORDER BY number ASC;
+
+selectByPaperIdAndNumber:
+SELECT * FROM Reference WHERE paper_id = ? AND number = ?;
+
+searchByTitle:
+SELECT * FROM Reference WHERE title LIKE '%' || ? || '%';
+
+searchByAuthors:
+SELECT * FROM Reference WHERE authors LIKE '%' || ? || '%';
+
+insert:
+INSERT INTO Reference(id, paper_id, number, raw_text, authors, title, venue, year, doi, page_num, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteByPaperId:
+DELETE FROM Reference WHERE paper_id = ?;
+
+deleteById:
+DELETE FROM Reference WHERE id = ?;
+
+countByPaperId:
+SELECT COUNT(*) FROM Reference WHERE paper_id = ?;

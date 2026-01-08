@@ -41,8 +41,22 @@ data class Author(
     val id: String,
     val name: String,
     val affiliation: String? = null,
-    val order: Int = 0
-)
+    val order: Int = 0,
+    val googleScholarId: String? = null,
+    val semanticScholarId: String? = null
+) {
+    /**
+     * Get the Google Scholar profile URL if available
+     */
+    val googleScholarUrl: String?
+        get() = googleScholarId?.let { "https://scholar.google.com/citations?user=$it" }
+
+    /**
+     * Get the Semantic Scholar profile URL if available
+     */
+    val semanticScholarUrl: String?
+        get() = semanticScholarId?.let { "https://www.semanticscholar.org/author/$it" }
+}
 
 @Serializable
 data class Tag(
@@ -102,3 +116,28 @@ data class ChatSession(
     val messageCount: Int = 0,
     val lastMessage: String? = null
 )
+
+/**
+ * A reference entry from a paper's References/Bibliography section.
+ * Used for citation lookup and linking related papers.
+ */
+@Serializable
+data class Reference(
+    val id: String,
+    val paperId: String,
+    val number: Int,
+    val rawText: String,
+    val authors: String? = null,
+    val title: String? = null,
+    val venue: String? = null,
+    val year: Int? = null,
+    val doi: String? = null,
+    val pageNum: Int = 0,
+    val createdAt: Instant
+) {
+    /**
+     * Get a search query for looking up this reference
+     */
+    val searchQuery: String
+        get() = title ?: authors ?: rawText.take(100)
+}

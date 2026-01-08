@@ -12,9 +12,14 @@ import kotlinx.serialization.Serializable
  * Provides free, stable academic paper search and metadata retrieval
  *
  * API Documentation: https://api.semanticscholar.org/api-docs/graph
+ *
+ * Note: Without API key, rate limits are stricter (100 requests per 5 minutes).
+ * With API key, rate limits are more generous (1 request per second sustained).
+ * Get API key from: https://www.semanticscholar.org/product/api
  */
 class SemanticScholarResolver(
-    private val httpClient: HttpClient
+    private val httpClient: HttpClient,
+    private val apiKeyProvider: (suspend () -> String?)? = null
 ) : MetadataResolver {
 
     companion object {
@@ -28,6 +33,18 @@ class SemanticScholarResolver(
         private const val PAPER_FIELDS = "paperId,title,authors,year,venue,citationCount,abstract,externalIds,openAccessPdf,publicationDate"
         private const val AUTHOR_FIELDS = "authorId,name,affiliations,paperCount,citationCount,hIndex,homepage,externalIds"
         private const val AUTHOR_PAPERS_FIELDS = "paperId,title,year,venue,citationCount"
+
+        // API key header name
+        private const val API_KEY_HEADER = "x-api-key"
+    }
+
+    /**
+     * Helper to add API key header if available
+     */
+    private suspend fun io.ktor.client.request.HttpRequestBuilder.addApiKeyIfAvailable() {
+        apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { apiKey ->
+            header(API_KEY_HEADER, apiKey)
+        }
     }
 
     override fun canResolve(identifier: String): Boolean = identifier.isNotBlank()
@@ -57,6 +74,7 @@ class SemanticScholarResolver(
         repeat(3) { attempt ->
             try {
                 val response = httpClient.get(SEARCH_URL) {
+                    addApiKeyIfAvailable()
                     parameter("query", query)
                     parameter("limit", limit)
                     parameter("fields", PAPER_FIELDS)
@@ -95,6 +113,7 @@ class SemanticScholarResolver(
      */
     suspend fun getByPaperId(paperId: String): SemanticScholarPaper? {
         val response = httpClient.get("$PAPER_URL/$paperId") {
+            addApiKeyIfAvailable()
             parameter("fields", PAPER_FIELDS)
         }
 
@@ -110,6 +129,7 @@ class SemanticScholarResolver(
      */
     suspend fun getByDoi(doi: String): SemanticScholarPaper? {
         val response = httpClient.get("$PAPER_URL/DOI:$doi") {
+            addApiKeyIfAvailable()
             parameter("fields", PAPER_FIELDS)
         }
 
@@ -125,6 +145,7 @@ class SemanticScholarResolver(
      */
     suspend fun getByArxivId(arxivId: String): SemanticScholarPaper? {
         val response = httpClient.get("$PAPER_URL/ARXIV:$arxivId") {
+            addApiKeyIfAvailable()
             parameter("fields", PAPER_FIELDS)
         }
 
@@ -148,6 +169,7 @@ class SemanticScholarResolver(
         repeat(3) { attempt ->
             try {
                 val response = httpClient.get(AUTHOR_SEARCH_URL) {
+                    addApiKeyIfAvailable()
                     parameter("query", query)
                     parameter("limit", limit)
                     parameter("fields", AUTHOR_FIELDS)
@@ -197,6 +219,7 @@ class SemanticScholarResolver(
         repeat(3) { attempt ->
             try {
                 val response = httpClient.get("$AUTHOR_URL/$authorId") {
+                    addApiKeyIfAvailable()
                     parameter("fields", fields)
                 }
 
@@ -356,6 +379,18 @@ data class SemanticScholarOpenAccessPdf(
 )
 
 /**
+ * Author info for search results
+ */
+@Serializable
+data class SearchResultAuthor(
+    val name: String,
+    val semanticScholarId: String? = null
+) {
+    val semanticScholarUrl: String?
+        get() = semanticScholarId?.let { "https://www.semanticscholar.org/author/$it" }
+}
+
+/**
  * Common search result type for frontend
  */
 @Serializable
@@ -363,6 +398,7 @@ data class SearchResult(
     val id: String,
     val title: String,
     val authors: List<String>,
+    val authorDetails: List<SearchResultAuthor> = emptyList(),
     val year: Int?,
     val venue: String?,
     val citationCount: Int?,

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -16,7 +16,6 @@
 		clearPendingUploadAnalysis,
 		loadPapers,
 		reanalyzePaper,
-		autoTagPaper,
 		deletePaper,
 		onlineSearchResults,
 		isSearchingOnline,
@@ -54,6 +53,26 @@
 	function closeAuthorModal() {
 		selectedAuthorName = null;
 		selectedAuthorPapers = [];
+	}
+
+	// Open a paper by ID (used by CitationModal when paper exists in library)
+	async function openPaperById(paperId: string) {
+		// First check if paper is in current papers list
+		let paper = $papers.find(p => p.id === paperId);
+
+		if (!paper) {
+			// Paper not in local state, try to fetch from API
+			const response = await api.getPaper(paperId);
+			if (response.success && response.data) {
+				paper = response.data as Paper;
+			}
+		}
+
+		if (paper) {
+			openPaper(paper);
+		} else {
+			toast.error('Paper not found');
+		}
 	}
 
 	// Dynamic import for PDF viewer (client-side only due to pdfjs)
@@ -97,10 +116,47 @@
 		llmApiKey: null,
 		llmProvider: 'gpt',
 		pdfStoragePath: null,
-		theme: 'system'
+		theme: 'system',
+		semanticScholarApiKey: null
 	});
 	let newApiKey = $state('');
+	let newSemanticScholarApiKey = $state('');
 	let isSavingSettings = $state(false);
+
+	// Bulk reanalyze state
+	let isBulkReanalyzing = $state(false);
+
+	async function handleBulkReanalyzeAll() {
+		isBulkReanalyzing = true;
+		try {
+			const response = await api.bulkReanalyze({ criteria: ['all'] });
+			if (response.success && response.data) {
+				toast.info(`Started analyzing ${response.data.totalPapers} papers. Check progress in the task panel.`);
+			} else {
+				toast.error('Failed to start bulk analysis');
+			}
+		} catch (e) {
+			toast.error('Failed to start bulk analysis');
+		}
+		isBulkReanalyzing = false;
+	}
+
+	async function handleBulkReanalyzeMissing() {
+		isBulkReanalyzing = true;
+		try {
+			const response = await api.bulkReanalyze({
+				criteria: ['missing_thumbnail', 'missing_venue', 'missing_doi', 'missing_abstract']
+			});
+			if (response.success && response.data) {
+				toast.info(`Started analyzing ${response.data.totalPapers} papers with missing data. Check progress in the task panel.`);
+			} else {
+				toast.error('Failed to start bulk analysis');
+			}
+		} catch (e) {
+			toast.error('Failed to start bulk analysis');
+		}
+		isBulkReanalyzing = false;
+	}
 
 	onMount(() => {
 		initializeLibrary();
@@ -133,10 +189,16 @@
 			updateData.llmApiKey = newApiKey;
 		}
 
+		// Only send Semantic Scholar API key if user entered a new one
+		if (newSemanticScholarApiKey.trim()) {
+			updateData.semanticScholarApiKey = newSemanticScholarApiKey;
+		}
+
 		const result = await api.updateSettings(updateData);
 		if (result.success && result.data) {
 			settings = result.data;
 			newApiKey = '';
+			newSemanticScholarApiKey = '';
 		}
 		isSavingSettings = false;
 	}
@@ -787,46 +849,25 @@
 							{/if}
 						</div>
 						<div class="flex items-center gap-1 shrink-0">
-							<!-- Re-analyze button -->
+							<!-- Unified Analyze button (metadata + references + auto-tag) -->
 							<button
 								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
 								onclick={async () => {
 									if (!tab.paper?.id) return;
 									const jobId = await reanalyzePaper(tab.paper.id);
 									if (jobId) {
-										toast.info('Re-analysis started. Check progress in the task panel.');
+										toast.info('Analysis started (metadata, references, tags). Check progress in the task panel.');
 									} else {
-										toast.error('Failed to start re-analysis');
+										toast.error('Failed to start analysis');
 									}
 								}}
-								title="Re-analyze PDF to update metadata"
+								title="Analyze PDF: update metadata, extract references, auto-generate tags"
 							>
 								<svg class="h-4 w-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 									<path d="M1 4v6h6M23 20v-6h-6" />
 									<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
 								</svg>
-								Re-analyze
-							</button>
-							<!-- Auto-tag button -->
-							<button
-								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-								onclick={async () => {
-									if (!tab.paper?.id) return;
-									toast.info('Generating tags with AI...');
-									const result = await autoTagPaper(tab.paper.id);
-									if (result && result.assignedTags.length > 0) {
-										toast.success(`Added ${result.assignedTags.length} tags: ${result.assignedTags.map(t => t.name).join(', ')}`);
-									} else {
-										toast.warning('Could not generate tags');
-									}
-								}}
-								title="Auto-generate tags using AI"
-							>
-								<svg class="h-4 w-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
-									<line x1="7" y1="7" x2="7.01" y2="7" />
-								</svg>
-								Auto-tag
+								Analyze
 							</button>
 						</div>
 					</div>
@@ -835,8 +876,10 @@
 						<svelte:component
 							this={PdfViewer}
 							pdfUrl={tab.paper.pdfUrl}
+							paperId={tab.paper.id}
 							tabId={tab.id}
 							initialState={tab.viewerState}
+							onOpenPaper={openPaperById}
 						/>
 					{:else if tab.paper?.pdfUrl && !PdfViewer}
 						<div class="flex flex-1 items-center justify-center bg-muted/20">
@@ -936,6 +979,44 @@
 				</div>
 			</section>
 
+			<!-- Semantic Scholar API -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">Semantic Scholar API</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<div>
+						<label for="semantic-scholar-api-key" class="mb-2 block text-sm font-medium">API Key (Optional)</label>
+						<input
+							id="semantic-scholar-api-key"
+							type="password"
+							placeholder={settings.semanticScholarApiKey ? 'API key is set (enter new to change)' : 'Enter your Semantic Scholar API key'}
+							bind:value={newSemanticScholarApiKey}
+							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+						/>
+						{#if settings.semanticScholarApiKey}
+							<p class="mt-1 text-xs text-muted-foreground">
+								Current key: {settings.semanticScholarApiKey}
+							</p>
+						{:else}
+							<p class="mt-1 text-xs text-muted-foreground">
+								Without an API key, rate limits are stricter (100 req/5 min). Get a free key from
+								<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener" class="text-primary hover:underline">
+									Semantic Scholar API
+								</a>
+								for higher limits.
+							</p>
+						{/if}
+					</div>
+
+					<button
+						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+						disabled={isSavingSettings}
+						onclick={saveSettings}
+					>
+						{isSavingSettings ? 'Saving...' : 'Save Settings'}
+					</button>
+				</div>
+			</section>
+
 			<!-- Storage -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">Storage</h2>
@@ -991,6 +1072,44 @@
 					>
 						View LLM Logs
 					</button>
+				</div>
+			</section>
+
+			<!-- Bulk Reanalyze -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">Library Maintenance</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<p class="text-sm text-muted-foreground">
+						Re-analyze all papers to update metadata, generate thumbnails, extract references, and auto-generate tags.
+					</p>
+					<div class="flex flex-wrap gap-2">
+						<button
+							class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+							disabled={isBulkReanalyzing}
+							onclick={handleBulkReanalyzeAll}
+						>
+							{#if isBulkReanalyzing}
+								<span class="flex items-center gap-2">
+									<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+									</svg>
+									Analyzing...
+								</span>
+							{:else}
+								Analyze All Papers
+							{/if}
+						</button>
+						<button
+							class="rounded-md border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+							disabled={isBulkReanalyzing}
+							onclick={handleBulkReanalyzeMissing}
+						>
+							Analyze Missing Only
+						</button>
+					</div>
+					<p class="text-xs text-muted-foreground">
+						This will run in the background. Check progress in the task panel.
+					</p>
 				</div>
 			</section>
 

@@ -2,6 +2,8 @@ CREATE TABLE Author (
     id TEXT NOT NULL PRIMARY KEY,
     name TEXT NOT NULL,
     affiliation TEXT,
+    google_scholar_id TEXT,
+    semantic_scholar_id TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -34,11 +36,17 @@ INNER JOIN PaperAuthor pa ON p.id = pa.paper_id
 WHERE pa.author_id = ?;
 
 insert:
-INSERT INTO Author(id, name, affiliation, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO Author(id, name, affiliation, google_scholar_id, semantic_scholar_id, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
 
 update:
-UPDATE Author SET name = ?, affiliation = ?, updated_at = ? WHERE id = ?;
+UPDATE Author SET name = ?, affiliation = ?, google_scholar_id = ?, semantic_scholar_id = ?, updated_at = ? WHERE id = ?;
+
+selectByGoogleScholarId:
+SELECT * FROM Author WHERE google_scholar_id = ?;
+
+selectBySemanticScholarId:
+SELECT * FROM Author WHERE semantic_scholar_id = ?;
 
 linkPaperAuthor:
 INSERT OR REPLACE INTO PaperAuthor(paper_id, author_id, author_order)

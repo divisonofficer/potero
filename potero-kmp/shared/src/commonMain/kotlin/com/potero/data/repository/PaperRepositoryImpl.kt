@@ -277,6 +277,8 @@ class PaperRepositoryImpl(
                 id = author.id,
                 name = author.name,
                 affiliation = author.affiliation,
+                google_scholar_id = author.googleScholarId,
+                semantic_scholar_id = author.semanticScholarId,
                 created_at = now,
                 updated_at = now
             )
@@ -284,6 +286,8 @@ class PaperRepositoryImpl(
             authorQueries.update(
                 name = author.name,
                 affiliation = author.affiliation,
+                google_scholar_id = author.googleScholarId,
+                semantic_scholar_id = author.semanticScholarId,
                 updated_at = now,
                 id = author.id
             )
