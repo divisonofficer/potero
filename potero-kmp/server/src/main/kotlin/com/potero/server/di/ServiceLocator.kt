@@ -1,10 +1,12 @@
 package com.potero.server.di
 
+import com.potero.data.repository.CitationRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
+import com.potero.domain.repository.CitationRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.SettingsKeys
@@ -56,6 +58,10 @@ object ServiceLocator {
 
     val referenceRepository: ReferenceRepository by lazy {
         ReferenceRepositoryImpl(database)
+    }
+
+    val citationRepository: CitationRepository by lazy {
+        CitationRepositoryImpl(database)
     }
 
     val settingsRepository: SettingsRepository by lazy {

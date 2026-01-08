@@ -23,6 +23,7 @@ fun Application.configureRouting() {
             jobRoutes()
             authorRoutes()
             referenceRoutes()
+            citationRoutes()
         }
 
         // LLM routes (separate from /api prefix for clarity)

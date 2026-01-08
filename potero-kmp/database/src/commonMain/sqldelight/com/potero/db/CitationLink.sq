@@ -1,0 +1,53 @@
+-- Links between CitationSpan and Reference entries
+-- Represents the edge: "citation [1] refers to reference entry #1"
+CREATE TABLE CitationLink (
+    id TEXT NOT NULL PRIMARY KEY,
+    citation_span_id TEXT NOT NULL REFERENCES CitationSpan(id) ON DELETE CASCADE,
+    reference_id TEXT NOT NULL REFERENCES Reference(id) ON DELETE CASCADE,
+    -- Linking method and confidence
+    link_method TEXT NOT NULL DEFAULT 'numeric',  -- 'annotation_goto', 'numeric', 'author_year_fuzzy'
+    confidence REAL NOT NULL DEFAULT 0.5,
+    created_at INTEGER NOT NULL,
+    UNIQUE(citation_span_id, reference_id)
+);
+
+CREATE INDEX citation_link_span_idx ON CitationLink(citation_span_id);
+CREATE INDEX citation_link_ref_idx ON CitationLink(reference_id);
+
+-- Queries
+selectBySpanId:
+SELECT * FROM CitationLink WHERE citation_span_id = ? ORDER BY confidence DESC;
+
+selectByReferenceId:
+SELECT * FROM CitationLink WHERE reference_id = ?;
+
+selectReferencesForSpan:
+SELECT r.* FROM Reference r
+INNER JOIN CitationLink cl ON cl.reference_id = r.id
+WHERE cl.citation_span_id = ?
+ORDER BY cl.confidence DESC;
+
+selectSpansForReference:
+SELECT cs.* FROM CitationSpan cs
+INNER JOIN CitationLink cl ON cl.citation_span_id = cs.id
+WHERE cl.reference_id = ?
+ORDER BY cs.page_num ASC, cs.bbox_y1 DESC;
+
+insert:
+INSERT INTO CitationLink(id, citation_span_id, reference_id, link_method, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteBySpanId:
+DELETE FROM CitationLink WHERE citation_span_id = ?;
+
+deleteByReferenceId:
+DELETE FROM CitationLink WHERE reference_id = ?;
+
+-- Get all citations with their linked reference count
+selectSpansWithLinkCount:
+SELECT cs.*, COUNT(cl.id) AS link_count
+FROM CitationSpan cs
+LEFT JOIN CitationLink cl ON cl.citation_span_id = cs.id
+WHERE cs.paper_id = ?
+GROUP BY cs.id
+ORDER BY cs.page_num ASC, cs.bbox_y1 DESC;

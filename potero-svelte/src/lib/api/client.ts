@@ -444,6 +444,39 @@ class ApiClient {
 		return this.request('GET', `/references/search?q=${encodeURIComponent(query)}&type=${type}`);
 	}
 
+	// Citations API - In-text citation extraction and linking
+	async getCitations(paperId: string): Promise<ApiResponse<CitationSpan[]>> {
+		return this.request('GET', `/papers/${paperId}/citations`);
+	}
+
+	async getCitationsByPage(paperId: string, pageNum: number): Promise<ApiResponse<CitationSpan[]>> {
+		return this.request('GET', `/papers/${paperId}/citations/page/${pageNum}`);
+	}
+
+	async getCitation(paperId: string, spanId: string): Promise<ApiResponse<CitationSpan>> {
+		return this.request('GET', `/papers/${paperId}/citations/${spanId}`);
+	}
+
+	async getCitationReferences(paperId: string, spanId: string): Promise<ApiResponse<Reference[]>> {
+		return this.request('GET', `/papers/${paperId}/citations/${spanId}/references`);
+	}
+
+	async extractCitations(paperId: string): Promise<ApiResponse<CitationExtractionResponse>> {
+		return this.request('POST', `/papers/${paperId}/citations/extract`);
+	}
+
+	async deleteCitations(paperId: string): Promise<ApiResponse<{ deleted: boolean }>> {
+		return this.request('DELETE', `/papers/${paperId}/citations`);
+	}
+
+	async getCitationStats(paperId: string): Promise<ApiResponse<CitationStats>> {
+		return this.request('GET', `/papers/${paperId}/citations/stats`);
+	}
+
+	async getCitationsForReference(referenceId: string): Promise<ApiResponse<CitationSpan[]>> {
+		return this.request('GET', `/references/${referenceId}/citations`);
+	}
+
 	// Bulk Re-analyze API
 	async bulkReanalyze(request: BulkReanalyzeRequest): Promise<ApiResponse<BulkReanalyzeResponse>> {
 		return this.request('POST', '/upload/bulk-reanalyze', request);
@@ -789,6 +822,66 @@ export interface BulkReanalyzePaperPreview {
 	id: string;
 	title: string;
 	missingFields: string[];
+}
+
+/**
+ * Bounding box in PDF coordinates (origin at bottom-left)
+ */
+export interface BoundingBox {
+	x1: number;
+	y1: number;
+	x2: number;
+	y2: number;
+}
+
+/**
+ * In-text citation span with bounding box
+ * Represents clickable citation references like [1], [1,2,3], (Smith et al., 2024)
+ */
+export interface CitationSpan {
+	id: string;
+	paperId: string;
+	pageNum: number;
+	bbox: BoundingBox;
+	rawText: string;
+	style: 'numeric' | 'author_year' | 'unknown';
+	provenance: 'annotation' | 'pattern';
+	confidence: number;
+	destPage: number | null;
+	destY: number | null;
+	linkedRefIds: string[];
+}
+
+/**
+ * Link between a citation span and a reference
+ */
+export interface CitationLink {
+	id: string;
+	citationSpanId: string;
+	referenceId: string;
+	linkMethod: string;
+	confidence: number;
+}
+
+/**
+ * Statistics for citation extraction
+ */
+export interface CitationStats {
+	totalSpans: number;
+	annotationSpans: number;
+	patternSpans: number;
+	linkedCount: number;
+	avgConfidence: number;
+}
+
+/**
+ * Response from citation extraction
+ */
+export interface CitationExtractionResponse {
+	paperId: string;
+	spans: CitationSpan[];
+	links: CitationLink[];
+	stats: CitationStats;
 }
 
 export const api = new ApiClient();

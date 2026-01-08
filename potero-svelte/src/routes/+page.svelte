@@ -8,6 +8,7 @@
 		error,
 		searchQuery,
 		viewStyle,
+		sortBy,
 		initializeLibrary,
 		importByDoi,
 		importByArxiv,
@@ -33,6 +34,28 @@
 	import AuthorModal from '$lib/components/AuthorModal.svelte';
 	import AuthorProfileView from '$lib/components/AuthorProfileView.svelte';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
+	import { online } from 'svelte/reactivity/window';
+	import {
+		Library,
+		FileText,
+		Settings as SettingsIcon,
+		User,
+		Tag,
+		Building2,
+		Search,
+		X,
+		ChevronDown
+	} from 'lucide-svelte';
+
+	// Tab icon mapping
+	const tabIcons: Record<string, typeof Library> = {
+		home: Library,
+		viewer: FileText,
+		settings: SettingsIcon,
+		author: User,
+		tag: Tag,
+		journal: Building2
+	};
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
@@ -419,12 +442,15 @@
 	<div class="flex h-10 items-center border-b bg-muted/50 px-2">
 		{#each $tabs as tab (tab.id)}
 			<button
-				class="flex h-8 items-center gap-2 rounded-t-md border-b-2 px-3 text-sm transition-colors
+				class="flex h-8 items-center gap-1.5 rounded-t-md border-b-2 px-3 text-sm transition-colors
 					{$activeTabId === tab.id
 					? 'border-primary bg-background text-foreground'
 					: 'border-transparent text-muted-foreground hover:text-foreground'}"
 				onclick={() => activeTabId.set(tab.id)}
 			>
+				{#if tabIcons[tab.type]}
+					<svelte:component this={tabIcons[tab.type]} class="h-4 w-4 shrink-0" />
+				{/if}
 				<span class="max-w-32 truncate">{tab.title}</span>
 				{#if tab.id !== 'home'}
 					<button
@@ -434,9 +460,7 @@
 							closeTab(tab.id);
 						}}
 					>
-						<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-							<path d="M18 6L6 18M6 6l12 12" />
-						</svg>
+						<X class="h-3 w-3" />
 					</button>
 				{/if}
 			</button>
@@ -459,18 +483,41 @@
 			<div class="ml-auto"></div>
 		{/if}
 
+		<!-- Quick Search button -->
+		<button
+			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+			onclick={() => {
+				// Focus the search input if on home tab, or scroll to it
+				if ($activeTab?.type === 'home') {
+					const searchInput = document.querySelector('input[placeholder="Search papers..."]') as HTMLInputElement;
+					if (searchInput) {
+						searchInput.focus();
+						searchInput.select();
+					}
+				} else {
+					// Switch to home tab and focus search
+					activeTabId.set('home');
+					setTimeout(() => {
+						const searchInput = document.querySelector('input[placeholder="Search papers..."]') as HTMLInputElement;
+						if (searchInput) {
+							searchInput.focus();
+							searchInput.select();
+						}
+					}, 100);
+				}
+			}}
+			title="Quick Search (Ctrl+K)"
+		>
+			<Search class="h-5 w-5" />
+		</button>
+
 		<!-- Settings button -->
 		<button
 			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 			onclick={() => openSettings()}
 			title="Settings"
 		>
-			<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<circle cx="12" cy="12" r="3" />
-				<path
-					d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
-				/>
-			</svg>
+			<SettingsIcon class="h-5 w-5" />
 		</button>
 	</div>
 
@@ -489,6 +536,16 @@
 						bind:value={$searchQuery}
 						class="flex-1 rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
 					/>
+
+					<!-- Sort dropdown -->
+					<select
+						bind:value={$sortBy}
+						class="rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+					>
+						<option value="recent">Most Recent</option>
+						<option value="citations">Most Cited</option>
+						<option value="title">Title A-Z</option>
+					</select>
 
 					<!-- View style buttons -->
 					<div class="flex rounded-md border">
@@ -548,7 +605,7 @@
 					<div class="flex items-center justify-center py-12">
 						<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
 					</div>
-				{:else if $filteredPapers.length === 0}
+				{:else if $filteredPapers.length === 0 && $onlineSearchResults.length === 0}
 					<div
 						class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-16 text-muted-foreground transition-colors
 							{isDragging ? 'border-primary bg-primary/10' : 'border-muted-foreground/25'}"
@@ -566,14 +623,134 @@
 						</button>
 					</div>
 				{:else}
-					<!-- Paper grid -->
-					<div
-						class={$viewStyle === 'grid'
-							? 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'
-							: $viewStyle === 'list'
-								? 'flex flex-col gap-3'
-								: 'flex flex-col gap-1'}
-					>
+					<!-- Compact/Table View -->
+					{#if $viewStyle === 'compact'}
+						<div class="overflow-x-auto rounded-lg border">
+							<table class="w-full text-sm">
+								<thead class="border-b bg-muted/50 text-left text-xs uppercase text-muted-foreground">
+									<tr>
+										<th class="w-8 p-3"></th>
+										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('title')}>
+											<span class="flex items-center gap-1">
+												Title
+												{#if $sortBy === 'title'}
+													<ChevronDown class="h-3 w-3" />
+												{/if}
+											</span>
+										</th>
+										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('recent')}>
+											Author
+										</th>
+										<th class="p-3 hidden md:table-cell">Conference</th>
+										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('recent')}>
+											<span class="flex items-center gap-1">
+												Year
+												{#if $sortBy === 'recent'}
+													<ChevronDown class="h-3 w-3" />
+												{/if}
+											</span>
+										</th>
+										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('citations')}>
+											<span class="flex items-center gap-1">
+												Citations
+												{#if $sortBy === 'citations'}
+													<ChevronDown class="h-3 w-3" />
+												{/if}
+											</span>
+										</th>
+										<th class="w-10 p-3"></th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each $filteredPapers as paper (paper.id)}
+										<tr
+											class="group cursor-pointer border-b transition-colors hover:bg-muted/50"
+											onclick={() => {
+												import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
+											}}
+										>
+											<td class="p-3">
+												{#if paper.pdfUrl}
+													<svg class="h-4 w-4 text-primary" viewBox="0 0 24 24" fill="currentColor">
+														<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" />
+													</svg>
+												{:else}
+													<FileText class="h-4 w-4 text-muted-foreground" />
+												{/if}
+											</td>
+											<td class="p-3">
+												<div class="font-medium line-clamp-1">{paper.title}</div>
+												{#if paper.subject && paper.subject.length > 0}
+													<div class="mt-0.5 flex gap-1">
+														{#each paper.subject.slice(0, 2) as tag}
+															<button
+																class="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded hover:bg-primary/20 transition-colors"
+																onclick={(e) => {
+																	e.stopPropagation();
+																	import('$lib/stores/tabs').then(({ openTagProfile }) => {
+																		const papers = $papers.filter(p => p.subject.includes(tag));
+																		openTagProfile({
+																			name: tag,
+																			color: '#6366f1',
+																			paperCount: papers.length,
+																			papers,
+																			relatedTags: []
+																		});
+																	});
+																}}
+															>{tag}</button>
+														{/each}
+													</div>
+												{/if}
+											</td>
+											<td class="p-3 text-muted-foreground">
+												{paper.authors?.[0] ?? 'Unknown'}
+												{#if (paper.authors?.length ?? 0) > 1}
+													<span class="text-xs">+{(paper.authors?.length ?? 1) - 1}</span>
+												{/if}
+											</td>
+											<td class="p-3 hidden md:table-cell">
+												{#if paper.conference}
+													{@const venueInfo = formatVenue(paper.conference)}
+													<span class="rounded bg-muted px-2 py-0.5 text-xs" title={venueInfo.full ?? undefined}>{venueInfo.display}</span>
+												{:else}
+													<span class="text-muted-foreground">-</span>
+												{/if}
+											</td>
+											<td class="p-3">{paper.year ?? '-'}</td>
+											<td class="p-3">
+												{#if paper.citations}
+													<span class="text-muted-foreground">{paper.citations}</span>
+												{:else}
+													<span class="text-muted-foreground">-</span>
+												{/if}
+											</td>
+											<td class="p-3">
+												<button
+													class="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+													onclick={(e) => {
+														e.stopPropagation();
+														paperToDelete = paper;
+													}}
+													title="Delete paper"
+												>
+													<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+														<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+													</svg>
+												</button>
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{:else}
+						<!-- Paper grid/list -->
+						<div
+							class={$viewStyle === 'grid'
+								? 'grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'
+								: 'flex flex-col gap-3'}
+						>
 						{#each $filteredPapers as paper (paper.id)}
 							{#if $viewStyle === 'grid'}
 								<!-- Grid view card with thumbnail -->
@@ -675,7 +852,7 @@
 									}}
 								>
 									<!-- Small thumbnail -->
-									<div class="shrink-0 h-16 w-12 rounded overflow-hidden bg-muted">
+									<div class="shrink-0 h-20 w-14 rounded overflow-hidden bg-muted">
 										{#if paper.thumbnailUrl}
 											<img
 												src={api.getThumbnailUrl(paper.id)}
@@ -696,9 +873,14 @@
 									</div>
 									<div class="flex-1 min-w-0">
 										<h3 class="font-semibold truncate">{paper.title}</h3>
-										<p class="mt-1 text-sm text-muted-foreground truncate">
+										<p class="mt-0.5 text-sm text-muted-foreground truncate">
 											{paper.authors.join(', ')}
 										</p>
+										{#if paper.abstract}
+											<p class="mt-1 text-xs text-muted-foreground/70 line-clamp-2">
+												{paper.abstract}
+											</p>
+										{/if}
 									</div>
 									<div class="flex items-center gap-4 text-sm text-muted-foreground shrink-0">
 										{#if paper.year}
@@ -728,44 +910,13 @@
 										</button>
 									</div>
 								</div>
-							{:else}
-								<!-- Compact view -->
-								<div
-									class="group flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-muted"
-									onclick={() => {
-										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-									}}
-								>
-									{#if paper.pdfUrl}
-										<svg class="h-4 w-4 shrink-0 text-primary" viewBox="0 0 24 24" fill="currentColor">
-											<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" />
-										</svg>
-									{/if}
-									<span class="flex-1 truncate font-medium">{paper.title}</span>
-									<span class="shrink-0 text-muted-foreground">{paper.authors[0]}</span>
-									{#if paper.year}
-										<span class="shrink-0 text-muted-foreground">{paper.year}</span>
-									{/if}
-									<!-- Delete button -->
-									<button
-										class="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-										onclick={(e) => {
-											e.stopPropagation();
-											paperToDelete = paper;
-										}}
-										title="Delete paper"
-									>
-										<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-										</svg>
-									</button>
-								</div>
 							{/if}
 						{/each}
-					</div>
+						</div>
+					{/if}
 
 					<!-- Online Search Results Section -->
-					{#if $searchQuery.length >= 3 && $filteredPapers.length < 3}
+					{#if $searchQuery.length >= 3 && $filteredPapers.length < 5}
 						<div class="mt-8">
 							<div class="mb-4 flex items-center justify-between">
 								<h2 class="text-lg font-medium">Available to Download</h2>
@@ -776,7 +927,7 @@
 									</div>
 								{/if}
 							</div>
-
+							
 							{#if $onlineSearchResults.length > 0}
 								<div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
 									{#each $onlineSearchResults.slice(0, 6) as result}

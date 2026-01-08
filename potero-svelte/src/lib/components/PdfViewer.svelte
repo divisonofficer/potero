@@ -4,7 +4,7 @@
 	import type { PdfViewerState } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
-	import { api, type Reference } from '$lib/api/client';
+	import { api, type Reference, type CitationSpan } from '$lib/api/client';
 	import { List } from 'lucide-svelte';
 
 	interface Props {
@@ -52,6 +52,11 @@
 	let parsedReferences = $state<Reference[]>([]);
 	let isDetectingReferences = $state(false);
 	let referencesSource = $state<'backend' | 'frontend' | null>(null);
+
+	// Backend citation spans with precise bounding boxes
+	let citationSpans = $state<CitationSpan[]>([]);
+	let isLoadingCitations = $state(false);
+	let citationsSource = $state<'backend' | 'pattern' | null>(null);
 
 	async function initPdfJs() {
 		if (pdfjsLib) return;
@@ -113,6 +118,9 @@
 
 			// Detect References section in background (don't block rendering)
 			detectReferencesSection();
+
+			// Load backend citation spans (if available)
+			loadCitationSpans();
 
 			// Build figure/table index in background for navigation
 			buildFigureIndex();
@@ -347,6 +355,205 @@
 					annotateTextLayer(textLayer as HTMLElement, pageNum);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Load citation spans from backend API.
+	 * These have precise bounding boxes extracted from PDF link annotations.
+	 */
+	async function loadCitationSpans() {
+		if (!paperId) {
+			citationsSource = 'pattern';
+			return;
+		}
+
+		isLoadingCitations = true;
+		citationSpans = [];
+
+		try {
+			// First try to get existing citations
+			const result = await api.getCitations(paperId);
+
+			if (result.success && result.data && result.data.length > 0) {
+				citationSpans = result.data;
+				citationsSource = 'backend';
+				console.log(`[PDF] Loaded ${citationSpans.length} citation spans from backend`);
+
+				// Render citation overlays on already-rendered pages
+				renderCitationOverlaysOnAllPages();
+				return;
+			}
+
+			// No existing citations, try extraction
+			console.log(`[PDF] No existing citations, extracting...`);
+			const extractResult = await api.extractCitations(paperId);
+
+			if (extractResult.success && extractResult.data) {
+				citationSpans = extractResult.data.spans;
+				citationsSource = 'backend';
+				console.log(`[PDF] Extracted ${citationSpans.length} citation spans (${extractResult.data.stats.annotationSpans} from annotations, ${extractResult.data.stats.patternSpans} from patterns)`);
+
+				// Render citation overlays
+				renderCitationOverlaysOnAllPages();
+			} else {
+				console.warn('[PDF] Citation extraction failed, using pattern-based detection');
+				citationsSource = 'pattern';
+			}
+		} catch (e) {
+			console.warn('[PDF] Citation API error, falling back to pattern detection:', e);
+			citationsSource = 'pattern';
+		} finally {
+			isLoadingCitations = false;
+		}
+	}
+
+	/**
+	 * Render citation overlays on all currently rendered pages
+	 */
+	function renderCitationOverlaysOnAllPages() {
+		if (!scrollContainer || citationSpans.length === 0) return;
+
+		const pageWrappers = scrollContainer.querySelectorAll('.page-wrapper');
+		for (const wrapper of pageWrappers) {
+			const pageNum = parseInt((wrapper as HTMLElement).dataset.page || '0', 10);
+			if (pageNum > 0 && renderedPages.has(pageNum)) {
+				renderCitationOverlaysOnPage(wrapper as HTMLElement, pageNum);
+			}
+		}
+	}
+
+	/**
+	 * Render citation span overlays on a specific page
+	 * Uses precise bounding boxes from backend extraction
+	 */
+	function renderCitationOverlaysOnPage(pageWrapper: HTMLElement, pageNum: number) {
+		// Get citations for this page
+		const pageSpans = citationSpans.filter(s => s.pageNum === pageNum);
+		if (pageSpans.length === 0) return;
+
+		// Find or create overlay container
+		const pageContainer = pageWrapper.querySelector('.page-container');
+		if (!pageContainer) return;
+
+		// Remove existing citation overlays
+		const existingOverlays = pageContainer.querySelectorAll('.citation-overlay');
+		existingOverlays.forEach(el => el.remove());
+
+		// Create overlay container if not exists
+		let overlayContainer = pageContainer.querySelector('.citation-overlay-container') as HTMLElement;
+		if (!overlayContainer) {
+			overlayContainer = document.createElement('div');
+			overlayContainer.className = 'citation-overlay-container absolute top-0 left-0 w-full h-full pointer-events-none z-10';
+			pageContainer.appendChild(overlayContainer);
+		}
+
+		// Get page dimensions from the canvas
+		const canvas = pageContainer.querySelector('canvas');
+		if (!canvas) return;
+
+		const canvasWidth = parseFloat(canvas.style.width);
+		const canvasHeight = parseFloat(canvas.style.height);
+
+		// Standard PDF page dimensions (assume 612x792 for letter size)
+		// This needs to match the PDF's media box
+		const pdfWidth = 612;
+		const pdfHeight = 792;
+
+		// Scale factor from PDF coordinates to display coordinates
+		const scaleX = canvasWidth / pdfWidth;
+		const scaleY = canvasHeight / pdfHeight;
+
+		// Create overlay for each citation span
+		for (const span of pageSpans) {
+			// Convert PDF coordinates (origin bottom-left) to display coordinates (origin top-left)
+			const displayX1 = span.bbox.x1 * scaleX;
+			const displayY1 = (pdfHeight - span.bbox.y2) * scaleY; // Flip Y
+			const displayX2 = span.bbox.x2 * scaleX;
+			const displayY2 = (pdfHeight - span.bbox.y1) * scaleY; // Flip Y
+
+			const overlay = document.createElement('div');
+			overlay.className = `citation-overlay pointer-events-auto cursor-pointer ${span.provenance}`;
+			overlay.dataset.spanId = span.id;
+			overlay.dataset.rawText = span.rawText;
+			overlay.style.cssText = `
+				position: absolute;
+				left: ${displayX1}px;
+				top: ${displayY1}px;
+				width: ${displayX2 - displayX1}px;
+				height: ${displayY2 - displayY1}px;
+				background-color: ${span.provenance === 'annotation' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(59, 130, 246, 0.1)'};
+				border: 1px solid ${span.provenance === 'annotation' ? 'rgba(34, 197, 94, 0.4)' : 'rgba(59, 130, 246, 0.3)'};
+				border-radius: 2px;
+				transition: background-color 0.15s ease;
+			`;
+			overlay.title = `${span.rawText} (${span.provenance}, confidence: ${(span.confidence * 100).toFixed(0)}%)`;
+
+			// Add hover effect
+			overlay.addEventListener('mouseenter', () => {
+				overlay.style.backgroundColor = span.provenance === 'annotation'
+					? 'rgba(34, 197, 94, 0.3)'
+					: 'rgba(59, 130, 246, 0.25)';
+			});
+			overlay.addEventListener('mouseleave', () => {
+				overlay.style.backgroundColor = span.provenance === 'annotation'
+					? 'rgba(34, 197, 94, 0.15)'
+					: 'rgba(59, 130, 246, 0.1)';
+			});
+
+			// Handle click
+			overlay.addEventListener('click', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				handleCitationOverlayClick(span);
+			});
+
+			overlayContainer.appendChild(overlay);
+		}
+
+		console.log(`[PDF] Rendered ${pageSpans.length} citation overlays on page ${pageNum}`);
+	}
+
+	/**
+	 * Handle click on citation overlay - look up linked references or show modal
+	 */
+	function handleCitationOverlayClick(span: CitationSpan) {
+		// If we have linked references, use them for lookup
+		if (span.linkedRefIds.length > 0) {
+			const refId = span.linkedRefIds[0];
+			const linkedRef = parsedReferences.find(r => r.id === refId);
+
+			if (linkedRef) {
+				const query = linkedRef.title || linkedRef.authors || linkedRef.rawText;
+				if (query && query.length >= 5) {
+					citationQuery = query;
+					showCitationModal = true;
+					return;
+				}
+			}
+		}
+
+		// Fallback: try to look up by number from raw text
+		const numMatch = span.rawText.match(/\d+/);
+		if (numMatch) {
+			const refNum = parseInt(numMatch[0], 10);
+			const parsedRef = lookupReferenceByNumber(refNum);
+
+			if (parsedRef) {
+				const query = parsedRef.title || parsedRef.authors || parsedRef.rawText;
+				if (query && query.length >= 5) {
+					citationQuery = query;
+					showCitationModal = true;
+					return;
+				}
+			}
+		}
+
+		// Final fallback: use raw text for author-year style
+		const cleanedText = span.rawText.replace(/[\[\]()]/g, '').trim();
+		if (cleanedText.length >= 5 && !/^[\d\s,\-–]+$/.test(cleanedText)) {
+			citationQuery = cleanedText;
+			showCitationModal = true;
 		}
 	}
 
@@ -737,7 +944,15 @@
 				await textLayer.render();
 
 				// Annotate clickable references (citations and figures)
-				annotateTextLayer(textLayerDiv, pageNum);
+				// Only use pattern-based annotation if backend citations not available
+				if (citationsSource !== 'backend') {
+					annotateTextLayer(textLayerDiv, pageNum);
+				}
+			}
+
+			// Render backend citation overlays if available
+			if (citationsSource === 'backend' && citationSpans.length > 0) {
+				renderCitationOverlaysOnPage(pageWrapper, pageNum);
 			}
 
 		} catch (e) {
@@ -1896,7 +2111,7 @@
 			</button>
 		</div>
 
-		<!-- References detection status & refresh -->
+		<!-- References and Citations detection status -->
 		<div class="flex items-center gap-2">
 			{#if parsedReferences.length > 0}
 				<span
@@ -1917,6 +2132,25 @@
 						<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
 					</svg>
 					Loading refs...
+				</span>
+			{/if}
+
+			{#if citationSpans.length > 0}
+				<span
+					class="flex items-center gap-1 rounded px-2 py-1 text-xs {citationsSource === 'backend' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'}"
+					title={citationsSource === 'backend' ? 'Citations extracted with precise bounding boxes (from PDF annotations)' : 'Citations detected by pattern matching'}
+				>
+					<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+					</svg>
+					{citationSpans.length} cites
+				</span>
+			{:else if isLoadingCitations}
+				<span class="flex items-center gap-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+					<svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+					</svg>
+					Citations...
 				</span>
 			{/if}
 		</div>

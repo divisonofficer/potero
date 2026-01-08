@@ -141,3 +141,83 @@ data class Reference(
     val searchQuery: String
         get() = title ?: authors ?: rawText.take(100)
 }
+
+/**
+ * Bounding box in PDF coordinates (origin at bottom-left).
+ */
+@Serializable
+data class BoundingBox(
+    val x1: Double,
+    val y1: Double,
+    val x2: Double,
+    val y2: Double
+) {
+    val width: Double get() = x2 - x1
+    val height: Double get() = y2 - y1
+    val centerX: Double get() = (x1 + x2) / 2
+    val centerY: Double get() = (y1 + y2) / 2
+}
+
+/**
+ * Citation style type
+ */
+@Serializable
+enum class CitationStyle {
+    NUMERIC,      // [1], [1,2,3], [1-5]
+    AUTHOR_YEAR,  // (Smith et al., 2024)
+    UNKNOWN
+}
+
+/**
+ * How the citation was detected
+ */
+@Serializable
+enum class CitationProvenance {
+    ANNOTATION,  // From PDF link annotation (highest confidence)
+    PATTERN      // From text pattern matching
+}
+
+/**
+ * An in-text citation span with its bounding box.
+ * Represents clickable citation references like [1], [1,2,3], (Smith et al., 2024).
+ */
+@Serializable
+data class CitationSpan(
+    val id: String,
+    val paperId: String,
+    val pageNum: Int,
+    val bbox: BoundingBox,
+    val rawText: String,
+    val style: CitationStyle = CitationStyle.NUMERIC,
+    val provenance: CitationProvenance = CitationProvenance.PATTERN,
+    val confidence: Double = 0.5,
+    val destPage: Int? = null,
+    val destY: Double? = null,
+    val createdAt: Instant
+)
+
+/**
+ * A link between a CitationSpan and a Reference entry.
+ * Represents the edge: "citation [1] refers to reference entry #1"
+ */
+@Serializable
+data class CitationLink(
+    val id: String,
+    val citationSpanId: String,
+    val referenceId: String,
+    val linkMethod: String,
+    val confidence: Double = 0.5,
+    val createdAt: Instant
+)
+
+/**
+ * Citation extraction result with statistics
+ */
+@Serializable
+data class CitationExtractionStats(
+    val totalSpans: Int,
+    val annotationSpans: Int,
+    val patternSpans: Int,
+    val linkedCount: Int,
+    val avgConfidence: Double
+)

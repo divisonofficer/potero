@@ -1,0 +1,51 @@
+-- In-text citation spans with bounding boxes
+-- Represents clickable citation references like [1], [1,2,3], (Smith et al., 2024)
+CREATE TABLE CitationSpan (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+    page_num INTEGER NOT NULL,
+    -- Bounding box (PDF coordinates, origin at bottom-left)
+    bbox_x1 REAL NOT NULL,
+    bbox_y1 REAL NOT NULL,
+    bbox_x2 REAL NOT NULL,
+    bbox_y2 REAL NOT NULL,
+    -- Citation content
+    raw_text TEXT NOT NULL,
+    style TEXT NOT NULL DEFAULT 'numeric',  -- 'numeric', 'author_year', 'unknown'
+    -- Provenance tracking
+    provenance TEXT NOT NULL DEFAULT 'pattern',  -- 'annotation', 'pattern'
+    confidence REAL NOT NULL DEFAULT 0.5,
+    -- Optional destination info (from PDF link annotation)
+    dest_page INTEGER,
+    dest_y REAL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX citation_span_paper_idx ON CitationSpan(paper_id);
+CREATE INDEX citation_span_page_idx ON CitationSpan(paper_id, page_num);
+
+-- Queries
+selectByPaperId:
+SELECT * FROM CitationSpan WHERE paper_id = ? ORDER BY page_num ASC, bbox_y1 DESC;
+
+selectByPage:
+SELECT * FROM CitationSpan WHERE paper_id = ? AND page_num = ? ORDER BY bbox_y1 DESC, bbox_x1 ASC;
+
+selectById:
+SELECT * FROM CitationSpan WHERE id = ?;
+
+insert:
+INSERT INTO CitationSpan(id, paper_id, page_num, bbox_x1, bbox_y1, bbox_x2, bbox_y2, raw_text, style, provenance, confidence, dest_page, dest_y, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteByPaperId:
+DELETE FROM CitationSpan WHERE paper_id = ?;
+
+deleteById:
+DELETE FROM CitationSpan WHERE id = ?;
+
+countByPaperId:
+SELECT COUNT(*) FROM CitationSpan WHERE paper_id = ?;
+
+countByProvenance:
+SELECT provenance, COUNT(*) AS count FROM CitationSpan WHERE paper_id = ? GROUP BY provenance;
