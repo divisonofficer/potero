@@ -81,6 +81,10 @@ class ApiClient {
 		return this.request('POST', '/papers/import/arxiv', { arxivId });
 	}
 
+	async downloadPdf(paperId: string): Promise<ApiResponse<{ pdfPath: string; message: string }>> {
+		return this.request('POST', `/papers/${paperId}/download-pdf`);
+	}
+
 	// Tags
 	async listTags(): Promise<ApiResponse<Tag[]>> {
 		return this.request('GET', '/tags');

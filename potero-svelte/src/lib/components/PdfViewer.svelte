@@ -32,6 +32,7 @@
 	let totalPages = $state(0);
 	let scale = $state(initialState?.scale ?? 1.2);
 	let isLoading = $state(true);
+	let isDownloading = $state(false);
 	let error = $state<string | null>(null);
 	let pageInputValue = $state(String(initialState?.currentPage ?? 1));
 	let viewMode = $state<'single' | 'scroll'>(initialState?.viewMode ?? 'scroll');
@@ -116,9 +117,8 @@
 				await renderSinglePage(currentPage);
 			}
 
-			// Detect References section in background (don't block rendering)
-			// DISABLED: Conflicts with backend reference extraction during debugging
-			// detectReferencesSection();
+			// Load backend references (don't trigger analysis, just fetch if available)
+			loadBackendReferences();
 
 			// Load backend citation spans (if available)
 			loadCitationSpans();
@@ -130,6 +130,77 @@
 			error = e instanceof Error ? e.message : 'Failed to load PDF';
 		} finally {
 			isLoading = false;
+		}
+	}
+
+	/**
+	 * Download PDF from online sources (Semantic Scholar, arXiv, DOI)
+	 */
+	async function handleDownloadPdf() {
+		if (!paperId) {
+			error = 'No paper ID available';
+			return;
+		}
+
+		isDownloading = true;
+		error = null;
+
+		try {
+			console.log(`[PdfViewer] Downloading PDF for paper: ${paperId}`);
+
+			const result = await api.downloadPdf(paperId);
+
+			if (result.success && result.data) {
+				// PDF downloaded successfully
+				const downloadedPdfPath = result.data.pdfPath;
+				console.log(`[PdfViewer] PDF downloaded: ${downloadedPdfPath}`);
+
+				// Update pdfUrl to trigger reload
+				pdfUrl = downloadedPdfPath;
+
+				// Reload PDF
+				await loadPdf();
+
+				console.log(`[PdfViewer] PDF loaded successfully`);
+			} else {
+				throw new Error(result.error || 'Failed to download PDF');
+			}
+		} catch (err) {
+			console.error('[PdfViewer] Download PDF error:', err);
+			error = err instanceof Error ? err.message : 'Failed to download PDF';
+		} finally {
+			isDownloading = false;
+		}
+	}
+
+	/**
+	 * Load references from backend (read-only, doesn't trigger analysis)
+	 */
+	async function loadBackendReferences() {
+		if (!paperId) return;
+
+		try {
+			console.log(`[PDF] Loading backend references for paper: ${paperId}`);
+			const result = await api.getReferences(paperId);
+
+			if (result.success && result.data) {
+				const { references, referencesStartPage: startPage, totalCount } = result.data;
+
+				if (totalCount > 0) {
+					parsedReferences = references;
+					referencesStartPage = startPage;
+					referencesSource = 'backend';
+					console.log(`[PDF] Loaded ${totalCount} references from backend (starting at page ${startPage})`);
+
+					// Annotate reference pages if rendered
+					if (references.length > 0 && scrollContainer) {
+						reAnnotateReferencesPages();
+					}
+				}
+			}
+		} catch (e) {
+			console.warn('[PDF] Failed to load backend references:', e);
+			// Silently fail - references are optional
 		}
 	}
 
@@ -944,11 +1015,44 @@
 				});
 				await textLayer.render();
 
-				// Annotate clickable references (citations and figures)
-				// Only use pattern-based annotation if backend citations not available
-				if (citationsSource !== 'backend') {
-					annotateTextLayer(textLayerDiv, pageNum);
-				}
+				// Always annotate text layer for figures and references
+				// Pass a flag to skip citation annotation if using backend overlays
+				annotateTextLayer(textLayerDiv, pageNum, citationsSource === 'backend');
+
+				// Add click handlers for annotated elements
+				textLayerDiv.addEventListener('click', (e) => {
+					const target = e.target as HTMLElement;
+
+					// Handle citation reference clicks
+					if (target.classList.contains('citation-ref')) {
+						const citationText = target.textContent || '';
+						showCitationModal = true;
+						citationQuery = citationText;
+						e.stopPropagation();
+					}
+
+					// Handle figure/table reference clicks
+					if (target.classList.contains('figure-ref')) {
+						const figRef = target.dataset.figRef || target.textContent || '';
+						scrollToFigure(figRef);
+						e.stopPropagation();
+					}
+
+					// Handle reference entry clicks
+					if (target.classList.contains('reference-entry')) {
+						const refText = target.textContent || '';
+						const numMatch = refText.match(/\d+/);
+						if (numMatch) {
+							const refNum = parseInt(numMatch[0], 10);
+							const ref = lookupReferenceByNumber(refNum);
+							if (ref) {
+								citationQuery = ref.title || ref.authors || ref.rawText;
+								showCitationModal = true;
+							}
+						}
+						e.stopPropagation();
+					}
+				});
 			}
 
 			// Render backend citation overlays if available
@@ -1023,7 +1127,8 @@
 		matchStart: number,
 		matchEnd: number,
 		className: string,
-		tooltip: string
+		tooltip: string,
+		dataAttr?: { key: string; value: string }
 	): void {
 		for (const spanInfo of line) {
 			// Check if this span overlaps with the match range
@@ -1032,13 +1137,16 @@
 				if (tooltip && !spanInfo.span.title) {
 					spanInfo.span.title = tooltip;
 				}
+				if (dataAttr) {
+					spanInfo.span.dataset[dataAttr.key] = dataAttr.value;
+				}
 			}
 		}
 	}
 
 	// Annotate text layer spans with citation/figure classes for visual indication
 	// Uses span aggregation to match patterns that span multiple elements
-	function annotateTextLayer(textLayerDiv: HTMLElement, pageNum: number) {
+	function annotateTextLayer(textLayerDiv: HTMLElement, pageNum: number, skipCitations: boolean = false) {
 		const isInReferencesSection = referencesStartPage !== null && pageNum >= referencesStartPage;
 
 		// Aggregate spans into lines for cross-span pattern matching
@@ -1049,14 +1157,17 @@
 
 			// === Citation patterns (exact match on entire span content) ===
 			// These are typically single spans like "[1]" or "(Smith, 2024)"
-			for (const spanInfo of line) {
-				const text = spanInfo.text.trim();
-				for (const pattern of CITATION_PATTERNS) {
-					pattern.lastIndex = 0;
-					if (pattern.test(text)) {
-						spanInfo.span.classList.add('citation-ref');
-						spanInfo.span.title = 'Click to look up citation';
-						break;
+			// Skip if using backend citation overlays
+			if (!skipCitations) {
+				for (const spanInfo of line) {
+					const text = spanInfo.text.trim();
+					for (const pattern of CITATION_PATTERNS) {
+						pattern.lastIndex = 0;
+						if (pattern.test(text)) {
+							spanInfo.span.classList.add('citation-ref');
+							spanInfo.span.title = 'Click to look up citation';
+							break;
+						}
 					}
 				}
 			}
@@ -1076,7 +1187,8 @@
 						matchStart,
 						matchEnd,
 						'figure-ref',
-						`Click to jump to ${figRef}`
+						`Click to jump to ${figRef}`,
+						{ key: 'figRef', value: figRef }
 					);
 				}
 			}
@@ -1514,8 +1626,10 @@
 	});
 
 	let outlineReferences = $derived.by(() => {
+		console.log(`[Outline] Generating references list from ${parsedReferences.length} parsed references`);
+
 		// Filter out invalid references (e.g., years parsed as reference numbers)
-		return parsedReferences
+		const items = parsedReferences
 			.filter(ref => ref.number > 0 && ref.number < 1000) // Valid ref numbers are typically < 1000
 			.map(ref => ({
 				id: `ref-${ref.number}`,
@@ -1525,6 +1639,9 @@
 				page: ref.pageNum,
 				yPosition: 0
 			}));
+
+		console.log(`[Outline] Generated ${items.length} reference items`);
+		return items;
 	});
 
 	// Handle outline item click - navigate to location or open modal
@@ -2212,12 +2329,44 @@
 				</svg>
 				<p class="text-lg font-medium">Failed to load PDF</p>
 				<p class="mt-1 text-sm">{error}</p>
-				<button
-					class="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-					onclick={loadPdf}
-				>
-					Retry
-				</button>
+				<div class="mt-4 flex gap-2">
+					<button
+						class="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+						onclick={loadPdf}
+					>
+						Retry
+					</button>
+					{#if paperId && !pdfUrl}
+						<button
+							class="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+							onclick={handleDownloadPdf}
+						>
+							Download PDF
+						</button>
+					{/if}
+				</div>
+			</div>
+		{:else if !pdfUrl && paperId}
+			<div class="flex h-full flex-col items-center justify-center text-neutral-500 dark:text-neutral-400">
+				<svg class="mb-4 h-16 w-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+					<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+				</svg>
+				<p class="text-lg font-medium">No PDF Available</p>
+				<p class="mt-1 text-sm">This paper doesn't have a PDF file yet</p>
+				<div class="mt-4 flex gap-2">
+					<button
+						class="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+						onclick={handleDownloadPdf}
+						disabled={isDownloading}
+					>
+						{isDownloading ? 'Downloading...' : 'Download PDF'}
+					</button>
+					<button
+						class="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+					>
+						Upload PDF
+					</button>
+				</div>
 			</div>
 		{/if}
 	</div>

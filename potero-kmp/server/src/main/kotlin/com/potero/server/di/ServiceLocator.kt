@@ -33,6 +33,7 @@ import com.potero.service.genai.GenAIFileUploadService
 import com.potero.service.grobid.GrobidEngine
 import com.potero.service.grobid.GrobidRestEngine
 import com.potero.service.grobid.DisabledGrobidEngine
+import com.potero.service.pdf.PdfDownloadService
 import io.ktor.client.HttpClient
 
 /**
@@ -181,6 +182,13 @@ object ServiceLocator {
             // Fallback to disabled engine
             DisabledGrobidEngine
         }
+    }
+
+    val pdfDownloadService: PdfDownloadService by lazy {
+        PdfDownloadService(
+            httpClient = httpClient,
+            semanticScholarResolver = semanticScholarResolver
+        )
     }
 
     /**

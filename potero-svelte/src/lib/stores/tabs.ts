@@ -91,6 +91,24 @@ export function goHome() {
 }
 
 /**
+ * Update the paper data for a viewer tab
+ */
+export function updateTabPaper(tabId: string, paper: Paper) {
+	tabs.update(($tabs) => {
+		return $tabs.map((tab) => {
+			if (tab.id === tabId && tab.type === 'viewer') {
+				return {
+					...tab,
+					paper,
+					title: paper.title.length > 30 ? paper.title.slice(0, 30) + '...' : paper.title
+				};
+			}
+			return tab;
+		});
+	});
+}
+
+/**
  * Update the viewer state for a tab (scroll position, zoom, etc.)
  */
 export function updateViewerState(tabId: string, state: Partial<PdfViewerState>) {

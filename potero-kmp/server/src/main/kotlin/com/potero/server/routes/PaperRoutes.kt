@@ -10,6 +10,7 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import java.io.File
 import java.util.UUID
 
 @Serializable
@@ -45,7 +46,9 @@ data class CreatePaperRequest(
     val subject: List<String> = emptyList(),
     val abstract: String? = null,
     val doi: String? = null,
-    val arxivId: String? = null
+    val arxivId: String? = null,
+    val pdfUrl: String? = null,  // For auto-download from online search
+    val citations: Int? = null   // For preserving citation count from search
 )
 
 @Serializable
@@ -88,6 +91,7 @@ fun CreatePaperRequest.toPaper(): Paper {
         arxivId = arxivId,
         year = year,
         conference = conference,
+        citationsCount = citations ?: 0,  // NEW: Preserve citation count from search
         authors = authors.mapIndexed { index, name ->
             Author(
                 id = UUID.randomUUID().toString(),
@@ -129,26 +133,64 @@ fun Route.paperRoutes() {
             )
         }
 
-        // POST /api/papers - Create paper manually
+        // POST /api/papers - Create paper manually (or from online search)
         post {
             val request = call.receive<CreatePaperRequest>()
-            val paper = request.toPaper()
+            var paper = request.toPaper()
 
-            val result = repository.insert(paper)
-            result.fold(
-                onSuccess = { insertedPaper ->
-                    call.respond(HttpStatusCode.Created, ApiResponse(data = insertedPaper.toDto()))
-                },
-                onFailure = { error ->
-                    call.respond(
-                        HttpStatusCode.InternalServerError,
-                        ApiResponse<PaperDto>(
-                            success = false,
-                            error = error.message ?: "Failed to create paper"
-                        )
+            // Insert paper first
+            val insertResult = repository.insert(paper)
+            val insertedPaper = insertResult.getOrElse {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<PaperDto>(
+                        success = false,
+                        error = it.message ?: "Failed to create paper"
                     )
+                )
+                return@post
+            }
+
+            // NEW: Auto-download PDF if pdfUrl is provided (from online search)
+            if (request.pdfUrl != null) {
+                try {
+                    println("[Paper Create] Attempting to download PDF from: ${request.pdfUrl}")
+
+                    val pdfDownloadService = ServiceLocator.pdfDownloadService
+                    val pdfPath = pdfDownloadService.downloadPdf(
+                        paper = insertedPaper,
+                        directUrl = request.pdfUrl
+                    ).getOrNull()
+
+                    if (pdfPath != null) {
+                        // Update paper with PDF path
+                        paper = insertedPaper.copy(pdfPath = pdfPath)
+                        repository.update(paper)
+
+                        // Generate thumbnail
+                        val thumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+                        val thumbnailDir = File(System.getProperty("user.home"), ".potero/thumbnails")
+                        thumbnailDir.mkdirs()
+                        val thumbnailOutputPath = File(thumbnailDir, "${insertedPaper.id}.jpg").absolutePath
+
+                        val generatedPath = thumbnailExtractor.extractThumbnail(pdfPath, thumbnailOutputPath)
+                        if (generatedPath != null) {
+                            paper = paper.copy(thumbnailPath = generatedPath)
+                            repository.update(paper)
+                        }
+
+                        println("[Paper Create] PDF downloaded successfully: $pdfPath")
+                    } else {
+                        println("[Paper Create] PDF download failed, continuing without PDF")
+                    }
+                } catch (e: Exception) {
+                    println("[Paper Create] PDF download error: ${e.message}")
+                    // Continue without PDF - not a critical error
                 }
-            )
+            }
+
+            // Return final paper (with or without PDF)
+            call.respond(HttpStatusCode.Created, ApiResponse(data = paper.toDto()))
         }
 
         // POST /api/papers/import/doi - Import by DOI
@@ -464,6 +506,72 @@ fun Route.paperRoutes() {
                     )
                 }
             )
+        }
+
+        // POST /api/papers/{id}/download-pdf - Download PDF from online sources
+        post("/{id}/download-pdf") {
+            val paperId = call.parameters["id"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val paper = repository.getById(paperId).getOrNull()
+            if (paper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<Map<String, String>>(
+                        success = false,
+                        error = "Paper not found"
+                    )
+                )
+                return@post
+            }
+
+            // Check if PDF already exists
+            if (paper.pdfPath != null) {
+                call.respond(
+                    ApiResponse(data = mapOf(
+                        "pdfPath" to paper.pdfPath,
+                        "message" to "PDF already exists"
+                    ))
+                )
+                return@post
+            }
+
+            // Try to download PDF
+            val pdfDownloadService = ServiceLocator.pdfDownloadService
+            val pdfPath = pdfDownloadService.downloadPdf(paper).getOrNull()
+
+            if (pdfPath != null) {
+                // Update paper with PDF path
+                var updatedPaper = paper.copy(pdfPath = pdfPath)
+                repository.update(updatedPaper)
+
+                // Generate thumbnail
+                val thumbnailExtractor = ServiceLocator.pdfThumbnailExtractor
+                val thumbnailDir = File(System.getProperty("user.home"), ".potero/thumbnails")
+                thumbnailDir.mkdirs()
+                val thumbnailOutputPath = File(thumbnailDir, "$paperId.jpg").absolutePath
+
+                val generatedPath = thumbnailExtractor.extractThumbnail(pdfPath, thumbnailOutputPath)
+                if (generatedPath != null) {
+                    updatedPaper = updatedPaper.copy(thumbnailPath = generatedPath)
+                    repository.update(updatedPaper)
+                }
+
+                call.respond(
+                    ApiResponse(data = mapOf(
+                        "pdfPath" to pdfPath,
+                        "message" to "PDF downloaded successfully"
+                    ))
+                )
+            } else {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<Map<String, String>>(
+                        success = false,
+                        error = "Could not download PDF from available sources (Semantic Scholar, arXiv, DOI)"
+                    )
+                )
+            }
         }
     }
 }

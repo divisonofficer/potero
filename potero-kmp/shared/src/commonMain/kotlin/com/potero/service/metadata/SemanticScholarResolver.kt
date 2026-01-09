@@ -156,6 +156,15 @@ class SemanticScholarResolver(
         return response.body<SemanticScholarPaper>()
     }
 
+    /**
+     * Get paper details by Semantic Scholar paper ID
+     * Alias for getByPaperId for clarity in PdfDownloadService
+     */
+    suspend fun getPaperDetails(paperId: String): Result<SemanticScholarPaper> = runCatching {
+        getByPaperId(paperId)
+            ?: throw MetadataResolutionException("Paper not found", paperId)
+    }
+
     // ==================== Author API ====================
 
     /**

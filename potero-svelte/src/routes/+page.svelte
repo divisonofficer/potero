@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -149,8 +149,54 @@
 	let isSavingSettings = $state(false);
 	let isSavingSSO = $state(false);
 
+	// PDF download state
+	let isDownloadingPdf = $state(false);
+	let downloadingPaperId = $state<string | null>(null);
+
 	// Bulk reanalyze state
 	let isBulkReanalyzing = $state(false);
+
+	/**
+	 * Download PDF for a paper from online sources
+	 */
+	async function handleDownloadPdf(paperId: string) {
+		isDownloadingPdf = true;
+		downloadingPaperId = paperId;
+
+		try {
+			console.log(`[Download PDF] Attempting to download for paper: ${paperId}`);
+
+			const result = await api.downloadPdf(paperId);
+
+			if (result.success && result.data) {
+				toast.success('PDF downloaded successfully');
+
+				// Reload papers to update UI
+				await loadPapers();
+
+				// Update the current tab's paper if it's the same paper
+				const currentTab = $tabs.find(t => t.type === 'viewer' && t.paper?.id === paperId);
+				if (currentTab) {
+					// Get updated paper info
+					const updatedPaper = await api.getPaper(paperId);
+					if (updatedPaper.success && updatedPaper.data) {
+						updateTabPaper(currentTab.id, updatedPaper.data);
+					}
+				}
+
+				console.log(`[Download PDF] Success: ${result.data.pdfPath}`);
+			} else {
+				throw new Error(result.error || 'Failed to download PDF');
+			}
+		} catch (err) {
+			console.error('[Download PDF] Error:', err);
+			const errorMessage = err instanceof Error ? err.message : 'Failed to download PDF';
+			toast.error(errorMessage);
+		} finally {
+			isDownloadingPdf = false;
+			downloadingPaperId = null;
+		}
+	}
 
 	async function handleBulkReanalyzeAll() {
 		isBulkReanalyzing = true;
@@ -1171,15 +1217,23 @@
 									{tab.paper.abstract}
 								</p>
 							{/if}
-							<button
-								class="mt-4 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
-								onclick={() => {
-									// TODO: Upload PDF for this paper
-									toast.info('PDF upload for existing papers coming soon');
-								}}
-							>
-								Upload PDF
-							</button>
+							<div class="mt-4 flex gap-2">
+								<button
+									class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+									onclick={() => handleDownloadPdf(tab.paper?.id ?? '')}
+									disabled={isDownloadingPdf && downloadingPaperId === tab.paper?.id}
+								>
+									{isDownloadingPdf && downloadingPaperId === tab.paper?.id ? 'Downloading...' : 'Download PDF'}
+								</button>
+								<button
+									class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted"
+									onclick={() => {
+										toast.info('PDF upload for existing papers coming soon');
+									}}
+								>
+									Upload PDF
+								</button>
+							</div>
 						</div>
 					{/if}
 				</div>
