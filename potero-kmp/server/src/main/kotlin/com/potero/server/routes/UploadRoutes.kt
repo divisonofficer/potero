@@ -2,6 +2,7 @@ package com.potero.server.routes
 
 import com.potero.domain.model.Author
 import com.potero.domain.model.Paper
+import com.potero.domain.model.Tag
 import com.potero.domain.repository.SettingsKeys
 import com.potero.server.di.ServiceLocator
 import com.potero.service.job.GlobalJobQueue
@@ -689,48 +690,126 @@ fun Route.uploadRoutes() {
                     // Continue even if references fail
                 }
 
-                // Step 6: Auto-tagging with LLM
-                ctx.updateProgress(92, "Auto-tagging with LLM...")
+                // Step 6: Comprehensive LLM analysis (title, authors, tags, metadata)
+                ctx.updateProgress(92, "Analyzing with LLM (comprehensive)...")
 
                 var autoTaggedCount = 0
                 var autoTaggedTags = emptyList<String>()
                 try {
+                    val comprehensiveService = ServiceLocator.comprehensivePaperAnalysisService
                     val tagService = ServiceLocator.tagService
                     val tagRepository = ServiceLocator.tagRepository
 
-                    // Get updated paper (may have new abstract from metadata resolution)
+                    // Get updated paper (may have new metadata from external APIs)
                     val updatedPaper = paperRepository.getById(paperId).getOrNull() ?: currentPaper
 
-                    // Extract full text for better tagging
+                    // Extract full text for better analysis
                     val fullText = try {
                         analyzer.extractFirstPagesText(maxPages = 3)
                     } catch (e: Exception) {
                         null
                     }
 
-                    // Auto-tag the paper
-                    val autoTagResult = tagService.autoTagPaper(
-                        paperId = paperId,
+                    // Get existing tags for context
+                    val existingTags = tagRepository.getAll().getOrDefault(emptyList()).map { it.name }
+
+                    // ONE LLM call to extract everything
+                    val analysisResult = comprehensiveService.analyzeComprehensive(
                         title = updatedPaper.title,
+                        authors = updatedPaper.authors.map { it.name },
                         abstract = updatedPaper.abstract,
-                        fullText = fullText
+                        fullText = fullText,
+                        existingTags = existingTags
                     )
 
-                    if (autoTagResult.isSuccess) {
-                        val assignedTags = autoTagResult.getOrThrow()
-                        autoTaggedCount = assignedTags.size
-                        autoTaggedTags = assignedTags.map { it.name }
+                    if (analysisResult.isSuccess) {
+                        val llmAnalysis = analysisResult.getOrThrow()
 
-                        // Link tags to paper
-                        for (tag in assignedTags) {
-                            tagRepository.linkTagToPaper(paperId, tag.id)
+                        println("[Re-analysis] LLM Analysis Result:")
+                        println("  - Title: ${llmAnalysis.cleanedTitle}")
+                        println("  - Authors: ${llmAnalysis.cleanedAuthors}")
+                        println("  - Tags: ${llmAnalysis.tags}")
+                        println("  - Year: ${llmAnalysis.year}")
+                        println("  - Venue: ${llmAnalysis.venue}")
+
+                        // Update paper with cleaned metadata
+                        var finalPaper = updatedPaper
+
+                        println("[Re-analysis] Current paper title: '${updatedPaper.title}'")
+                        println("[Re-analysis] LLM cleaned title: '${llmAnalysis.cleanedTitle}'")
+                        println("[Re-analysis] Titles equal? ${llmAnalysis.cleanedTitle == updatedPaper.title}")
+
+                        // Update title if cleaned version is different
+                        if (llmAnalysis.cleanedTitle != updatedPaper.title) {
+                            finalPaper = finalPaper.copy(
+                                title = llmAnalysis.cleanedTitle,
+                                updatedAt = Clock.System.now()
+                            )
+                            println("[Re-analysis] Cleaned title: '${updatedPaper.title}' -> '${llmAnalysis.cleanedTitle}'")
                         }
 
-                        println("[Re-analysis] Auto-tagged with ${assignedTags.size} tags: ${autoTaggedTags.joinToString(", ")}")
+                        // Update authors if cleaned
+                        if (llmAnalysis.cleanedAuthors != updatedPaper.authors.map { it.name }) {
+                            finalPaper = finalPaper.copy(
+                                authors = llmAnalysis.cleanedAuthors.mapIndexed { index: Int, name: String ->
+                                    Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                                },
+                                updatedAt = Clock.System.now()
+                            )
+                            println("[Re-analysis] Cleaned authors: ${updatedPaper.authors.map { it.name }} -> ${llmAnalysis.cleanedAuthors}")
+                        }
+
+                        // Update abstract if missing
+                        if (updatedPaper.abstract.isNullOrBlank() && !llmAnalysis.abstract.isNullOrBlank()) {
+                            finalPaper = finalPaper.copy(
+                                abstract = llmAnalysis.abstract,
+                                updatedAt = Clock.System.now()
+                            )
+                        }
+
+                        // Update year/venue if missing
+                        if (updatedPaper.year == null && llmAnalysis.year != null) {
+                            finalPaper = finalPaper.copy(year = llmAnalysis.year, updatedAt = Clock.System.now())
+                        }
+                        if (updatedPaper.conference.isNullOrBlank() && !llmAnalysis.venue.isNullOrBlank()) {
+                            finalPaper = finalPaper.copy(conference = llmAnalysis.venue, updatedAt = Clock.System.now())
+                        }
+
+                        if (finalPaper != updatedPaper) {
+                            println("[Re-analysis] Updating paper in DB...")
+                            paperRepository.update(finalPaper)
+                            println("[Re-analysis] ✓ Paper updated successfully")
+                        } else {
+                            println("[Re-analysis] No changes to paper metadata")
+                        }
+
+                        // Assign tags
+                        if (llmAnalysis.tags.isNotEmpty()) {
+                            // Get or create tags one by one
+                            val assignedTags = mutableListOf<Tag>()
+                            for (tagName in llmAnalysis.tags) {
+                                val existingTag = tagRepository.getByName(tagName).getOrNull()
+                                val tag = existingTag ?: run {
+                                    val newTag = Tag(
+                                        id = UUID.randomUUID().toString(),
+                                        name = tagName,
+                                        color = "#6366f1"
+                                    )
+                                    tagRepository.insert(newTag).getOrNull() ?: newTag
+                                }
+                                assignedTags.add(tag)
+                                tagRepository.linkTagToPaper(paperId, tag.id)
+                            }
+
+                            autoTaggedCount = assignedTags.size
+                            autoTaggedTags = assignedTags.map { it.name }
+
+                            println("[Re-analysis] Comprehensive analysis: cleaned metadata + ${assignedTags.size} tags: ${autoTaggedTags.joinToString(", ")}")
+                        }
                     }
                 } catch (e: Exception) {
-                    println("[Re-analysis] Auto-tagging failed: ${e.message}")
-                    // Continue even if auto-tagging fails
+                    println("[Re-analysis] Comprehensive LLM analysis failed: ${e.message}")
+                    // Continue even if analysis fails
                 }
 
                 ctx.updateProgress(100, "Re-analysis complete")
@@ -1450,9 +1529,9 @@ fun Route.uploadRoutes() {
                                 println("[Bulk Re-analysis] References failed for ${paper.id}: ${refError.message}")
                             }
 
-                            // Auto-tagging with LLM
+                            // Comprehensive LLM analysis (title, authors, tags, metadata)
                             try {
-                                val tagService = ServiceLocator.tagService
+                                val comprehensiveService = ServiceLocator.comprehensivePaperAnalysisService
                                 val tagRepository = ServiceLocator.tagRepository
                                 val updatedPaper = paperRepository.getById(paper.id).getOrNull() ?: paper
 
@@ -1460,22 +1539,61 @@ fun Route.uploadRoutes() {
                                     analyzer.extractFirstPagesText(maxPages = 3)
                                 } catch (e: Exception) { null }
 
-                                val autoTagResult = tagService.autoTagPaper(
-                                    paperId = paper.id,
+                                val existingTags = tagRepository.getAll().getOrDefault(emptyList()).map { it.name }
+
+                                val analysisResult = comprehensiveService.analyzeComprehensive(
                                     title = updatedPaper.title,
+                                    authors = updatedPaper.authors.map { it.name },
                                     abstract = updatedPaper.abstract,
-                                    fullText = fullText
+                                    fullText = fullText,
+                                    existingTags = existingTags
                                 )
 
-                                if (autoTagResult.isSuccess) {
-                                    val assignedTags = autoTagResult.getOrThrow()
-                                    for (tag in assignedTags) {
-                                        tagRepository.linkTagToPaper(paper.id, tag.id)
+                                if (analysisResult.isSuccess) {
+                                    val llmAnalysis = analysisResult.getOrThrow()
+                                    var finalPaper = updatedPaper
+
+                                    // Update metadata
+                                    if (llmAnalysis.cleanedTitle != updatedPaper.title) {
+                                        finalPaper = finalPaper.copy(title = llmAnalysis.cleanedTitle, updatedAt = Clock.System.now())
                                     }
-                                    println("[Bulk Re-analysis] Auto-tagged ${paper.id} with ${assignedTags.size} tags")
+                                    if (llmAnalysis.cleanedAuthors != updatedPaper.authors.map { it.name }) {
+                                        finalPaper = finalPaper.copy(
+                                            authors = llmAnalysis.cleanedAuthors.mapIndexed { index, name ->
+                                                Author(id = UUID.randomUUID().toString(), name = name, order = index)
+                                            },
+                                            updatedAt = Clock.System.now()
+                                        )
+                                    }
+                                    if (updatedPaper.abstract.isNullOrBlank() && !llmAnalysis.abstract.isNullOrBlank()) {
+                                        finalPaper = finalPaper.copy(abstract = llmAnalysis.abstract, updatedAt = Clock.System.now())
+                                    }
+                                    if (updatedPaper.year == null && llmAnalysis.year != null) {
+                                        finalPaper = finalPaper.copy(year = llmAnalysis.year, updatedAt = Clock.System.now())
+                                    }
+                                    if (updatedPaper.conference.isNullOrBlank() && !llmAnalysis.venue.isNullOrBlank()) {
+                                        finalPaper = finalPaper.copy(conference = llmAnalysis.venue, updatedAt = Clock.System.now())
+                                    }
+
+                                    if (finalPaper != updatedPaper) {
+                                        paperRepository.update(finalPaper)
+                                    }
+
+                                    // Assign tags
+                                    if (llmAnalysis.tags.isNotEmpty()) {
+                                        for (tagName in llmAnalysis.tags) {
+                                            val existingTag = tagRepository.getByName(tagName).getOrNull()
+                                            val tag = existingTag ?: run {
+                                                val newTag = Tag(id = UUID.randomUUID().toString(), name = tagName, color = "#6366f1")
+                                                tagRepository.insert(newTag).getOrNull() ?: newTag
+                                            }
+                                            tagRepository.linkTagToPaper(paper.id, tag.id)
+                                        }
+                                        println("[Bulk Re-analysis] Comprehensive analysis for ${paper.id}: ${llmAnalysis.tags.size} tags")
+                                    }
                                 }
                             } catch (tagError: Exception) {
-                                println("[Bulk Re-analysis] Auto-tagging failed for ${paper.id}: ${tagError.message}")
+                                println("[Bulk Re-analysis] Comprehensive analysis failed for ${paper.id}: ${tagError.message}")
                             }
                         }
 

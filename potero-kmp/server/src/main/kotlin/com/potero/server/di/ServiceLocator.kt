@@ -20,6 +20,7 @@ import com.potero.service.llm.LLMService
 import com.potero.service.llm.MetadataCleaningService
 import com.potero.service.llm.PdfLLMAnalysisService
 import com.potero.service.llm.PostechLLMService
+import com.potero.service.llm.ComprehensivePaperAnalysisService
 import com.potero.service.pdf.PdfThumbnailExtractor
 import com.potero.service.metadata.ArxivResolver
 import com.potero.service.metadata.DOIResolver
@@ -34,6 +35,8 @@ import com.potero.service.grobid.GrobidEngine
 import com.potero.service.grobid.GrobidRestEngine
 import com.potero.service.grobid.DisabledGrobidEngine
 import com.potero.service.pdf.PdfDownloadService
+import com.potero.service.metadata.UnpaywallResolver
+import com.potero.service.metadata.SciHubResolver
 import io.ktor.client.HttpClient
 
 /**
@@ -128,7 +131,8 @@ object ServiceLocator {
     val tagService: TagService by lazy {
         TagService(
             tagRepository = tagRepository,
-            llmService = llmService
+            llmService = llmService,
+            llmLogger = llmLogger
         )
     }
 
@@ -150,6 +154,13 @@ object ServiceLocator {
 
     val pdfLLMAnalysisService: PdfLLMAnalysisService by lazy {
         PdfLLMAnalysisService(
+            llmService = llmService,
+            llmLogger = llmLogger
+        )
+    }
+
+    val comprehensivePaperAnalysisService: ComprehensivePaperAnalysisService by lazy {
+        ComprehensivePaperAnalysisService(
             llmService = llmService,
             llmLogger = llmLogger
         )
@@ -184,10 +195,29 @@ object ServiceLocator {
         }
     }
 
+    val unpaywallResolver: UnpaywallResolver by lazy {
+        UnpaywallResolver(
+            httpClient = httpClient,
+            email = "potero@postech.ac.kr"
+        )
+    }
+
+    val sciHubResolver: SciHubResolver by lazy {
+        SciHubResolver(
+            httpClient = httpClient,
+            enabledProvider = {
+                // Check if Sci-Hub is enabled in settings
+                settingsRepository.get("scihub.enabled").getOrNull() == "true"
+            }
+        )
+    }
+
     val pdfDownloadService: PdfDownloadService by lazy {
         PdfDownloadService(
             httpClient = httpClient,
-            semanticScholarResolver = semanticScholarResolver
+            semanticScholarResolver = semanticScholarResolver,
+            unpaywallResolver = unpaywallResolver,
+            sciHubResolver = sciHubResolver
         )
     }
 

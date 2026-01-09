@@ -253,7 +253,8 @@
 		isSavingSettings = true;
 		const updateData: Partial<Settings> = {
 			llmProvider: settings.llmProvider,
-			theme: settings.theme
+			theme: settings.theme,
+			enableSciHub: settings.enableSciHub
 		};
 
 		// Only send API key if user entered a new one
@@ -271,6 +272,9 @@
 			settings = result.data;
 			newApiKey = '';
 			newSemanticScholarApiKey = '';
+			toast.success('Settings saved');
+		} else {
+			toast.error('Failed to save settings');
 		}
 		isSavingSettings = false;
 	}
@@ -1529,6 +1533,54 @@
 					<p class="text-xs text-muted-foreground">
 						<strong>Tip:</strong> "Login with SSO" will open a popup window and automatically extract the token (Electron) or redirect to SSO login (browser).
 					</p>
+				</div>
+			</section>
+
+			<!-- PDF Download Options -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">PDF Download Options</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<p class="text-sm text-muted-foreground">
+						Configure which sources to use when downloading PDFs from online search results.
+					</p>
+
+					<div class="flex items-center justify-between rounded-lg border bg-background p-4">
+						<div class="flex-1">
+							<p class="font-medium">Enable Sci-Hub</p>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Use Sci-Hub as a fallback for finding PDFs. Legal gray area - use at your own risk.
+							</p>
+						</div>
+						<label class="relative inline-flex cursor-pointer items-center">
+							<input
+								type="checkbox"
+								class="peer sr-only"
+								checked={settings.enableSciHub ?? false}
+								onchange={(e) => {
+									settings = { ...settings, enableSciHub: e.currentTarget.checked };
+								}}
+							/>
+							<div class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary peer-focus:ring-offset-2 dark:border-gray-600 dark:bg-gray-700"></div>
+						</label>
+					</div>
+
+					<div class="text-xs text-muted-foreground">
+						<p class="font-medium mb-1">Download priority order:</p>
+						<ol class="list-decimal list-inside space-y-0.5">
+							<li>arXiv (if available)</li>
+							<li>Direct URL from search results</li>
+							<li>Unpaywall (legal open access)</li>
+							<li>Semantic Scholar</li>
+							<li>Sci-Hub (if enabled above)</li>
+						</ol>
+					</div>
+
+					<button
+						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+						onclick={saveSettings}
+					>
+						Save Settings
+					</button>
 				</div>
 			</section>
 

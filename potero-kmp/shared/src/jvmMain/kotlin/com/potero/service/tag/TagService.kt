@@ -3,6 +3,7 @@ package com.potero.service.tag
 import com.potero.domain.model.Tag
 import com.potero.domain.repository.TagRepository
 import com.potero.service.llm.LLMService
+import com.potero.service.llm.LLMLogger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
@@ -12,7 +13,8 @@ import java.util.UUID
  */
 class TagService(
     private val tagRepository: TagRepository,
-    private val llmService: LLMService
+    private val llmService: LLMService,
+    private val llmLogger: LLMLogger
 ) {
     companion object {
         private const val MAX_TAGS = 500 // Trigger merge when exceeding this
@@ -70,13 +72,45 @@ class TagService(
         println("[TagService] Prompt built, length: ${prompt.length}")
 
         println("[TagService] Calling LLM service...")
-        val response = llmService.chat(prompt).getOrThrow()
-        println("[TagService] LLM response received, length: ${response.length}")
-        println("[TagService] LLM response: $response")
+        val startTime = System.currentTimeMillis()
+        val result = llmService.chat(prompt)
+        val endTime = System.currentTimeMillis()
 
-        val tags = parseTagResponse(response)
-        println("[TagService] Parsed tags: $tags")
-        tags
+        result.fold(
+            onSuccess = { response ->
+                println("[TagService] LLM response received, length: ${response.length}")
+                println("[TagService] LLM response: $response")
+
+                // Log LLM usage
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "auto_tag",
+                    inputPrompt = prompt,
+                    outputResponse = response,
+                    durationMs = endTime - startTime,
+                    success = true,
+                    paperTitle = title
+                )
+
+                val tags = parseTagResponse(response)
+                println("[TagService] Parsed tags: $tags")
+                tags
+            },
+            onFailure = { error ->
+                // Log failed LLM usage
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "auto_tag",
+                    inputPrompt = prompt,
+                    outputResponse = null,
+                    durationMs = endTime - startTime,
+                    success = false,
+                    errorMessage = error.message,
+                    paperTitle = title
+                )
+                throw error
+            }
+        )
     }
 
     /**

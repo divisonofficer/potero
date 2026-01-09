@@ -18,7 +18,9 @@ data class SettingsDto(
     // SSO Authentication for POSTECH GenAI file upload
     val ssoConfigured: Boolean = false,
     val ssoTokenExpiresAt: Long? = null,
-    val ssoSiteName: String = "robi-gpt-dev"
+    val ssoSiteName: String = "robi-gpt-dev",
+    // PDF Download options
+    val enableSciHub: Boolean = false
 )
 
 @Serializable
@@ -31,7 +33,9 @@ data class UpdateSettingsRequest(
     // SSO Authentication fields
     val ssoAccessToken: String? = null,
     val ssoTokenExpiry: Long? = null,
-    val ssoSiteName: String? = null
+    val ssoSiteName: String? = null,
+    // PDF Download options
+    val enableSciHub: Boolean? = null
 )
 
 fun Route.settingsRoutes() {
@@ -62,7 +66,8 @@ fun Route.settingsRoutes() {
                         },
                         ssoConfigured = ssoConfigured,
                         ssoTokenExpiresAt = ssoExpiry,
-                        ssoSiteName = settings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev"
+                        ssoSiteName = settings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev",
+                        enableSciHub = settings["scihub.enabled"]?.toBoolean() ?: false
                     )
                     call.respond(ApiResponse(data = dto))
                 },
@@ -111,6 +116,11 @@ fun Route.settingsRoutes() {
                     settingsRepository.set(SettingsKeys.SSO_SITE_NAME, it)
                 }
 
+                // PDF Download options
+                request.enableSciHub?.let {
+                    settingsRepository.set("scihub.enabled", it.toString())
+                }
+
                 // Return updated settings
                 val allSettings = settingsRepository.getAll().getOrDefault(emptyMap())
                 val ssoToken = allSettings[SettingsKeys.SSO_ACCESS_TOKEN]
@@ -130,7 +140,8 @@ fun Route.settingsRoutes() {
                     },
                     ssoConfigured = ssoConfigured,
                     ssoTokenExpiresAt = ssoExpiry,
-                    ssoSiteName = allSettings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev"
+                    ssoSiteName = allSettings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev",
+                    enableSciHub = allSettings["scihub.enabled"]?.toBoolean() ?: false
                 )
                 call.respond(ApiResponse(data = dto))
             } catch (e: Exception) {

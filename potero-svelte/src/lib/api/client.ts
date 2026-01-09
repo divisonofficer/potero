@@ -599,6 +599,8 @@ export interface Settings {
 	ssoConfigured: boolean;
 	ssoTokenExpiresAt: number | null;
 	ssoSiteName: string;
+	// PDF Download options
+	enableSciHub?: boolean;
 }
 
 export interface ChatFileAttachment {

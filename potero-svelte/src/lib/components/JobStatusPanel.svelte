@@ -2,6 +2,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api/client';
 	import { jobRefreshTrigger } from '$lib/stores/jobs';
+	import { loadPapers } from '$lib/stores/library';
+	import { tabs, updateTabPaper } from '$lib/stores/tabs';
+	import { get } from 'svelte/store';
 
 	interface Job {
 		id: string;
@@ -19,6 +22,7 @@
 	}
 
 	let jobs = $state<Job[]>([]);
+	let previousJobs = $state<Job[]>([]);
 	let isExpanded = $state(false);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -61,7 +65,43 @@
 		// Fetch all jobs (including recently completed) so we can show them in the panel
 		const result = await api.request<Job[]>('GET', '/jobs?includeCompleted=true');
 		if (result.success && result.data) {
-			jobs = result.data;
+			const newJobs = result.data;
+
+			// Detect newly completed jobs
+			for (const newJob of newJobs) {
+				if (newJob.status === 'COMPLETED') {
+					const previousJob = previousJobs.find(j => j.id === newJob.id);
+
+					// If this job just completed (wasn't COMPLETED before)
+					if (!previousJob || previousJob.status !== 'COMPLETED') {
+						console.log(`[JobStatusPanel] Job ${newJob.id} completed, refreshing data...`);
+						await handleJobCompletion(newJob);
+					}
+				}
+			}
+
+			previousJobs = newJobs;
+			jobs = newJobs;
+		}
+	}
+
+	async function handleJobCompletion(job: Job) {
+		// Reload papers list
+		await loadPapers();
+
+		// If job is related to a specific paper, update open tabs
+		if (job.paperId) {
+			const currentTabs = get(tabs);
+			const paperTab = currentTabs.find(t => t.type === 'viewer' && t.paper?.id === job.paperId);
+
+			if (paperTab) {
+				// Get updated paper data
+				const updatedPaper = await api.getPaper(job.paperId);
+				if (updatedPaper.success && updatedPaper.data) {
+					updateTabPaper(paperTab.id, updatedPaper.data);
+					console.log(`[JobStatusPanel] Updated tab for paper: ${updatedPaper.data.title}`);
+				}
+			}
 		}
 	}
 

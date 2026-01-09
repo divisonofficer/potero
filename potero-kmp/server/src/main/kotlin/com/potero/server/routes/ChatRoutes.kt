@@ -61,6 +61,7 @@ private val chatMessages = ConcurrentHashMap<String, MutableList<ChatMessageDto>
 
 fun Route.chatRoutes() {
     val llmService = ServiceLocator.llmService
+    val llmLogger = ServiceLocator.llmLogger
     val paperRepository = ServiceLocator.paperRepository
 
     route("/chat") {
@@ -112,7 +113,11 @@ fun Route.chatRoutes() {
                 request.message
             }
 
+            // Get paper info for logging
+            val paper = request.paperId?.let { paperRepository.getById(it).getOrNull() }
+
             // Call LLM service (with files if provided)
+            val startTime = System.currentTimeMillis()
             val llmResult = if (request.files.isNotEmpty()) {
                 // Convert ChatFileAttachment to FileAttachment for LLM service
                 val fileAttachments = request.files.map { file ->
@@ -126,9 +131,22 @@ fun Route.chatRoutes() {
             } else {
                 llmService.chat(prompt)
             }
+            val endTime = System.currentTimeMillis()
 
             llmResult.fold(
                 onSuccess = { responseContent ->
+                    // Log LLM usage
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "chat",
+                        inputPrompt = prompt,
+                        outputResponse = responseContent,
+                        durationMs = endTime - startTime,
+                        success = true,
+                        paperId = request.paperId,
+                        paperTitle = paper?.title
+                    )
+
                     // Store assistant message
                     val assistantMessageId = UUID.randomUUID().toString()
                     val assistantMessage = ChatMessageDto(
@@ -136,7 +154,7 @@ fun Route.chatRoutes() {
                         sessionId = sessionId,
                         role = "assistant",
                         content = responseContent,
-                        model = "gpt", // Would be dynamic based on provider
+                        model = llmService.provider.name.lowercase(),
                         createdAt = System.currentTimeMillis()
                     )
                     chatMessages.getOrPut(sessionId) { mutableListOf() }.add(assistantMessage)
@@ -152,12 +170,25 @@ fun Route.chatRoutes() {
                         messageId = assistantMessageId,
                         sessionId = sessionId,
                         content = responseContent,
-                        model = "gpt"
+                        model = llmService.provider.name.lowercase()
                     )
 
                     call.respond(ApiResponse(data = response))
                 },
                 onFailure = { error ->
+                    // Log failed LLM usage
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "chat",
+                        inputPrompt = prompt,
+                        outputResponse = null,
+                        durationMs = endTime - startTime,
+                        success = false,
+                        errorMessage = error.message,
+                        paperId = request.paperId,
+                        paperTitle = paper?.title
+                    )
+
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         ApiResponse<ChatResponseDto>(

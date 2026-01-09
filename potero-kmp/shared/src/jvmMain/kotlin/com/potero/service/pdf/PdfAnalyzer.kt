@@ -157,8 +157,11 @@ class PdfAnalyzer(private val pdfPath: String) {
             var sectionHeader: String? = null
             val references = mutableListOf<ParsedReference>()
 
-            // Scan last 15 pages for References section (usually at the end)
-            val scanStart = maxOf(1, totalPages - 14)
+            // Scan last 30 pages for References section (usually at the end)
+            // Increased from 15 to 30 to handle longer papers
+            val scanStart = maxOf(1, totalPages - 29)
+
+            println("[PdfAnalyzer] Scanning pages $scanStart-$totalPages (total: $totalPages pages) for References section")
 
             // First pass: find References section header
             for (pageNum in scanStart..totalPages) {
@@ -175,12 +178,17 @@ class PdfAnalyzer(private val pdfPath: String) {
                         if (pattern.matches(line)) {
                             startPage = pageNum
                             sectionHeader = line
+                            println("[PdfAnalyzer] ✓ Found References header on page $pageNum: '$line'")
                             break
                         }
                     }
                     if (startPage != null) break
                 }
                 if (startPage != null) break
+            }
+
+            if (startPage == null) {
+                println("[PdfAnalyzer] ✗ References section not found. Checked pages $scanStart-$totalPages")
             }
 
             // Second pass: parse references from the detected section

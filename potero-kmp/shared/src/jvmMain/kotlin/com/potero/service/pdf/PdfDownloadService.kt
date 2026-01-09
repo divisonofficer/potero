@@ -2,6 +2,8 @@ package com.potero.service.pdf
 
 import com.potero.domain.model.Paper
 import com.potero.service.metadata.SemanticScholarResolver
+import com.potero.service.metadata.UnpaywallResolver
+import com.potero.service.metadata.SciHubResolver
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -11,14 +13,18 @@ import java.io.File
 /**
  * Service for downloading PDF files from various sources
  *
- * Tries multiple strategies in order:
- * 1. Semantic Scholar API (openAccessPdf)
- * 2. arXiv direct download (if arxivId present)
- * 3. Direct URL download (if provided)
+ * Priority order:
+ * 1. arXiv (most reliable)
+ * 2. Direct URL from search
+ * 3. Unpaywall (legal open access)
+ * 4. Semantic Scholar
+ * 5. Sci-Hub (if enabled)
  */
 class PdfDownloadService(
     private val httpClient: HttpClient,
-    private val semanticScholarResolver: SemanticScholarResolver
+    private val semanticScholarResolver: SemanticScholarResolver,
+    private val unpaywallResolver: UnpaywallResolver? = null,
+    private val sciHubResolver: SciHubResolver? = null
 ) {
 
     companion object {
@@ -28,6 +34,12 @@ class PdfDownloadService(
 
     /**
      * Try to download PDF from multiple sources
+     *
+     * Priority order:
+     * 1. arXiv (most reliable for CS papers)
+     * 2. Direct URL (if provided from search results)
+     * 3. Semantic Scholar openAccessPdf
+     * 4. DOI redirect (least reliable - often paywalled)
      *
      * @param paper The paper to download PDF for
      * @param directUrl Optional direct PDF URL to try first
@@ -41,46 +53,92 @@ class PdfDownloadService(
         val paperId = paper.id
         val fileName = sanitizeFileName(paper.title)
 
-        // Try 0: Direct URL if provided
-        if (directUrl != null) {
-            try {
-                return@runCatching downloadFromUrl(directUrl, paperId, fileName)
-            } catch (e: Exception) {
-                println("[PdfDownload] Direct URL failed: ${e.message}")
-            }
-        }
+        val errors = mutableListOf<String>()
 
-        // Try 1: Semantic Scholar API
-        val pdfUrl = trySemanticScholar(paper.title, paper.authors.map { it.name })
-        if (pdfUrl != null) {
-            try {
-                return@runCatching downloadFromUrl(pdfUrl, paperId, fileName)
-            } catch (e: Exception) {
-                println("[PdfDownload] Semantic Scholar URL failed: ${e.message}")
-            }
-        }
-
-        // Try 2: arXiv direct download
+        // Try 1: arXiv first (most reliable for CS papers)
         if (paper.arxivId != null) {
             try {
                 val arxivUrl = buildArxivPdfUrl(paper.arxivId)
+                println("[PdfDownload] Trying arXiv: $arxivUrl")
                 return@runCatching downloadFromUrl(arxivUrl, paperId, fileName)
             } catch (e: Exception) {
-                println("[PdfDownload] arXiv download failed: ${e.message}")
+                val error = "arXiv failed: ${e.message}"
+                println("[PdfDownload] $error")
+                errors.add(error)
             }
         }
 
-        // Try 3: DOI redirect (may not always work)
-        if (paper.doi != null) {
+        // Try 2: Direct URL if provided (from search results)
+        if (directUrl != null) {
             try {
-                val doiUrl = "https://doi.org/${paper.doi}"
-                return@runCatching downloadFromUrl(doiUrl, paperId, fileName)
+                println("[PdfDownload] Trying direct URL: $directUrl")
+                return@runCatching downloadFromUrl(directUrl, paperId, fileName)
             } catch (e: Exception) {
-                println("[PdfDownload] DOI redirect failed: ${e.message}")
+                val error = "Direct URL failed: ${e.message}"
+                println("[PdfDownload] $error")
+                errors.add(error)
             }
         }
 
-        throw PdfDownloadException("No PDF source found for paper: ${paper.title}")
+        // Try 3: Unpaywall (legal open access finder)
+        if (unpaywallResolver != null && paper.doi != null) {
+            val unpaywallUrl = unpaywallResolver.findOpenAccessPdf(paper.doi)
+            if (unpaywallUrl != null) {
+                try {
+                    println("[PdfDownload] Trying Unpaywall: $unpaywallUrl")
+                    return@runCatching downloadFromUrl(unpaywallUrl, paperId, fileName)
+                } catch (e: Exception) {
+                    val error = "Unpaywall failed: ${e.message}"
+                    println("[PdfDownload] $error")
+                    errors.add(error)
+                }
+            }
+        }
+
+        // Try 4: Semantic Scholar API
+        val ssUrl = trySemanticScholar(paper.title, paper.authors.map { it.name })
+        if (!ssUrl.isNullOrBlank()) {
+            try {
+                println("[PdfDownload] Trying Semantic Scholar: $ssUrl")
+                return@runCatching downloadFromUrl(ssUrl, paperId, fileName)
+            } catch (e: Exception) {
+                val error = "Semantic Scholar failed: ${e.message}"
+                println("[PdfDownload] $error")
+                errors.add(error)
+            }
+        } else {
+            println("[PdfDownload] Semantic Scholar returned no PDF URL")
+        }
+
+        // Try 5: Sci-Hub (if enabled - legal gray area)
+        if (sciHubResolver != null && paper.doi != null) {
+            val sciHubUrl = sciHubResolver.findPdf(paper.doi)
+            if (sciHubUrl != null) {
+                try {
+                    println("[PdfDownload] Trying Sci-Hub: $sciHubUrl")
+                    return@runCatching downloadFromUrl(sciHubUrl, paperId, fileName)
+                } catch (e: Exception) {
+                    val error = "Sci-Hub failed: ${e.message}"
+                    println("[PdfDownload] $error")
+                    errors.add(error)
+                }
+            }
+        }
+
+        val errorMessage = if (errors.isEmpty()) {
+            "No open access PDF found. This paper may be behind a paywall.\n" +
+            "Sources tried: ${listOfNotNull(
+                paper.arxivId?.let { "arXiv" },
+                directUrl?.let { "Direct URL" },
+                if (unpaywallResolver != null && paper.doi != null) "Unpaywall" else null,
+                "Semantic Scholar",
+                if (sciHubResolver != null && paper.doi != null) "Sci-Hub" else null
+            ).joinToString(", ")}"
+        } else {
+            "Failed to download PDF:\n" + errors.joinToString("\n")
+        }
+
+        throw PdfDownloadException(errorMessage)
     }
 
     /**
