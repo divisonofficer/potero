@@ -37,6 +37,7 @@ import com.potero.service.grobid.DisabledGrobidEngine
 import com.potero.service.pdf.PdfDownloadService
 import com.potero.service.metadata.UnpaywallResolver
 import com.potero.service.metadata.SciHubResolver
+import com.potero.service.metadata.CVFOpenAccessResolver
 import io.ktor.client.HttpClient
 
 /**
@@ -202,6 +203,10 @@ object ServiceLocator {
         )
     }
 
+    val cvfOpenAccessResolver: CVFOpenAccessResolver by lazy {
+        CVFOpenAccessResolver(httpClient = httpClient)
+    }
+
     val sciHubResolver: SciHubResolver by lazy {
         SciHubResolver(
             httpClient = httpClient,
@@ -216,6 +221,7 @@ object ServiceLocator {
         PdfDownloadService(
             httpClient = httpClient,
             semanticScholarResolver = semanticScholarResolver,
+            cvfResolver = cvfOpenAccessResolver,
             unpaywallResolver = unpaywallResolver,
             sciHubResolver = sciHubResolver
         )

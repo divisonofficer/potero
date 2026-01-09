@@ -4,6 +4,7 @@ import com.potero.domain.model.Paper
 import com.potero.service.metadata.SemanticScholarResolver
 import com.potero.service.metadata.UnpaywallResolver
 import com.potero.service.metadata.SciHubResolver
+import com.potero.service.metadata.CVFOpenAccessResolver
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -14,15 +15,17 @@ import java.io.File
  * Service for downloading PDF files from various sources
  *
  * Priority order:
- * 1. arXiv (most reliable)
- * 2. Direct URL from search
- * 3. Unpaywall (legal open access)
- * 4. Semantic Scholar
- * 5. Sci-Hub (if enabled)
+ * 1. arXiv (most reliable for CS papers)
+ * 2. CVF Open Access (CVPR, ICCV, WACV, ECCV)
+ * 3. Direct URL from search
+ * 4. Unpaywall (legal open access)
+ * 5. Semantic Scholar
+ * 6. Sci-Hub (if enabled)
  */
 class PdfDownloadService(
     private val httpClient: HttpClient,
     private val semanticScholarResolver: SemanticScholarResolver,
+    private val cvfResolver: CVFOpenAccessResolver,
     private val unpaywallResolver: UnpaywallResolver? = null,
     private val sciHubResolver: SciHubResolver? = null
 ) {
@@ -68,7 +71,28 @@ class PdfDownloadService(
             }
         }
 
-        // Try 2: Direct URL if provided (from search results)
+        // Try 2: CVF Open Access (CVPR, ICCV, WACV, ECCV)
+        if (cvfResolver.isCVFConference(paper.conference)) {
+            val cvfUrl = cvfResolver.findPdf(
+                title = paper.title,
+                year = paper.year,
+                venue = paper.conference,
+                doi = paper.doi,
+                authors = paper.authors.map { it.name }
+            )
+            if (cvfUrl != null) {
+                try {
+                    println("[PdfDownload] Trying CVF Open Access: $cvfUrl")
+                    return@runCatching downloadFromUrl(cvfUrl, paperId, fileName)
+                } catch (e: Exception) {
+                    val error = "CVF Open Access failed: ${e.message}"
+                    println("[PdfDownload] $error")
+                    errors.add(error)
+                }
+            }
+        }
+
+        // Try 3: Direct URL if provided (from search results)
         if (directUrl != null) {
             try {
                 println("[PdfDownload] Trying direct URL: $directUrl")
@@ -80,7 +104,7 @@ class PdfDownloadService(
             }
         }
 
-        // Try 3: Unpaywall (legal open access finder)
+        // Try 4: Unpaywall (legal open access finder)
         if (unpaywallResolver != null && paper.doi != null) {
             val unpaywallUrl = unpaywallResolver.findOpenAccessPdf(paper.doi)
             if (unpaywallUrl != null) {
@@ -95,7 +119,7 @@ class PdfDownloadService(
             }
         }
 
-        // Try 4: Semantic Scholar API
+        // Try 5: Semantic Scholar API
         val ssUrl = trySemanticScholar(paper.title, paper.authors.map { it.name })
         if (!ssUrl.isNullOrBlank()) {
             try {
@@ -110,7 +134,7 @@ class PdfDownloadService(
             println("[PdfDownload] Semantic Scholar returned no PDF URL")
         }
 
-        // Try 5: Sci-Hub (if enabled - legal gray area)
+        // Try 6: Sci-Hub (if enabled - legal gray area)
         if (sciHubResolver != null && paper.doi != null) {
             val sciHubUrl = sciHubResolver.findPdf(paper.doi)
             if (sciHubUrl != null) {
