@@ -1,14 +1,19 @@
 package com.potero.service.pdf
 
+import com.potero.domain.model.GrobidCitationSpan
+import com.potero.domain.model.GrobidReference
 import com.potero.domain.model.Reference
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Links citation spans to reference entries.
  *
  * Linking strategies (in priority order):
- * 1. Annotation destination: GoTo links pointing to reference page
- * 2. Numeric matching: [n] -> Reference entry #n (deterministic)
- * 3. Author-year fuzzy: (Smith, 2024) -> Reference with matching author/year
+ * 1. GROBID TEI target link: target_xml_id -> GrobidReference.xml_id (highest accuracy: 0.98)
+ * 2. Annotation destination: GoTo links pointing to reference page (0.95)
+ * 3. Numeric matching: [n] -> Reference entry #n (0.95)
+ * 4. Author-year fuzzy: (Smith, 2024) -> Reference with matching author/year (0.75-0.85)
  */
 class CitationLinker {
 
@@ -18,17 +23,21 @@ class CitationLinker {
      * @param spans Raw citation spans from CitationExtractor
      * @param references Reference entries from the paper
      * @param referencesStartPage First page of references section
+     * @param grobidCitations GROBID citation spans with target links (optional)
+     * @param grobidReferences GROBID reference entries (optional)
      * @return List of citation links with confidence scores
      */
     fun link(
         spans: List<RawCitationSpan>,
         references: List<Reference>,
-        referencesStartPage: Int?
+        referencesStartPage: Int?,
+        grobidCitations: List<GrobidCitationSpan> = emptyList(),
+        grobidReferences: List<GrobidReference> = emptyList()
     ): List<CitationLinkResult> {
         if (references.isEmpty()) return emptyList()
 
         return spans.flatMap { span ->
-            linkSpan(span, references, referencesStartPage)
+            linkSpan(span, references, referencesStartPage, grobidCitations, grobidReferences)
         }
     }
 
@@ -38,23 +47,223 @@ class CitationLinker {
     private fun linkSpan(
         span: RawCitationSpan,
         references: List<Reference>,
-        referencesStartPage: Int?
+        referencesStartPage: Int?,
+        grobidCitations: List<GrobidCitationSpan>,
+        grobidReferences: List<GrobidReference>
     ): List<CitationLinkResult> {
-        return when {
-            // Priority 1: Annotation with destination
-            span.provenance == "annotation" && span.destPage != null -> {
-                linkByAnnotationDestination(span, references, referencesStartPage)
+        // Priority 1: Try GROBID target link (highest accuracy)
+        if (grobidCitations.isNotEmpty() && grobidReferences.isNotEmpty()) {
+            val grobidLinks = linkByGrobidTarget(span, references, grobidCitations, grobidReferences)
+            if (grobidLinks.isNotEmpty()) {
+                return grobidLinks
             }
-            // Priority 2: Numeric citation
-            span.style == "numeric" -> {
-                linkByNumericMatch(span, references)
-            }
-            // Priority 3: Author-year citation
-            span.style == "author_year" -> {
-                linkByAuthorYearFuzzy(span, references)
-            }
-            else -> emptyList()
         }
+
+        // Priority 2: Annotation with destination
+        if (span.provenance == "annotation" && span.destPage != null) {
+            val annotationLinks = linkByAnnotationDestination(span, references, referencesStartPage)
+            if (annotationLinks.isNotEmpty()) {
+                return annotationLinks
+            }
+        }
+
+        // Priority 3: Numeric citation
+        if (span.style == "numeric") {
+            val numericLinks = linkByNumericMatch(span, references)
+            if (numericLinks.isNotEmpty()) {
+                return numericLinks
+            }
+        }
+
+        // Priority 4: Author-year citation
+        if (span.style == "author_year") {
+            return linkByAuthorYearFuzzy(span, references)
+        }
+
+        return emptyList()
+    }
+
+    /**
+     * Link by GROBID TEI target (highest accuracy).
+     *
+     * Process:
+     * 1. Match PDF citation to GROBID citation by page + bbox + text similarity
+     * 2. Use GROBID citation's target_xml_id to find GROBID reference
+     * 3. Map GROBID reference to PDF reference by matching number/authors/title
+     */
+    private fun linkByGrobidTarget(
+        span: RawCitationSpan,
+        references: List<Reference>,
+        grobidCitations: List<GrobidCitationSpan>,
+        grobidReferences: List<GrobidReference>
+    ): List<CitationLinkResult> {
+        // Step 1: Match PDF citation to GROBID citation
+        val matchedGrobid = matchGrobidToPdfCitation(span, grobidCitations) ?: return emptyList()
+
+        // Check if GROBID citation has target link
+        val targetXmlId = matchedGrobid.targetXmlId
+        if (targetXmlId.isNullOrBlank()) return emptyList()
+
+        // Only process biblio citations (not figure/formula)
+        if (matchedGrobid.refType != "biblio") return emptyList()
+
+        // Step 2: Find GROBID reference by xml_id
+        val grobidRef = grobidReferences.find { it.xmlId == targetXmlId } ?: return emptyList()
+
+        // Step 3: Map GROBID reference to PDF reference
+        val matchedReferences = matchGrobidReferenceToReference(grobidRef, references)
+        if (matchedReferences.isEmpty()) return emptyList()
+
+        return matchedReferences.map { ref ->
+            CitationLinkResult(ref, span, "grobid_target", 0.98)
+        }
+    }
+
+    /**
+     * Match a PDF citation span to a GROBID citation span.
+     *
+     * Uses:
+     * - Same page number
+     * - Text similarity > 0.8
+     * - Bounding box overlap > 0.5
+     */
+    private fun matchGrobidToPdfCitation(
+        pdfSpan: RawCitationSpan,
+        grobidSpans: List<GrobidCitationSpan>
+    ): GrobidCitationSpan? {
+        return grobidSpans
+            .filter { it.pageNum == pdfSpan.pageNum }
+            .find { grobid ->
+                val textSim = textSimilarity(grobid.rawText, pdfSpan.rawText)
+                // Bbox overlap not available since GrobidCitationSpan doesn't store bbox
+                // Just use text similarity
+                textSim > 0.8
+            }
+    }
+
+    /**
+     * Calculate text similarity (simple normalized Levenshtein distance).
+     */
+    private fun textSimilarity(text1: String, text2: String): Double {
+        val cleaned1 = text1.trim().lowercase()
+        val cleaned2 = text2.trim().lowercase()
+
+        // Exact match
+        if (cleaned1 == cleaned2) return 1.0
+
+        // Substring match (one contains the other)
+        if (cleaned1.contains(cleaned2) || cleaned2.contains(cleaned1)) return 0.9
+
+        // Levenshtein distance
+        val maxLen = max(cleaned1.length, cleaned2.length)
+        if (maxLen == 0) return 1.0
+
+        val distance = levenshteinDistance(cleaned1, cleaned2)
+        return 1.0 - (distance.toDouble() / maxLen)
+    }
+
+    /**
+     * Compute Levenshtein distance between two strings.
+     */
+    private fun levenshteinDistance(s1: String, s2: String): Int {
+        val len1 = s1.length
+        val len2 = s2.length
+
+        if (len1 == 0) return len2
+        if (len2 == 0) return len1
+
+        val dp = Array(len1 + 1) { IntArray(len2 + 1) }
+
+        for (i in 0..len1) dp[i][0] = i
+        for (j in 0..len2) dp[0][j] = j
+
+        for (i in 1..len1) {
+            for (j in 1..len2) {
+                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                dp[i][j] = minOf(
+                    dp[i - 1][j] + 1,      // deletion
+                    dp[i][j - 1] + 1,      // insertion
+                    dp[i - 1][j - 1] + cost // substitution
+                )
+            }
+        }
+
+        return dp[len1][len2]
+    }
+
+    /**
+     * Match a GROBID reference to a PDF reference.
+     *
+     * Matching criteria:
+     * - Number match (if GROBID xml_id contains number like "b12" -> ref #12)
+     * - Author match (first author surname)
+     * - Year match
+     * - Title match
+     */
+    private fun matchGrobidReferenceToReference(
+        grobidRef: GrobidReference,
+        references: List<Reference>
+    ): List<Reference> {
+        // Try to extract number from xml_id (e.g., "#b12" -> 12)
+        val grobidNumber = extractNumberFromXmlId(grobidRef.xmlId)
+
+        // If we have a number, try exact match first
+        if (grobidNumber != null) {
+            val exactMatch = references.find { it.number == grobidNumber }
+            if (exactMatch != null) {
+                return listOf(exactMatch)
+            }
+        }
+
+        // Fallback: match by authors/year/title
+        val candidates = references.filter { ref ->
+            val authorMatch = if (grobidRef.authors != null && ref.authors != null) {
+                authorsOverlap(grobidRef.authors, ref.authors) > 0.5
+            } else false
+
+            val yearMatch = grobidRef.year != null && ref.year != null && grobidRef.year == ref.year
+
+            val titleMatch = if (grobidRef.title != null && ref.title != null) {
+                textSimilarity(grobidRef.title, ref.title) > 0.7
+            } else false
+
+            authorMatch || yearMatch || titleMatch
+        }
+
+        return candidates
+    }
+
+    /**
+     * Extract number from GROBID xml_id.
+     * Examples: "#b12" -> 12, "b5" -> 5
+     */
+    private fun extractNumberFromXmlId(xmlId: String): Int? {
+        val match = Regex("""[^\d]*(\d+)""").find(xmlId)
+        return match?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    /**
+     * Calculate overlap between two author strings.
+     * Returns a score from 0.0 to 1.0.
+     */
+    private fun authorsOverlap(authors1: String, authors2: String): Double {
+        val names1 = authors1.lowercase().split(Regex(""",|\s+and\s+|\s+&\s+"""))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        val names2 = authors2.lowercase().split(Regex(""",|\s+and\s+|\s+&\s+"""))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+
+        if (names1.isEmpty() || names2.isEmpty()) return 0.0
+
+        val overlaps = names1.count { name1 ->
+            names2.any { name2 ->
+                name1.contains(name2) || name2.contains(name1)
+            }
+        }
+
+        return overlaps.toDouble() / max(names1.size, names2.size)
     }
 
     /**

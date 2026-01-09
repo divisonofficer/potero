@@ -8,6 +8,9 @@ import io.ktor.http.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -555,6 +558,26 @@ fun Route.paperRoutes() {
                 if (generatedPath != null) {
                     updatedPaper = updatedPaper.copy(thumbnailPath = generatedPath)
                     repository.update(updatedPaper)
+                }
+
+                // Launch background job for GROBID processing (non-blocking)
+                @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+                GlobalScope.launch(Dispatchers.IO) {
+                    try {
+                        println("[Background] Starting GROBID processing for paper: $paperId")
+                        val grobidProcessor = ServiceLocator.grobidProcessor
+                        val result = grobidProcessor.process(paperId, pdfPath)
+                        if (result.isSuccess) {
+                            val stats = result.getOrNull()
+                            println("[Background] GROBID processing completed for paper: $paperId")
+                            println("[Background] Stats: ${stats?.citationSpansExtracted} citations, ${stats?.referencesExtracted} references (${stats?.processingTimeMs}ms)")
+                        } else {
+                            val error = result.exceptionOrNull()
+                            println("[Background] GROBID processing failed for paper $paperId: ${error?.message}")
+                        }
+                    } catch (e: Exception) {
+                        println("[Background] GROBID processing error for paper $paperId: ${e.message}")
+                    }
                 }
 
                 call.respond(

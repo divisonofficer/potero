@@ -221,3 +221,47 @@ data class CitationExtractionStats(
     val linkedCount: Int,
     val avgConfidence: Double
 )
+
+/**
+ * GROBID Citation Span - extracted from TEI XML.
+ * Contains GROBID-specific fields like xml_id and target_xml_id for high-quality linking.
+ */
+@Serializable
+data class GrobidCitationSpan(
+    val id: String,
+    val paperId: String,
+    val pageNum: Int,
+    val rawText: String,
+    val xmlId: String? = null,
+    val refType: String,  // 'biblio', 'figure', 'formula'
+    val targetXmlId: String? = null,  // Links to GrobidReference.xmlId
+    val confidence: Double = 0.95,
+    val createdAt: Instant
+)
+
+/**
+ * GROBID Reference - bibliography entry extracted from TEI XML.
+ * Contains raw TEI XML and structured metadata.
+ */
+@Serializable
+data class GrobidReference(
+    val id: String,
+    val paperId: String,
+    val xmlId: String,  // e.g., "#b12"
+    val rawTei: String? = null,  // Full <biblStruct> XML
+    val authors: String? = null,
+    val title: String? = null,
+    val venue: String? = null,
+    val year: Int? = null,
+    val doi: String? = null,
+    val arxivId: String? = null,
+    val pageNum: Int? = null,
+    val confidence: Double = 0.95,
+    val createdAt: Instant
+) {
+    /**
+     * Get a search query for looking up this reference
+     */
+    val searchQuery: String
+        get() = title ?: authors ?: rawTei?.take(100) ?: ""
+}

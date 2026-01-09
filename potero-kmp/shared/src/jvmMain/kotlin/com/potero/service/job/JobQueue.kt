@@ -188,6 +188,17 @@ class JobQueue(
         .sortedByDescending { it.createdAt }
 
     /**
+     * Check if there is an active job for a specific paper and type
+     */
+    fun hasActiveJobForPaper(paperId: String, type: JobType): Boolean {
+        return jobs.values.any {
+            it.paperId == paperId &&
+            it.type == type &&
+            (it.status == JobStatus.PENDING || it.status == JobStatus.RUNNING)
+        }
+    }
+
+    /**
      * Get job by ID
      */
     fun getJob(jobId: String): Job? = jobs[jobId]

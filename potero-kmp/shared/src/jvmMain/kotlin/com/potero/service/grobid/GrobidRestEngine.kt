@@ -1,6 +1,7 @@
 package com.potero.service.grobid
 
 import io.ktor.client.*
+import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
@@ -73,6 +74,15 @@ class GrobidRestEngine(
 
                 val serverUrl = GrobidProcessManager.getServerUrl()
                 val response = httpClient.post("$serverUrl/api/processFulltextDocument") {
+                    // Accept TEI XML response
+                    header(HttpHeaders.Accept, "application/xml")
+
+                    // GROBID PDF processing can take 2-3 minutes for large/complex PDFs
+                    timeout {
+                        requestTimeoutMillis = 180_000  // 3 minutes
+                        socketTimeoutMillis = 180_000   // 3 minutes
+                    }
+
                     setBody(
                         MultiPartFormDataContent(
                             formData {
@@ -84,14 +94,34 @@ class GrobidRestEngine(
                                 append("consolidateCitations", "1")
                                 append("includeRawCitations", "1")
                                 append("includeRawAffiliations", "0")
-                                append("teiCoordinates", "persName,figure,ref,biblStruct,formula")
+                                // Use multi-append for teiCoordinates (more reliable than comma-separated)
+                                listOf("persName", "figure", "ref", "biblStruct", "formula").forEach {
+                                    append("teiCoordinates", it)
+                                }
                             }
                         )
                     )
                 }
 
                 if (!response.status.isSuccess()) {
-                    throw GrobidException("GROBID API error: ${response.status}")
+                    val errorBody = try {
+                        response.bodyAsText()
+                    } catch (e: Exception) {
+                        "Unable to read error body: ${e.message}"
+                    }
+                    println("[GROBID REST] Error response (${response.status}): $errorBody")
+
+                    // Provide user-friendly error message
+                    val friendlyMessage = when {
+                        errorBody.contains("BAD_INPUT_DATA") ->
+                            "PDF format not supported by GROBID (will use direct PDF extraction instead)"
+                        errorBody.contains("timeout") || errorBody.contains("TIMEOUT") ->
+                            "GROBID processing timeout (PDF may be too large or complex)"
+                        else ->
+                            "GROBID API error: ${response.status}"
+                    }
+
+                    throw GrobidException(friendlyMessage)
                 }
 
                 val teiXml = response.bodyAsText()
@@ -137,7 +167,24 @@ class GrobidRestEngine(
                 }
 
                 if (!response.status.isSuccess()) {
-                    throw GrobidException("GROBID API error: ${response.status}")
+                    val errorBody = try {
+                        response.bodyAsText()
+                    } catch (e: Exception) {
+                        "Unable to read error body: ${e.message}"
+                    }
+                    println("[GROBID REST] Error response (${response.status}): $errorBody")
+
+                    // Provide user-friendly error message
+                    val friendlyMessage = when {
+                        errorBody.contains("BAD_INPUT_DATA") ->
+                            "PDF format not supported by GROBID (will use direct PDF extraction instead)"
+                        errorBody.contains("timeout") || errorBody.contains("TIMEOUT") ->
+                            "GROBID processing timeout (PDF may be too large or complex)"
+                        else ->
+                            "GROBID API error: ${response.status}"
+                    }
+
+                    throw GrobidException(friendlyMessage)
                 }
 
                 val teiXml = response.bodyAsText()

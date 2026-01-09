@@ -492,8 +492,20 @@ fun Route.uploadRoutes() {
                 return@post
             }
 
-            // Submit async job
+            // Check if there's already an active re-analysis job for this paper
             val jobQueue = GlobalJobQueue.instance
+            if (jobQueue.hasActiveJobForPaper(paperId, JobType.PDF_REANALYSIS)) {
+                call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiResponse<ReanalyzeJobResponse>(
+                        success = false,
+                        error = "A re-analysis job is already running for this paper"
+                    )
+                )
+                return@post
+            }
+
+            // Submit async job
             val job = jobQueue.submitJob(
                 type = JobType.PDF_REANALYSIS,
                 title = "Re-analyzing: ${existingPaper.title.take(50)}...",
@@ -690,7 +702,116 @@ fun Route.uploadRoutes() {
                     // Continue even if references fail
                 }
 
-                // Step 6: Comprehensive LLM analysis (title, authors, tags, metadata)
+                // Step 6: GROBID processing and citation extraction
+                ctx.updateProgress(88, "Processing citations with GROBID...")
+
+                var citationsCount = 0
+                try {
+                    // Run GROBID processing
+                    val grobidProcessor = ServiceLocator.grobidProcessor
+                    val grobidResult = grobidProcessor.process(paperId, pdfFile.absolutePath)
+
+                    if (grobidResult.isSuccess) {
+                        val stats = grobidResult.getOrNull()
+                        println("[Re-analysis] GROBID processing completed: ${stats?.citationSpansExtracted} citations, ${stats?.referencesExtracted} references")
+
+                        // Extract citations from PDF and link to references
+                        ctx.updateProgress(90, "Extracting and linking citations...")
+
+                        val citationRepository = ServiceLocator.citationRepository
+                        val grobidRepository = ServiceLocator.grobidRepository
+                        val referenceRepository = ServiceLocator.referenceRepository
+
+                        // Get GROBID data
+                        val grobidCitations = grobidRepository.getCitationSpansByPaperId(paperId).getOrDefault(emptyList())
+                        val grobidReferences = grobidRepository.getReferencesByPaperId(paperId).getOrDefault(emptyList())
+
+                        // Get references for linking
+                        val references = referenceRepository.getByPaperId(paperId).getOrDefault(emptyList())
+
+                        if (references.isNotEmpty()) {
+                            // Extract citations from PDF
+                            val extractor = com.potero.service.pdf.CitationExtractor(pdfFile.absolutePath)
+                            val extractionResult = extractor.extract()
+
+                            // Link citations to references with GROBID enhancement
+                            val linker = com.potero.service.pdf.CitationLinker()
+                            val linkResults = linker.link(
+                                extractionResult.spans,
+                                references,
+                                referencesStartPage,
+                                grobidCitations = grobidCitations,
+                                grobidReferences = grobidReferences
+                            )
+
+                            // Delete existing citation data
+                            citationRepository.deleteSpansByPaperId(paperId)
+
+                            // Save citation spans
+                            val citNow = Clock.System.now()
+                            val citationSpans = extractionResult.spans.map { raw ->
+                                com.potero.domain.model.CitationSpan(
+                                    id = UUID.randomUUID().toString(),
+                                    paperId = paperId,
+                                    pageNum = raw.pageNum,
+                                    bbox = com.potero.domain.model.BoundingBox(
+                                        x1 = raw.bbox.x1,
+                                        y1 = raw.bbox.y1,
+                                        x2 = raw.bbox.x2,
+                                        y2 = raw.bbox.y2
+                                    ),
+                                    rawText = raw.rawText,
+                                    style = when (raw.style) {
+                                        "numeric" -> com.potero.domain.model.CitationStyle.NUMERIC
+                                        "author_year" -> com.potero.domain.model.CitationStyle.AUTHOR_YEAR
+                                        else -> com.potero.domain.model.CitationStyle.UNKNOWN
+                                    },
+                                    provenance = if (raw.provenance == "annotation")
+                                        com.potero.domain.model.CitationProvenance.ANNOTATION
+                                    else
+                                        com.potero.domain.model.CitationProvenance.PATTERN,
+                                    confidence = raw.confidence,
+                                    destPage = raw.destPage,
+                                    destY = raw.destY,
+                                    createdAt = citNow
+                                )
+                            }
+
+                            if (citationSpans.isNotEmpty()) {
+                                citationRepository.insertAllSpans(citationSpans)
+                            }
+
+                            // Save citation links
+                            val rawToSavedMap = extractionResult.spans.zip(citationSpans).toMap()
+                            val citationLinks = linkResults.mapNotNull { linkResult ->
+                                val savedSpan = rawToSavedMap[linkResult.span] ?: return@mapNotNull null
+                                com.potero.domain.model.CitationLink(
+                                    id = UUID.randomUUID().toString(),
+                                    citationSpanId = savedSpan.id,
+                                    referenceId = linkResult.reference.id,
+                                    linkMethod = linkResult.method,
+                                    confidence = linkResult.confidence,
+                                    createdAt = citNow
+                                )
+                            }
+
+                            if (citationLinks.isNotEmpty()) {
+                                citationRepository.insertAllLinks(citationLinks)
+                            }
+
+                            citationsCount = citationSpans.size
+                            println("[Re-analysis] Extracted ${citationSpans.size} citations with ${citationLinks.size} links")
+                        }
+                    } else {
+                        println("[Re-analysis] GROBID processing failed: ${grobidResult.exceptionOrNull()?.message}")
+                    }
+                } catch (e: Exception) {
+                    println("[Re-analysis] Citation extraction failed: ${e.message}")
+                    e.printStackTrace()
+                    // Continue even if citation extraction fails
+                }
+
+                // Step 7: Comprehensive LLM analysis (title, authors, tags, metadata)
                 ctx.updateProgress(92, "Analyzing with LLM (comprehensive)...")
 
                 var autoTaggedCount = 0
@@ -739,8 +860,30 @@ fun Route.uploadRoutes() {
                         println("[Re-analysis] LLM cleaned title: '${llmAnalysis.cleanedTitle}'")
                         println("[Re-analysis] Titles equal? ${llmAnalysis.cleanedTitle == updatedPaper.title}")
 
+                        // Check if paper has DOI (authoritative metadata source)
+                        val hasAuthoritativeMetadata = !updatedPaper.doi.isNullOrBlank()
+
+                        // Even if DOI exists, check if current metadata is actually correct
+                        // by comparing title similarity
+                        val titleSimilarity = calculateTitleSimilarity(updatedPaper.title, llmAnalysis.cleanedTitle)
+                        println("[Re-analysis] Title similarity: ${"%.2f".format(titleSimilarity)}")
+
+                        // If DOI exists but titles are completely different (< 0.3 similarity),
+                        // it means wrong metadata was entered → use LLM result
+                        val shouldPreserveMetadata = hasAuthoritativeMetadata && titleSimilarity >= 0.3
+
+                        if (hasAuthoritativeMetadata) {
+                            println("[Re-analysis] Paper has DOI: ${updatedPaper.doi}")
+                            if (shouldPreserveMetadata) {
+                                println("[Re-analysis] Titles are similar - preserving authoritative metadata")
+                            } else {
+                                println("[Re-analysis] Titles are completely different - current metadata is WRONG, using LLM result")
+                            }
+                        }
+
                         // Update title if cleaned version is different
-                        if (llmAnalysis.cleanedTitle != updatedPaper.title) {
+                        // Allow update if: no DOI OR (has DOI but titles are completely different)
+                        if (!shouldPreserveMetadata && llmAnalysis.cleanedTitle != updatedPaper.title) {
                             finalPaper = finalPaper.copy(
                                 title = llmAnalysis.cleanedTitle,
                                 updatedAt = Clock.System.now()
@@ -749,7 +892,27 @@ fun Route.uploadRoutes() {
                         }
 
                         // Update authors if cleaned
-                        if (llmAnalysis.cleanedAuthors != updatedPaper.authors.map { it.name }) {
+                        // Check if current authors are malformed:
+                        // 1. All names concatenated into one (length > 50)
+                        // 2. Names contain separators like semicolon or " and "
+                        // 3. Author count doesn't match LLM result
+                        val hasCorruptedAuthors = updatedPaper.authors.any { author ->
+                            author.name.length > 50 ||
+                            author.name.contains(";") ||
+                            author.name.contains(" and ", ignoreCase = true)
+                        } || (updatedPaper.authors.size == 1 && llmAnalysis.cleanedAuthors.size > 1)
+
+                        println("[Re-analysis] Current authors: ${updatedPaper.authors.map { it.name }}")
+                        println("[Re-analysis] LLM authors: ${llmAnalysis.cleanedAuthors}")
+                        println("[Re-analysis] hasCorruptedAuthors: $hasCorruptedAuthors")
+
+                        // Allow update if: no DOI OR (has DOI but titles are completely different) OR authors are corrupted
+                        val shouldUpdateAuthors = !shouldPreserveMetadata || hasCorruptedAuthors
+
+                        if (shouldUpdateAuthors && llmAnalysis.cleanedAuthors != updatedPaper.authors.map { it.name }) {
+                            if (hasCorruptedAuthors) {
+                                println("[Re-analysis] Detected corrupted authors - fixing with LLM data")
+                            }
                             finalPaper = finalPaper.copy(
                                 authors = llmAnalysis.cleanedAuthors.mapIndexed { index: Int, name: String ->
                                     Author(id = UUID.randomUUID().toString(), name = name, order = index)
@@ -1776,3 +1939,32 @@ data class BulkReanalyzePaperPreview(
     val title: String,
     val missingFields: List<String>
 )
+
+/**
+ * Calculate similarity between two titles based on common words.
+ * Returns a value between 0.0 (completely different) and 1.0 (identical).
+ *
+ * Examples:
+ * - "Monte-Carlo 시뮬레이션..." vs "Differentiable Mobile..." → ~0.0
+ * - "Pixel-aligned RGB-NIR Stereo" vs "Pixel-Aligned RGB-NIR Stereo System" → ~0.8
+ */
+private fun calculateTitleSimilarity(title1: String, title2: String): Double {
+    // Normalize: lowercase and split into words
+    val words1 = title1.lowercase()
+        .split(Regex("""[\s\-_:,;.]+"""))
+        .filter { it.length >= 3 } // Skip very short words
+        .toSet()
+
+    val words2 = title2.lowercase()
+        .split(Regex("""[\s\-_:,;.]+"""))
+        .filter { it.length >= 3 }
+        .toSet()
+
+    if (words1.isEmpty() || words2.isEmpty()) return 0.0
+
+    // Calculate Jaccard similarity: |intersection| / |union|
+    val intersection = words1.intersect(words2).size
+    val union = words1.union(words2).size
+
+    return intersection.toDouble() / union.toDouble()
+}

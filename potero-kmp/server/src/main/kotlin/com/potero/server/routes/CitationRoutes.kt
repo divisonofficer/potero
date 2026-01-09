@@ -27,7 +27,25 @@ data class CitationSpanDto(
     val confidence: Double,
     val destPage: Int?,
     val destY: Double?,
-    val linkedRefIds: List<String> = emptyList()
+    val linkedRefIds: List<String> = emptyList(),
+    val linkedReferences: List<LinkedReferenceDto> = emptyList()  // NEW: Full reference info
+)
+
+/**
+ * DTO for linked reference with full information
+ */
+@Serializable
+data class LinkedReferenceDto(
+    val id: String,
+    val number: Int,
+    val authors: String?,
+    val title: String?,
+    val venue: String?,
+    val year: Int?,
+    val doi: String?,
+    val searchQuery: String,      // For search engine queries
+    val linkMethod: String,        // How it was linked (e.g., "grobid_target", "numeric")
+    val linkConfidence: Double     // Confidence of the link
 )
 
 /**
@@ -79,7 +97,10 @@ data class CitationStatsDto(
 /**
  * Convert domain CitationSpan to DTO
  */
-fun CitationSpan.toDto(linkedRefIds: List<String> = emptyList()): CitationSpanDto = CitationSpanDto(
+fun CitationSpan.toDto(
+    linkedRefIds: List<String> = emptyList(),
+    linkedReferences: List<LinkedReferenceDto> = emptyList()
+): CitationSpanDto = CitationSpanDto(
     id = id,
     paperId = paperId,
     pageNum = pageNum,
@@ -90,7 +111,8 @@ fun CitationSpan.toDto(linkedRefIds: List<String> = emptyList()): CitationSpanDt
     confidence = confidence,
     destPage = destPage,
     destY = destY,
-    linkedRefIds = linkedRefIds
+    linkedRefIds = linkedRefIds,
+    linkedReferences = linkedReferences  // NEW
 )
 
 /**
@@ -121,10 +143,37 @@ fun Route.citationRoutes() {
             val spansResult = citationRepository.getSpansByPaperId(paperId)
             spansResult.fold(
                 onSuccess = { spans ->
-                    // Get linked reference IDs for each span
+                    // Fetch all references for paper once (avoid N+1)
+                    val allReferences = referenceRepository.getByPaperId(paperId)
+                        .getOrDefault(emptyList())
+                    val refMap = allReferences.associateBy { it.id }
+
+                    // Build DTOs with full reference info
                     val spansWithLinks = spans.map { span ->
-                        val links = citationRepository.getLinksBySpanId(span.id).getOrDefault(emptyList())
-                        span.toDto(links.map { it.referenceId })
+                        val links = citationRepository.getLinksBySpanId(span.id)
+                            .getOrDefault(emptyList())
+
+                        val linkedRefs = links.mapNotNull { link ->
+                            refMap[link.referenceId]?.let { ref ->
+                                LinkedReferenceDto(
+                                    id = ref.id,
+                                    number = ref.number,
+                                    authors = ref.authors,
+                                    title = ref.title,
+                                    venue = ref.venue,
+                                    year = ref.year,
+                                    doi = ref.doi,
+                                    searchQuery = ref.searchQuery,
+                                    linkMethod = link.linkMethod,
+                                    linkConfidence = link.confidence
+                                )
+                            }
+                        }
+
+                        span.toDto(
+                            linkedRefIds = links.map { it.referenceId },
+                            linkedReferences = linkedRefs
+                        )
                     }
                     call.respond(ApiResponse(data = spansWithLinks))
                 },
@@ -270,16 +319,31 @@ fun Route.citationRoutes() {
                 val references = referenceRepository.getByPaperId(paperId).getOrDefault(emptyList())
                 val referencesStartPage = references.minOfOrNull { it.pageNum }
 
+                // Get GROBID data if available (optional - for improved linking)
+                val grobidRepository = ServiceLocator.grobidRepository
+                val grobidCitations = grobidRepository.getCitationSpansByPaperId(paperId)
+                    .getOrDefault(emptyList())
+                val grobidReferences = grobidRepository.getReferencesByPaperId(paperId)
+                    .getOrDefault(emptyList())
+
+                if (grobidCitations.isNotEmpty()) {
+                    println("[Citations] Using GROBID data: ${grobidCitations.size} citations, ${grobidReferences.size} references")
+                } else {
+                    println("[Citations] No GROBID data available, using PDF-only extraction")
+                }
+
                 // Extract citations from PDF
                 val extractor = CitationExtractor(pdfPath)
                 val extractionResult = extractor.extract()
 
-                // Link citations to references
+                // Link citations to references (with GROBID enhancement if available)
                 val linker = CitationLinker()
                 val linkResults = linker.link(
                     extractionResult.spans,
                     references,
-                    referencesStartPage
+                    referencesStartPage,
+                    grobidCitations = grobidCitations,  // NEW: Use GROBID data
+                    grobidReferences = grobidReferences  // NEW: Use GROBID data
                 )
 
                 // Delete existing citation data for this paper

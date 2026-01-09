@@ -1,12 +1,14 @@
 package com.potero.server.di
 
 import com.potero.data.repository.CitationRepositoryImpl
+import com.potero.data.repository.GrobidRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
 import com.potero.domain.repository.CitationRepository
+import com.potero.domain.repository.GrobidRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.SettingsKeys
@@ -32,6 +34,7 @@ import com.potero.service.search.UnifiedSearchService
 import com.potero.service.tag.TagService
 import com.potero.service.genai.GenAIFileUploadService
 import com.potero.service.grobid.GrobidEngine
+import com.potero.service.grobid.GrobidProcessor
 import com.potero.service.grobid.GrobidRestEngine
 import com.potero.service.grobid.DisabledGrobidEngine
 import com.potero.service.pdf.PdfDownloadService
@@ -71,6 +74,10 @@ object ServiceLocator {
 
     val citationRepository: CitationRepository by lazy {
         CitationRepositoryImpl(database)
+    }
+
+    val grobidRepository: GrobidRepository by lazy {
+        GrobidRepositoryImpl(database)
     }
 
     val settingsRepository: SettingsRepository by lazy {
@@ -194,6 +201,13 @@ object ServiceLocator {
             // Fallback to disabled engine
             DisabledGrobidEngine
         }
+    }
+
+    val grobidProcessor: GrobidProcessor by lazy {
+        GrobidProcessor(
+            grobidEngine = grobidEngine,
+            grobidRepository = grobidRepository
+        )
     }
 
     val unpaywallResolver: UnpaywallResolver by lazy {

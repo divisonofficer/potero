@@ -163,7 +163,9 @@ class PdfAnalyzer(private val pdfPath: String) {
 
             println("[PdfAnalyzer] Scanning pages $scanStart-$totalPages (total: $totalPages pages) for References section")
 
-            // First pass: find References section header
+            // First pass: find ALL References section headers (for main + supplementary)
+            val referenceSectionPages = mutableListOf<Int>()
+
             for (pageNum in scanStart..totalPages) {
                 val stripper = PDFTextStripper().apply {
                     this.startPage = pageNum
@@ -173,18 +175,26 @@ class PdfAnalyzer(private val pdfPath: String) {
                 val lines = pageText.lines().map { it.trim() }.filter { it.isNotBlank() }
 
                 // Check each line for references header
+                var foundOnThisPage = false
                 for (line in lines.take(30)) { // Check first 30 lines of each page
                     for (pattern in REFERENCES_HEADER_PATTERNS) {
                         if (pattern.matches(line)) {
-                            startPage = pageNum
-                            sectionHeader = line
+                            referenceSectionPages.add(pageNum)
+                            if (startPage == null) {
+                                startPage = pageNum
+                                sectionHeader = line
+                            }
                             println("[PdfAnalyzer] ✓ Found References header on page $pageNum: '$line'")
+                            foundOnThisPage = true
                             break
                         }
                     }
-                    if (startPage != null) break
+                    if (foundOnThisPage) break // Stop checking lines once we found the header
                 }
-                if (startPage != null) break
+            }
+
+            if (referenceSectionPages.isNotEmpty()) {
+                println("[PdfAnalyzer] Found ${referenceSectionPages.size} References section(s) on pages: $referenceSectionPages")
             }
 
             if (startPage == null) {
@@ -196,6 +206,7 @@ class PdfAnalyzer(private val pdfPath: String) {
                 var currentRefNumber = 0
                 var currentRefText = StringBuilder()
                 var currentRefPageNum: Int = startPage
+                var inReferencesSection = false
 
                 for (pageNum in startPage..totalPages) {
                     val stripper = PDFTextStripper().apply {
@@ -205,23 +216,30 @@ class PdfAnalyzer(private val pdfPath: String) {
                     val pageText = stripper.getText(doc)
                     val lines = pageText.lines()
 
-                    var foundReferencesHeader = false
-
                     for (line in lines) {
                         val trimmedLine = line.trim()
                         if (trimmedLine.isBlank()) continue
 
-                        // Skip until we find the references header on the first page
-                        if (pageNum == startPage && !foundReferencesHeader) {
-                            for (pattern in REFERENCES_HEADER_PATTERNS) {
-                                if (pattern.matches(trimmedLine)) {
-                                    foundReferencesHeader = true
-                                    break
+                        // Check if this is a References header (could be main or supplementary)
+                        var isReferencesHeader = false
+                        for (pattern in REFERENCES_HEADER_PATTERNS) {
+                            if (pattern.matches(trimmedLine)) {
+                                isReferencesHeader = true
+                                if (!inReferencesSection) {
+                                    inReferencesSection = true
+                                    println("[PdfAnalyzer] Entered References section on page $pageNum")
+                                } else {
+                                    println("[PdfAnalyzer] Found additional References section on page $pageNum (e.g., supplementary)")
                                 }
+                                break
                             }
-                            if (!foundReferencesHeader) continue
-                            continue // Skip the header line itself
                         }
+
+                        // Skip References header lines
+                        if (isReferencesHeader) continue
+
+                        // Skip lines before we've found the first References header
+                        if (!inReferencesSection) continue
 
                         // Check if this line starts a new reference entry
                         var matchedNewRef = false
@@ -267,21 +285,46 @@ class PdfAnalyzer(private val pdfPath: String) {
     }
 
     /**
+     * Normalize reference text to improve search quality.
+     *
+     * 1. Fix hyphenated line breaks: "inter-\npolation" → "interpolation"
+     * 2. Remove trailing in-paper page numbers: "... 2013. 2, 6, 7" → "... 2013."
+     * 3. Collapse multiple spaces
+     */
+    private fun normalizeReferenceText(text: String): String {
+        var normalized = text
+
+        // 1. Fix hyphenated line breaks
+        normalized = normalized.replace(Regex("""(\w)-\s*\n\s*(\w)"""), "$1$2")
+
+        // 2. Remove trailing in-paper page numbers
+        normalized = normalized.replace(Regex("""\.\s+(?:\d+\s*,\s*)*\d+\s*$"""), ".")
+
+        // 3. Collapse multiple spaces
+        normalized = normalized.replace(Regex("""\s+"""), " ")
+
+        return normalized.trim()
+    }
+
+    /**
      * Parse a single reference text to extract structured information
      */
     private fun parseReferenceText(number: Int, rawText: String, pageNum: Int): ParsedReference {
+        // Normalize raw text before parsing (improves search quality)
+        val normalizedText = normalizeReferenceText(rawText)
+
         // Extract year
-        val yearMatch = YEAR_PATTERN.findAll(rawText).lastOrNull()
+        val yearMatch = YEAR_PATTERN.findAll(normalizedText).lastOrNull()
         val year = yearMatch?.value?.toIntOrNull()
 
         // Extract DOI if present
-        val doi = findDOI(rawText)
+        val doi = findDOI(normalizedText)
 
         // Try to split into authors, title, venue
         // Common patterns:
         // 1. "Authors. Title. Venue, Year." (period-separated)
         // 2. "Authors, Title, Venue (Year)" (comma-separated with parenthesized year)
-        val parts = rawText.split(Regex("""\.\s+"""))
+        val parts = normalizedText.split(Regex("""\.\s+"""))
 
         val authors: String?
         val title: String?
@@ -299,22 +342,22 @@ class PdfAnalyzer(private val pdfPath: String) {
         } else {
             // Can't parse cleanly, try to extract at least the title
             // Title is often in quotes or is the longest meaningful segment
-            val quotedMatch = Regex(""""([^"]+)"""").find(rawText)
+            val quotedMatch = Regex(""""([^"]+)"""").find(normalizedText)
             if (quotedMatch != null) {
                 title = quotedMatch.groupValues[1]
-                authors = rawText.substringBefore(quotedMatch.value).trim().trimEnd(',', '.', ':')
-                venue = rawText.substringAfter(quotedMatch.value).trim().trimStart(',', '.', ':').takeIf { it.isNotBlank() }
+                authors = normalizedText.substringBefore(quotedMatch.value).trim().trimEnd(',', '.', ':')
+                venue = normalizedText.substringAfter(quotedMatch.value).trim().trimStart(',', '.', ':').takeIf { it.isNotBlank() }
             } else {
                 // Fallback: use full text
                 authors = null
-                title = rawText.take(200)
+                title = normalizedText.take(200)
                 venue = null
             }
         }
 
         return ParsedReference(
             number = number,
-            rawText = rawText,
+            rawText = normalizedText,  // Store normalized version
             authors = authors?.trim()?.trimEnd(',', '.'),
             title = title?.trim()?.trimEnd(',', '.'),
             venue = venue?.trim()?.trimEnd(',', '.'),
@@ -433,12 +476,12 @@ class PdfAnalyzer(private val pdfPath: String) {
                 continue
             }
 
-            // Check if line contains comma-separated or "and"-separated names
-            if ((line.contains(",") || line.contains(" and ", ignoreCase = true)) &&
+            // Check if line contains comma-separated, semicolon-separated, or "and"-separated names
+            if ((line.contains(",") || line.contains(";") || line.contains(" and ", ignoreCase = true)) &&
                 !line.endsWith(".") && line.length in 10..150) {
 
-                // Split by comma or "and"
-                val parts = line.split(Regex("""\s*,\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
+                // Split by comma, semicolon, or "and"
+                val parts = line.split(Regex("""\s*[,;]\s*|\s+and\s+""", RegexOption.IGNORE_CASE))
 
                 for (part in parts) {
                     val trimmed = part.trim()
