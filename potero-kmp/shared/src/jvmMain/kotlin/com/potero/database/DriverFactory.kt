@@ -92,7 +92,36 @@ object DriverFactory {
             }
         }
 
-        // Migration 3: Add bbox columns to Reference table
+        // Migration 3: Create Reference table if not exists
+        if (!tableExists("Reference")) {
+            println("[DB Migration] Creating Reference table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS Reference (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    number INTEGER NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    authors TEXT,
+                    title TEXT,
+                    venue TEXT,
+                    year INTEGER,
+                    doi TEXT,
+                    page_num INTEGER NOT NULL DEFAULT 0,
+                    bbox_x1 REAL,
+                    bbox_y1 REAL,
+                    bbox_x2 REAL,
+                    bbox_y2 REAL,
+                    confidence REAL DEFAULT 0.5,
+                    provenance TEXT DEFAULT 'pattern',
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS reference_paper_id_idx ON Reference(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS reference_number_idx ON Reference(paper_id, number)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS reference_doi_idx ON Reference(doi)", 0)
+        }
+
+        // Migration 3.1: Add bbox columns to Reference table (if table already exists without them)
         if (tableExists("Reference") && !columnExists("Reference", "bbox_x1")) {
             println("[DB Migration] Adding bbox columns to Reference table")
             driver.execute(null, "ALTER TABLE Reference ADD COLUMN bbox_x1 REAL", 0)

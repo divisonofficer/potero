@@ -1,5 +1,5 @@
 -- References extracted from paper's References/Bibliography section
-CREATE TABLE Reference (
+CREATE TABLE IF NOT EXISTS Reference (
     id TEXT NOT NULL PRIMARY KEY,
     paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
     number INTEGER NOT NULL,
@@ -10,12 +10,18 @@ CREATE TABLE Reference (
     year INTEGER,
     doi TEXT,
     page_num INTEGER NOT NULL DEFAULT 0,
+    bbox_x1 REAL,
+    bbox_y1 REAL,
+    bbox_x2 REAL,
+    bbox_y2 REAL,
+    confidence REAL DEFAULT 0.5,
+    provenance TEXT DEFAULT 'pattern',
     created_at INTEGER NOT NULL
 );
 
-CREATE INDEX reference_paper_id_idx ON Reference(paper_id);
-CREATE INDEX reference_number_idx ON Reference(paper_id, number);
-CREATE INDEX reference_doi_idx ON Reference(doi);
+CREATE INDEX IF NOT EXISTS reference_paper_id_idx ON Reference(paper_id);
+CREATE INDEX IF NOT EXISTS reference_number_idx ON Reference(paper_id, number);
+CREATE INDEX IF NOT EXISTS reference_doi_idx ON Reference(doi);
 
 -- Queries
 selectByPaperId:
