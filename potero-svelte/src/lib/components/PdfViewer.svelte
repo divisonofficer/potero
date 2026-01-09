@@ -117,7 +117,8 @@
 			}
 
 			// Detect References section in background (don't block rendering)
-			detectReferencesSection();
+			// DISABLED: Conflicts with backend reference extraction during debugging
+			// detectReferencesSection();
 
 			// Load backend citation spans (if available)
 			loadCitationSpans();

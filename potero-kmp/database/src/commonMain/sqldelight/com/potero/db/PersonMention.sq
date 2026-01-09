@@ -1,0 +1,68 @@
+-- Person mentions extracted from PDFs (by GROBID)
+-- Captures author mentions, researcher names, etc. in the paper body
+CREATE TABLE IF NOT EXISTS PersonMention (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    person_name TEXT NOT NULL,
+    role TEXT,                      -- e.g., "author", "researcher", "expert"
+    confidence REAL NOT NULL DEFAULT 0.85,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_person_mention_paper ON PersonMention(paper_id);
+CREATE INDEX IF NOT EXISTS idx_person_mention_page ON PersonMention(paper_id, page_num);
+CREATE INDEX IF NOT EXISTS idx_person_mention_name ON PersonMention(person_name);
+
+-- Insert a person mention
+insertPersonMention:
+INSERT INTO PersonMention (id, paper_id, page_num, person_name, role, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- Get all person mentions for a paper
+getPersonMentionsByPaper:
+SELECT * FROM PersonMention
+WHERE paper_id = ?
+ORDER BY page_num ASC, person_name ASC;
+
+-- Get person mentions for a specific page
+getPersonMentionsByPage:
+SELECT * FROM PersonMention
+WHERE paper_id = ? AND page_num = ?
+ORDER BY person_name ASC;
+
+-- Get person mentions by name
+getPersonMentionsByName:
+SELECT * FROM PersonMention
+WHERE person_name = ?
+ORDER BY paper_id ASC, page_num ASC;
+
+-- Get person mentions by role
+getPersonMentionsByRole:
+SELECT * FROM PersonMention
+WHERE paper_id = ? AND role = ?
+ORDER BY page_num ASC;
+
+-- Delete all person mentions for a paper
+deletePersonMentionsByPaper:
+DELETE FROM PersonMention
+WHERE paper_id = ?;
+
+-- Count person mentions for a paper
+countPersonMentionsByPaper:
+SELECT COUNT(*) FROM PersonMention
+WHERE paper_id = ?;
+
+-- Get distinct person names in a paper
+getDistinctPersonNames:
+SELECT DISTINCT person_name FROM PersonMention
+WHERE paper_id = ?
+ORDER BY person_name ASC;
+
+-- Search person mentions by name pattern
+searchPersonMentionsByName:
+SELECT * FROM PersonMention
+WHERE paper_id = ? AND person_name LIKE '%' || ? || '%'
+ORDER BY page_num ASC;

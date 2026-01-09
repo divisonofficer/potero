@@ -1,0 +1,58 @@
+-- GROBID Citation Spans (in-text references extracted by GROBID)
+-- Enhanced version of CitationSpan with GROBID-specific fields
+CREATE TABLE IF NOT EXISTS GrobidCitationSpan (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    raw_text TEXT NOT NULL,
+    xml_id TEXT,                    -- GROBID xml:id attribute
+    ref_type TEXT NOT NULL,         -- 'biblio', 'figure', 'formula'
+    target_xml_id TEXT,             -- Links to GrobidReference.xml_id or Figure.xml_id
+    confidence REAL NOT NULL DEFAULT 0.95,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_grobid_citation_paper ON GrobidCitationSpan(paper_id);
+CREATE INDEX IF NOT EXISTS idx_grobid_citation_page ON GrobidCitationSpan(paper_id, page_num);
+CREATE INDEX IF NOT EXISTS idx_grobid_citation_target ON GrobidCitationSpan(target_xml_id);
+
+-- Insert a GROBID citation span
+insertGrobidCitationSpan:
+INSERT INTO GrobidCitationSpan (id, paper_id, page_num, raw_text, xml_id, ref_type, target_xml_id, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Get all citation spans for a paper
+getGrobidCitationSpansByPaper:
+SELECT * FROM GrobidCitationSpan
+WHERE paper_id = ?
+ORDER BY page_num ASC, id ASC;
+
+-- Get citation spans for a specific page
+getGrobidCitationSpansByPage:
+SELECT * FROM GrobidCitationSpan
+WHERE paper_id = ? AND page_num = ?
+ORDER BY id ASC;
+
+-- Get citation spans by type
+getGrobidCitationSpansByType:
+SELECT * FROM GrobidCitationSpan
+WHERE paper_id = ? AND ref_type = ?
+ORDER BY page_num ASC, id ASC;
+
+-- Get citation spans linking to a specific target
+getGrobidCitationSpansByTarget:
+SELECT * FROM GrobidCitationSpan
+WHERE target_xml_id = ?
+ORDER BY page_num ASC, id ASC;
+
+-- Delete all citation spans for a paper
+deleteGrobidCitationSpansByPaper:
+DELETE FROM GrobidCitationSpan
+WHERE paper_id = ?;
+
+-- Count citation spans for a paper
+countGrobidCitationSpansByPaper:
+SELECT COUNT(*) FROM GrobidCitationSpan
+WHERE paper_id = ?;

@@ -1,0 +1,58 @@
+-- BoundingBox for storing coordinates of GROBID-extracted entities
+-- Supports multi-rectangle entities (e.g., citations spanning multiple lines)
+CREATE TABLE IF NOT EXISTS BoundingBox (
+    id TEXT NOT NULL PRIMARY KEY,
+    entity_type TEXT NOT NULL,  -- 'grobid_citation', 'grobid_reference', 'figure', 'formula', 'person_mention'
+    entity_id TEXT NOT NULL,    -- Foreign key to the entity table
+    page_num INTEGER NOT NULL,
+    -- PDF coordinates (origin at bottom-left)
+    x1 REAL NOT NULL,
+    y1 REAL NOT NULL,
+    x2 REAL NOT NULL,
+    y2 REAL NOT NULL,
+    rect_index INTEGER NOT NULL DEFAULT 0,  -- Index for multiple rectangles per entity
+    created_at INTEGER NOT NULL
+);
+
+-- Indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_bbox_entity ON BoundingBox(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_bbox_page ON BoundingBox(entity_type, entity_id, page_num);
+
+-- Insert a bounding box
+insertBoundingBox:
+INSERT INTO BoundingBox (id, entity_type, entity_id, page_num, x1, y1, x2, y2, rect_index, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Get bounding boxes for an entity
+getBoundingBoxesByEntity:
+SELECT * FROM BoundingBox
+WHERE entity_type = ? AND entity_id = ?
+ORDER BY rect_index ASC;
+
+-- Get bounding boxes for an entity on a specific page
+getBoundingBoxesByEntityAndPage:
+SELECT * FROM BoundingBox
+WHERE entity_type = ? AND entity_id = ? AND page_num = ?
+ORDER BY rect_index ASC;
+
+-- Get all bounding boxes on a page
+getBoundingBoxesByPage:
+SELECT * FROM BoundingBox
+WHERE page_num = ?
+ORDER BY entity_type, entity_id, rect_index;
+
+-- Delete bounding boxes for an entity
+deleteBoundingBoxesByEntity:
+DELETE FROM BoundingBox
+WHERE entity_type = ? AND entity_id = ?;
+
+-- Delete all bounding boxes for a paper (via entity_id pattern)
+deleteBoundingBoxesByPaper:
+DELETE FROM BoundingBox
+WHERE entity_id IN (
+    SELECT id FROM GrobidCitationSpan WHERE paper_id = ?
+    UNION SELECT id FROM GrobidReference WHERE paper_id = ?
+    UNION SELECT id FROM Figure WHERE paper_id = ?
+    UNION SELECT id FROM Formula WHERE paper_id = ?
+    UNION SELECT id FROM PersonMention WHERE paper_id = ?
+);

@@ -12,6 +12,7 @@ android-minSdk = "24"
 android-targetSdk = "34"
 pdfbox = "3.0.3"
 jsoup = "1.17.2"
+grobid = "0.8.2"
 
 [libraries]
 # Kotlin
@@ -52,6 +53,9 @@ pdfbox = { module = "org.apache.pdfbox:pdfbox", version.ref = "pdfbox" }
 
 # HTML Parsing
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+
+# GROBID (PDF Structure Extraction)
+grobid-core = { module = "org.grobid:grobid-core", version.ref = "grobid" }
 
 # Testing
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

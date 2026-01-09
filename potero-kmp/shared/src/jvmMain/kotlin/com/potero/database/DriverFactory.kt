@@ -145,6 +145,135 @@ object DriverFactory {
             driver.execute(null, "CREATE INDEX IF NOT EXISTS citation_link_span_idx ON CitationLink(citation_span_id)", 0)
             driver.execute(null, "CREATE INDEX IF NOT EXISTS citation_link_ref_idx ON CitationLink(reference_id)", 0)
         }
+
+        // Migration 6: Create GROBID tables (for advanced PDF structure extraction)
+
+        // 6.1: BoundingBox table
+        if (!tableExists("BoundingBox")) {
+            println("[DB Migration] Creating BoundingBox table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS BoundingBox (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    page_num INTEGER NOT NULL,
+                    x1 REAL NOT NULL,
+                    y1 REAL NOT NULL,
+                    x2 REAL NOT NULL,
+                    y2 REAL NOT NULL,
+                    rect_index INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_bbox_entity ON BoundingBox(entity_type, entity_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_bbox_page ON BoundingBox(entity_type, entity_id, page_num)", 0)
+        }
+
+        // 6.2: GrobidCitationSpan table
+        if (!tableExists("GrobidCitationSpan")) {
+            println("[DB Migration] Creating GrobidCitationSpan table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS GrobidCitationSpan (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    page_num INTEGER NOT NULL,
+                    raw_text TEXT NOT NULL,
+                    xml_id TEXT,
+                    ref_type TEXT NOT NULL,
+                    target_xml_id TEXT,
+                    confidence REAL NOT NULL DEFAULT 0.95,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_citation_paper ON GrobidCitationSpan(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_citation_page ON GrobidCitationSpan(paper_id, page_num)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_citation_target ON GrobidCitationSpan(target_xml_id)", 0)
+        }
+
+        // 6.3: GrobidReference table
+        if (!tableExists("GrobidReference")) {
+            println("[DB Migration] Creating GrobidReference table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS GrobidReference (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    xml_id TEXT NOT NULL,
+                    raw_tei TEXT,
+                    authors TEXT,
+                    title TEXT,
+                    venue TEXT,
+                    year INTEGER,
+                    doi TEXT,
+                    arxiv_id TEXT,
+                    page_num INTEGER,
+                    confidence REAL NOT NULL DEFAULT 0.95,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_ref_paper ON GrobidReference(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_ref_xmlid ON GrobidReference(paper_id, xml_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_grobid_ref_doi ON GrobidReference(doi)", 0)
+        }
+
+        // 6.4: Figure table
+        if (!tableExists("Figure")) {
+            println("[DB Migration] Creating Figure table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS Figure (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    page_num INTEGER NOT NULL,
+                    xml_id TEXT,
+                    label TEXT,
+                    caption TEXT,
+                    image_path TEXT,
+                    confidence REAL NOT NULL DEFAULT 0.90,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_figure_paper ON Figure(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_figure_page ON Figure(paper_id, page_num)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_figure_xmlid ON Figure(paper_id, xml_id)", 0)
+        }
+
+        // 6.5: Formula table
+        if (!tableExists("Formula")) {
+            println("[DB Migration] Creating Formula table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS Formula (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    page_num INTEGER NOT NULL,
+                    xml_id TEXT,
+                    label TEXT,
+                    latex TEXT,
+                    confidence REAL NOT NULL DEFAULT 0.80,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_formula_paper ON Formula(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_formula_page ON Formula(paper_id, page_num)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_formula_xmlid ON Formula(paper_id, xml_id)", 0)
+        }
+
+        // 6.6: PersonMention table
+        if (!tableExists("PersonMention")) {
+            println("[DB Migration] Creating PersonMention table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS PersonMention (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    page_num INTEGER NOT NULL,
+                    person_name TEXT NOT NULL,
+                    role TEXT,
+                    confidence REAL NOT NULL DEFAULT 0.85,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_paper ON PersonMention(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_page ON PersonMention(paper_id, page_num)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_name ON PersonMention(person_name)", 0)
+        }
     }
 
     /**

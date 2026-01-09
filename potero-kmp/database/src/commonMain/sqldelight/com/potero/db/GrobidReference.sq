@@ -1,0 +1,68 @@
+-- GROBID References (bibliography entries extracted by GROBID)
+-- Enhanced version with TEI XML and bounding boxes
+CREATE TABLE IF NOT EXISTS GrobidReference (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    xml_id TEXT NOT NULL,           -- GROBID xml:id (e.g., "#b12")
+    raw_tei TEXT,                   -- Raw <biblStruct> XML from TEI
+    authors TEXT,                   -- Comma-separated author names
+    title TEXT,
+    venue TEXT,                     -- Journal/Conference name
+    year INTEGER,
+    doi TEXT,
+    arxiv_id TEXT,
+    page_num INTEGER,               -- Page where reference appears (if available)
+    confidence REAL NOT NULL DEFAULT 0.95,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_grobid_ref_paper ON GrobidReference(paper_id);
+CREATE INDEX IF NOT EXISTS idx_grobid_ref_xmlid ON GrobidReference(paper_id, xml_id);
+CREATE INDEX IF NOT EXISTS idx_grobid_ref_doi ON GrobidReference(doi);
+
+-- Insert a GROBID reference
+insertGrobidReference:
+INSERT INTO GrobidReference (id, paper_id, xml_id, raw_tei, authors, title, venue, year, doi, arxiv_id, page_num, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Get all references for a paper
+getGrobidReferencesByPaper:
+SELECT * FROM GrobidReference
+WHERE paper_id = ?
+ORDER BY xml_id ASC;
+
+-- Get reference by xml_id
+getGrobidReferenceByXmlId:
+SELECT * FROM GrobidReference
+WHERE paper_id = ? AND xml_id = ?
+LIMIT 1;
+
+-- Get references by page
+getGrobidReferencesByPage:
+SELECT * FROM GrobidReference
+WHERE paper_id = ? AND page_num = ?
+ORDER BY xml_id ASC;
+
+-- Get reference by DOI
+getGrobidReferenceByDoi:
+SELECT * FROM GrobidReference
+WHERE doi = ?
+LIMIT 1;
+
+-- Delete all references for a paper
+deleteGrobidReferencesByPaper:
+DELETE FROM GrobidReference
+WHERE paper_id = ?;
+
+-- Count references for a paper
+countGrobidReferencesByPaper:
+SELECT COUNT(*) FROM GrobidReference
+WHERE paper_id = ?;
+
+-- Search references by title
+searchGrobidReferencesByTitle:
+SELECT * FROM GrobidReference
+WHERE paper_id = ? AND title LIKE '%' || ? || '%'
+ORDER BY year DESC;

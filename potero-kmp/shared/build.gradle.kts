@@ -31,6 +31,7 @@ kotlin {
                 implementation(libs.sqldelight.driver.jvm)
                 implementation(libs.pdfbox)
                 implementation(libs.jsoup)
+                // Note: GROBID will run as a separate process, no library dependency needed
             }
         }
     }

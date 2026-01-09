@@ -1,0 +1,69 @@
+-- Mathematical formulas extracted from PDFs (by GROBID)
+-- Stores formula labels, LaTeX content, and bounding boxes
+CREATE TABLE IF NOT EXISTS Formula (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    xml_id TEXT,                    -- GROBID xml:id
+    label TEXT,                     -- "(1)", "(2)", "Eq. 3", etc.
+    latex TEXT,                     -- LaTeX representation (if available)
+    confidence REAL NOT NULL DEFAULT 0.80,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_formula_paper ON Formula(paper_id);
+CREATE INDEX IF NOT EXISTS idx_formula_page ON Formula(paper_id, page_num);
+CREATE INDEX IF NOT EXISTS idx_formula_xmlid ON Formula(paper_id, xml_id);
+
+-- Insert a formula
+insertFormula:
+INSERT INTO Formula (id, paper_id, page_num, xml_id, label, latex, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Update formula LaTeX
+updateFormulaLatex:
+UPDATE Formula
+SET latex = ?
+WHERE id = ?;
+
+-- Get all formulas for a paper
+getFormulasByPaper:
+SELECT * FROM Formula
+WHERE paper_id = ?
+ORDER BY page_num ASC, label ASC;
+
+-- Get formulas for a specific page
+getFormulasByPage:
+SELECT * FROM Formula
+WHERE paper_id = ? AND page_num = ?
+ORDER BY label ASC;
+
+-- Get formula by xml_id
+getFormulaByXmlId:
+SELECT * FROM Formula
+WHERE paper_id = ? AND xml_id = ?
+LIMIT 1;
+
+-- Get formula by label (e.g., "(1)")
+getFormulaByLabel:
+SELECT * FROM Formula
+WHERE paper_id = ? AND label = ?
+LIMIT 1;
+
+-- Delete all formulas for a paper
+deleteFormulasByPaper:
+DELETE FROM Formula
+WHERE paper_id = ?;
+
+-- Count formulas for a paper
+countFormulasByPaper:
+SELECT COUNT(*) FROM Formula
+WHERE paper_id = ?;
+
+-- Search formulas by LaTeX content
+searchFormulasByLatex:
+SELECT * FROM Formula
+WHERE paper_id = ? AND latex LIKE '%' || ? || '%'
+ORDER BY page_num ASC;

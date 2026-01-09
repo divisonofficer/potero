@@ -1,0 +1,70 @@
+-- Figures extracted from PDFs (by GROBID)
+-- Stores figure captions, labels, and optional extracted images
+CREATE TABLE IF NOT EXISTS Figure (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    xml_id TEXT,                    -- GROBID xml:id (e.g., "fig_0")
+    label TEXT,                     -- "Figure 1", "Fig. 2", etc.
+    caption TEXT,                   -- Figure caption text
+    image_path TEXT,                -- Path to extracted figure image (optional)
+    confidence REAL NOT NULL DEFAULT 0.90,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_figure_paper ON Figure(paper_id);
+CREATE INDEX IF NOT EXISTS idx_figure_page ON Figure(paper_id, page_num);
+CREATE INDEX IF NOT EXISTS idx_figure_xmlid ON Figure(paper_id, xml_id);
+
+-- Insert a figure
+insertFigure:
+INSERT INTO Figure (id, paper_id, page_num, xml_id, label, caption, image_path, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Update figure image path
+updateFigureImagePath:
+UPDATE Figure
+SET image_path = ?
+WHERE id = ?;
+
+-- Get all figures for a paper
+getFiguresByPaper:
+SELECT * FROM Figure
+WHERE paper_id = ?
+ORDER BY page_num ASC, label ASC;
+
+-- Get figures for a specific page
+getFiguresByPage:
+SELECT * FROM Figure
+WHERE paper_id = ? AND page_num = ?
+ORDER BY label ASC;
+
+-- Get figure by xml_id
+getFigureByXmlId:
+SELECT * FROM Figure
+WHERE paper_id = ? AND xml_id = ?
+LIMIT 1;
+
+-- Get figure by label (e.g., "Figure 1")
+getFigureByLabel:
+SELECT * FROM Figure
+WHERE paper_id = ? AND label = ?
+LIMIT 1;
+
+-- Delete all figures for a paper
+deleteFiguresByPaper:
+DELETE FROM Figure
+WHERE paper_id = ?;
+
+-- Count figures for a paper
+countFiguresByPaper:
+SELECT COUNT(*) FROM Figure
+WHERE paper_id = ?;
+
+-- Search figures by caption
+searchFiguresByCaption:
+SELECT * FROM Figure
+WHERE paper_id = ? AND caption LIKE '%' || ? || '%'
+ORDER BY page_num ASC;

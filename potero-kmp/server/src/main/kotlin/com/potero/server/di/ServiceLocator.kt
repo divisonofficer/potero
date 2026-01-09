@@ -30,6 +30,9 @@ import com.potero.service.search.SearchCacheService
 import com.potero.service.search.UnifiedSearchService
 import com.potero.service.tag.TagService
 import com.potero.service.genai.GenAIFileUploadService
+import com.potero.service.grobid.GrobidEngine
+import com.potero.service.grobid.GrobidRestEngine
+import com.potero.service.grobid.DisabledGrobidEngine
 import io.ktor.client.HttpClient
 
 /**
@@ -167,6 +170,17 @@ object ServiceLocator {
                 settingsRepository.get(SettingsKeys.SSO_SITE_NAME).getOrNull() ?: "robi-gpt-dev"
             }
         )
+    }
+
+    val grobidEngine: GrobidEngine by lazy {
+        try {
+            // Try to use REST engine (local process)
+            GrobidRestEngine(httpClient)
+        } catch (e: Exception) {
+            println("[ServiceLocator] GROBID not available: ${e.message}")
+            // Fallback to disabled engine
+            DisabledGrobidEngine
+        }
     }
 
     /**
