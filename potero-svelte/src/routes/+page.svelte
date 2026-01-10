@@ -31,6 +31,7 @@
 	import { browser } from '$app/environment';
 	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
 	import FloatingNotePanel from '$lib/components/notes/FloatingNotePanel.svelte';
+	import FloatingSearchModal from '$lib/components/FloatingSearchModal.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
 	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
@@ -68,6 +69,9 @@
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
+
+	// Floating search modal state
+	let showFloatingSearch = $state(false);
 
 	// Settings tab state
 	let settingsActiveTab = $state<'llm' | 'search' | 'system'>('llm');
@@ -630,26 +634,7 @@
 		<!-- Quick Search button -->
 		<button
 			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-			onclick={() => {
-				// Focus the search input if on home tab, or scroll to it
-				if ($activeTab?.type === 'home') {
-					const searchInput = document.querySelector('input[placeholder="Search papers..."]') as HTMLInputElement;
-					if (searchInput) {
-						searchInput.focus();
-						searchInput.select();
-					}
-				} else {
-					// Switch to home tab and focus search
-					activeTabId.set('home');
-					setTimeout(() => {
-						const searchInput = document.querySelector('input[placeholder="Search papers..."]') as HTMLInputElement;
-						if (searchInput) {
-							searchInput.focus();
-							searchInput.select();
-						}
-					}, 100);
-				}
-			}}
+			onclick={() => showFloatingSearch = true}
 			title="Quick Search (Ctrl+K)"
 		>
 			<Search class="h-5 w-5" />
@@ -744,6 +729,20 @@
 							</svg>
 						</button>
 					</div>
+
+					<button
+						class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted flex items-center gap-2"
+						onclick={async () => {
+							await loadPapers(false);
+							toast.success('Library refreshed');
+						}}
+						title="Refresh library from database"
+					>
+						<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+						</svg>
+						Refresh
+					</button>
 
 					<button
 						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
@@ -856,10 +855,22 @@
 													</div>
 												{/if}
 											</td>
-											<td class="p-3 text-muted-foreground">
-												{paper.authors?.[0] ?? 'Unknown'}
-												{#if (paper.authors?.length ?? 0) > 1}
-													<span class="text-xs">+{(paper.authors?.length ?? 1) - 1}</span>
+											<td class="p-3">
+												{#if paper.authors && paper.authors.length > 0}
+													<button
+														class="text-muted-foreground hover:text-primary hover:underline"
+														onclick={(e) => {
+															e.stopPropagation();
+															openAuthorModal(paper.authors[0]);
+														}}
+													>
+														{paper.authors[0]}
+													</button>
+													{#if paper.authors.length > 1}
+														<span class="text-xs text-muted-foreground">+{paper.authors.length - 1}</span>
+													{/if}
+												{:else}
+													<span class="text-muted-foreground">Unknown</span>
 												{/if}
 											</td>
 											<td class="p-3 hidden md:table-cell">
@@ -887,7 +898,22 @@
 													<span class="text-muted-foreground">-</span>
 												{/if}
 											</td>
-											<td class="p-3">{paper.year ?? '-'}</td>
+											<td class="p-3">
+												{#if paper.year}
+													<button
+														class="hover:text-primary hover:underline"
+														onclick={(e) => {
+															e.stopPropagation();
+															activeTabId.set('home');
+															selectedYear.set(paper.year);
+														}}
+													>
+														{paper.year}
+													</button>
+												{:else}
+													<span>-</span>
+												{/if}
+											</td>
 											<td class="p-3">
 												{#if paper.citations}
 													<span class="text-muted-foreground">{paper.citations}</span>
@@ -985,7 +1011,16 @@
 										</p>
 										<div class="flex items-center gap-2 text-xs text-muted-foreground">
 											{#if paper.year}
-												<span>{paper.year}</span>
+												<button
+													class="hover:text-primary hover:underline"
+													onclick={(e) => {
+														e.stopPropagation();
+														activeTabId.set('home');
+														selectedYear.set(paper.year);
+													}}
+												>
+													{paper.year}
+												</button>
 											{/if}
 											{#if paper.conference}
 												{@const venueInfo = formatVenue(paper.conference)}
@@ -1073,7 +1108,24 @@
 									<div class="flex-1 min-w-0">
 										<h3 class="font-semibold truncate">{paper.title}</h3>
 										<p class="mt-0.5 text-sm text-muted-foreground truncate">
-											{paper.authors.join(', ')}
+											{#if paper.authors && paper.authors.length > 0}
+												{#each paper.authors.slice(0, 3) as author, i}
+													<button
+														class="hover:text-primary hover:underline"
+														onclick={(e) => {
+															e.stopPropagation();
+															openAuthorModal(author);
+														}}
+													>
+														{author}
+													</button>{#if i < Math.min(paper.authors.length, 3) - 1}, {/if}
+												{/each}
+												{#if paper.authors.length > 3}
+													<span> +{paper.authors.length - 3}</span>
+												{/if}
+											{:else}
+												<span>Unknown authors</span>
+											{/if}
 										</p>
 										{#if paper.abstract}
 											<p class="mt-1 text-xs text-muted-foreground/70 line-clamp-2">
@@ -1083,7 +1135,16 @@
 									</div>
 									<div class="flex items-center gap-4 text-sm text-muted-foreground shrink-0">
 										{#if paper.year}
-											<span>{paper.year}</span>
+											<button
+												class="hover:text-primary hover:underline"
+												onclick={(e) => {
+													e.stopPropagation();
+													activeTabId.set('home');
+													selectedYear.set(paper.year);
+												}}
+											>
+												{paper.year}
+											</button>
 										{/if}
 										{#if paper.conference}
 											{@const venueInfo = formatVenue(paper.conference)}
@@ -1314,6 +1375,7 @@
 							this={PdfViewer}
 							pdfUrl={tab.paper.pdfUrl}
 							paperId={tab.paper.id}
+							paper={tab.paper}
 							tabId={tab.id}
 							initialState={tab.viewerState}
 							onOpenPaper={openPaperById}
@@ -1937,3 +1999,15 @@
 		onClose={closeNotePanel}
 	/>
 {/if}
+
+<!-- Floating Search Modal -->
+{#if showFloatingSearch}
+	<FloatingSearchModal onClose={() => showFloatingSearch = false} />
+{/if}
+
+<svelte:window onkeydown={(e) => {
+	if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+		e.preventDefault();
+		showFloatingSearch = true;
+	}
+}} />

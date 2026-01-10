@@ -1,16 +1,19 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { updateViewerState, openNotePanel } from '$lib/stores/tabs';
-	import type { PdfViewerState } from '$lib/types';
+	import { updateViewerState, openNotePanel, openAuthorProfile, openJournalProfile, activeTabId } from '$lib/stores/tabs';
+	import { selectedYear } from '$lib/stores/library';
+	import type { PdfViewerState, Paper, AuthorProfile, JournalProfile } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
 	import { api, type Reference, type CitationSpan, type GrobidReference, type Narrative, type NarrativeStyle } from '$lib/api/client';
 	import { getErrorMessage } from '$lib/types';
-	import { List, BookOpen, FileText, RefreshCw } from 'lucide-svelte';
+	import { formatVenue } from '$lib/utils/venueAbbreviation';
+	import { List, BookOpen, FileText, RefreshCw, User, Building2, Calendar, ExternalLink, Quote } from 'lucide-svelte';
 
 	interface Props {
 		pdfUrl: string;
 		paperId?: string; // Paper ID for backend API calls
+		paper?: Paper; // Full paper object for metadata display
 		tabId?: string;
 		initialState?: PdfViewerState;
 		onPageChange?: (page: number, total: number) => void;
@@ -18,7 +21,7 @@
 		onOpenPaper?: (paperId: string) => void;
 	}
 
-	let { pdfUrl, paperId, tabId, initialState, onPageChange, onTextSelect, onOpenPaper }: Props = $props();
+	let { pdfUrl, paperId, paper, tabId, initialState, onPageChange, onTextSelect, onOpenPaper }: Props = $props();
 
 	// Citation modal state
 	let showCitationModal = $state(false);
@@ -27,6 +30,38 @@
 
 	// Outline panel state
 	let showOutlinePanel = $state(false);
+
+	// Helper function to open author profile
+	function handleAuthorClick(authorName: string) {
+		const authorProfile: AuthorProfile = {
+			name: authorName,
+			affiliation: null,
+			publications: 0,
+			citations: 0,
+			hIndex: 0,
+			i10Index: 0,
+			overview: null,
+			researchInterests: [],
+			recentPapers: []
+		};
+		openAuthorProfile(authorProfile);
+	}
+
+	// Helper function to handle year click
+	function handleYearClick(year: number) {
+		activeTabId.set('home');
+		selectedYear.set(year);
+	}
+
+	// Helper function to handle conference click
+	function handleConferenceClick(conferenceName: string) {
+		const journalProfile: JournalProfile = {
+			name: conferenceName,
+			abbreviation: formatVenue(conferenceName).display,
+			papers: []
+		};
+		openJournalProfile(journalProfile);
+	}
 
 	let container: HTMLDivElement;
 	let scrollContainer: HTMLDivElement;
@@ -2745,6 +2780,80 @@
 			</button>
 		</div>
 	</div>
+
+	<!-- Metadata Header Bar -->
+	{#if paper}
+		<div class="border-b bg-muted/20 px-4 py-2">
+			<div class="flex items-center gap-4 text-sm text-muted-foreground">
+				<!-- Authors (clickable) -->
+				{#if paper.authors && paper.authors.length > 0}
+					<div class="flex items-center gap-1">
+						<User class="h-4 w-4" />
+						<span class="font-medium text-xs">Authors:</span>
+						{#each paper.authors.slice(0, 3) as author, i}
+							<button
+								class="hover:text-primary hover:underline"
+								onclick={(e) => {
+									e.stopPropagation();
+									handleAuthorClick(author);
+								}}
+							>
+								{author}
+							</button>
+							{#if i < Math.min(paper.authors.length, 3) - 1},{ /if}
+						{/each}
+						{#if paper.authors.length > 3}
+							<span class="text-xs">+{paper.authors.length - 3} more</span>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Conference (clickable) -->
+				{#if paper.conference}
+					<button
+						class="flex items-center gap-1 hover:text-primary"
+						onclick={() => handleConferenceClick(paper.conference!)}
+					>
+						<Building2 class="h-4 w-4" />
+						{formatVenue(paper.conference).display}
+					</button>
+				{/if}
+
+				<!-- Year (clickable to filter) -->
+				{#if paper.year}
+					<button
+						class="flex items-center gap-1 hover:text-primary"
+						onclick={() => handleYearClick(paper.year!)}
+					>
+						<Calendar class="h-4 w-4" />
+						{paper.year}
+					</button>
+				{/if}
+
+				<!-- DOI (opens external link) -->
+				{#if paper.doi}
+					<a
+						href={`https://doi.org/${paper.doi}`}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="flex items-center gap-1 hover:text-primary"
+						title="Open DOI"
+					>
+						<ExternalLink class="h-4 w-4" />
+						DOI
+					</a>
+				{/if}
+
+				<!-- Citations -->
+				{#if paper.citations && paper.citations > 0}
+					<div class="flex items-center gap-1">
+						<Quote class="h-4 w-4" />
+						<span>{paper.citations} citations</span>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	<!-- Content Area: Reader (PDF) or Blog View -->
 	{#if contentViewMode === 'blog'}

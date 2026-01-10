@@ -239,7 +239,7 @@
 				<h3>{getCategoryDisplayName(category)}</h3>
 
 				{#each apis as apiConfig}
-					<div class="api-card">
+					<div class="api-card {apiConfig.enabled ? 'enabled' : ''}">
 						<div class="api-header">
 							<label class="api-toggle">
 								<input
@@ -304,6 +304,8 @@
 		padding: 2rem;
 		max-width: 1200px;
 		margin: 0 auto;
+		background: linear-gradient(to bottom, rgba(255, 255, 255, 0), rgba(249, 250, 251, 0.5));
+		min-height: 100vh;
 	}
 
 	.settings-section {
@@ -315,6 +317,9 @@
 		font-weight: 600;
 		margin-bottom: 0.75rem;
 		color: var(--color-text-primary, #333);
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
 	.section-description {
@@ -333,14 +338,16 @@
 	.engine-card {
 		background: var(--color-surface, #fff);
 		border: 1px solid var(--color-border, #e0e0e0);
-		border-radius: 8px;
+		border-radius: 12px;
 		padding: 1.25rem;
-		transition: box-shadow 0.2s, border-color 0.2s;
+		transition: all 0.2s ease;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 	}
 
 	.engine-card:hover {
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-		border-color: var(--color-border-hover, #ccc);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+		border-color: var(--color-primary, #0066cc);
+		transform: translateY(-2px);
 	}
 
 	.engine-header {
@@ -359,9 +366,15 @@
 	}
 
 	.engine-toggle input[type='checkbox'] {
-		width: 18px;
-		height: 18px;
+		width: 20px;
+		height: 20px;
 		cursor: pointer;
+		accent-color: var(--color-primary, #0066cc);
+		transition: all 0.2s;
+	}
+
+	.engine-toggle input[type='checkbox']:hover:not(:disabled) {
+		transform: scale(1.1);
 	}
 
 	.engine-toggle input[type='checkbox']:disabled {
@@ -459,14 +472,35 @@
 	.api-card {
 		background: var(--color-surface, #fff);
 		border: 1px solid var(--color-border, #e0e0e0);
-		border-radius: 8px;
+		border-radius: 12px;
 		padding: 1.25rem;
 		margin-bottom: 1rem;
-		transition: box-shadow 0.2s;
+		transition: all 0.2s ease;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+		position: relative;
 	}
 
 	.api-card:hover {
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+		transform: translateY(-2px);
+	}
+
+	/* Status indicator for enabled/disabled APIs */
+	.api-card::before {
+		content: '';
+		position: absolute;
+		top: 1rem;
+		right: 1rem;
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background-color: #ef4444;
+		box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
+	}
+
+	.api-card.enabled::before {
+		background-color: #22c55e;
+		box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
 	}
 
 	.api-header {
@@ -485,9 +519,15 @@
 	}
 
 	.api-toggle input[type='checkbox'] {
-		width: 18px;
-		height: 18px;
+		width: 20px;
+		height: 20px;
 		cursor: pointer;
+		accent-color: var(--color-primary, #0066cc);
+		transition: all 0.2s;
+	}
+
+	.api-toggle input[type='checkbox']:hover:not(:disabled) {
+		transform: scale(1.1);
 	}
 
 	.api-toggle input[type='checkbox']:disabled {

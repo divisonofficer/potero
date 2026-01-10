@@ -610,3 +610,34 @@ export async function importFromSearchResult(
   isLoading.set(false);
   return null;
 }
+
+/**
+ * Fuzzy search papers by query string
+ * Returns papers sorted by relevance score
+ */
+export function fuzzySearchPapers(papers: Paper[], query: string): Paper[] {
+  const lowerQuery = query.toLowerCase();
+  const terms = lowerQuery.split(/\s+/);
+
+  return papers
+    .map((paper) => {
+      let score = 0;
+      const searchText = `${paper.title} ${paper.authors.join(" ")} ${paper.abstract || ""}`.toLowerCase();
+
+      // Score based on term matches
+      terms.forEach((term) => {
+        if (searchText.includes(term)) {
+          score += 1;
+          // Bonus for title match
+          if (paper.title.toLowerCase().includes(term)) {
+            score += 2;
+          }
+        }
+      });
+
+      return { paper, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ paper }) => paper);
+}
