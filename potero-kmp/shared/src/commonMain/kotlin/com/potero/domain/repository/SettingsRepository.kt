@@ -64,4 +64,10 @@ object SettingsKeys {
     // PDF Processing - Garbled text handling
     const val GARBLED_PDF_STRATEGY = "pdf.garbled.strategy" // "arxiv_fallback" | "ocr" | "skip"
     const val GARBLED_PDF_ARXIV_AUTO_DOWNLOAD = "pdf.garbled.arxivAutoDownload" // "true" | "false"
+
+    // OCR Settings
+    const val OCR_ENABLED = "ocr.enabled" // "true" | "false"
+    const val OCR_LANGUAGE = "ocr.language" // "eng" | "kor" | "eng+kor"
+    const val OCR_DPI = "ocr.dpi" // "150" | "300" (default: 300)
+    const val OCR_ENGINE_MODE = "ocr.engineMode" // "0" (legacy) | "1" (neural) | "2" (combined) | "3" (default)
 }

@@ -2,3 +2,4 @@
 *.salive
 
 potero-svelte/build/*
+.claude/settings.local.json

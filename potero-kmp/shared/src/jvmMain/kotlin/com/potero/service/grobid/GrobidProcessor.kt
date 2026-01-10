@@ -44,7 +44,8 @@ class GrobidProcessor(
     private val llmReferenceParser: LLMReferenceParser,
     private val paperRepository: PaperRepository,
     private val pdfDownloadService: PdfDownloadService,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val pdfOcrService: com.potero.service.ocr.PdfOcrService
 ) {
 
     companion object {
@@ -124,25 +125,55 @@ class GrobidProcessor(
                     null
                 }
             } ?: run {
-                // GROBID failed and arXiv retry also failed → LLM Fallback
+                // GROBID failed and arXiv retry also failed → Try OCR → LLM Fallback
 
-                // Step 2: LLM Fallback - Extract References text from PDF
+                // Step 1.7: Try OCR fallback before LLM
+                val ocrText = tryOcrFallback(currentPdfPath)
+
+                // Step 2: LLM Fallback - Extract References text from PDF (or OCR result)
+                // IMPORTANT: Use currentPdfPath (which may be arXiv PDF if fallback succeeded)
                 val referencesText = try {
-                    val analyzer = PdfAnalyzer(pdfPath)
-                    val result = analyzer.analyzeReferences()
+                    if (ocrText != null) {
+                        // OCR succeeded - use clean OCR text
+                        log("[GrobidProcessor] Using OCR text (${ocrText.length} chars)")
 
-                    if (result.references.isNotEmpty()) {
-                        // PdfAnalyzer found references - use structured format
-                        log("[GrobidProcessor] PdfAnalyzer found ${result.references.size} references")
-                        result.references.joinToString("\n\n") { ref ->
-                            "[${ref.number}] ${ref.rawText}"
+                        // Try to extract References section from OCR text
+                        val lines = ocrText.lines()
+                        val referencesStart = lines.indexOfFirst { line ->
+                            line.trim().equals("References", ignoreCase = true) ||
+                            line.trim().equals("Bibliography", ignoreCase = true)
+                        }
+
+                        if (referencesStart >= 0) {
+                            // Found References section in OCR text
+                            val referencesLines = lines.drop(referencesStart)
+                            val referencesSection = referencesLines.joinToString("\n")
+                            log("[GrobidProcessor] Extracted References section from OCR text")
+                            referencesSection
+                        } else {
+                            // Use last portion of OCR text
+                            log("[GrobidProcessor] No References header found in OCR, using last 50% of text")
+                            val lastHalf = lines.drop(lines.size / 2).joinToString("\n")
+                            lastHalf
                         }
                     } else {
-                        // PdfAnalyzer failed to find References section - extract last pages as fallback
-                        log("[GrobidProcessor] PdfAnalyzer failed to find References section")
-                        log("[GrobidProcessor] Extracting last 15 pages for LLM analysis...")
+                        // OCR not available - use traditional text extraction
+                        val analyzer = PdfAnalyzer(currentPdfPath)
+                        val result = analyzer.analyzeReferences()
 
-                        extractLastPagesText(pdfPath, maxPages = 15)
+                        if (result.references.isNotEmpty()) {
+                            // PdfAnalyzer found references - use structured format
+                            log("[GrobidProcessor] PdfAnalyzer found ${result.references.size} references")
+                            result.references.joinToString("\n\n") { ref ->
+                                "[${ref.number}] ${ref.rawText}"
+                            }
+                        } else {
+                            // PdfAnalyzer failed to find References section - extract last pages as fallback
+                            log("[GrobidProcessor] PdfAnalyzer failed to find References section")
+                            log("[GrobidProcessor] Extracting last 15 pages for LLM analysis...")
+
+                            extractLastPagesText(currentPdfPath, maxPages = 15)
+                        }
                     }
                 } catch (pdfError: Exception) {
                     log("[GrobidProcessor] PDF extraction failed: ${pdfError.message}")
@@ -389,6 +420,62 @@ class GrobidProcessor(
             }
         } catch (e: Exception) {
             log("[GrobidProcessor] arXiv fallback error: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Try OCR fallback when PDF text extraction is garbled.
+     * Uses Tesseract to extract text from PDF images.
+     *
+     * @param pdfPath Path to PDF file
+     * @return OCR extracted text if successful, null otherwise
+     */
+    private suspend fun tryOcrFallback(pdfPath: String): String? {
+        return try {
+            log("[GrobidProcessor] Attempting OCR fallback for: $pdfPath")
+
+            // Check if OCR is enabled
+            val ocrEnabled = settingsRepository.get(SettingsKeys.OCR_ENABLED)
+                .getOrNull() == "true"
+
+            if (!ocrEnabled) {
+                log("[GrobidProcessor] OCR is disabled in settings")
+                return null
+            }
+
+            // Check if Tesseract is available
+            if (!pdfOcrService.isAvailable()) {
+                log("[GrobidProcessor] Tesseract is not installed or not available")
+                log("[GrobidProcessor] Install: sudo apt-get install tesseract-ocr tesseract-ocr-eng")
+                return null
+            }
+
+            log("[GrobidProcessor] OCR is enabled and Tesseract is available, starting OCR...")
+
+            // OCR the PDF
+            val ocrResult = pdfOcrService.ocrPdf(pdfPath)
+
+            ocrResult.fold(
+                onSuccess = { text ->
+                    log("[GrobidProcessor] ✓ OCR succeeded: ${text.length} chars extracted")
+
+                    // Check if OCR result is also garbled (shouldn't happen, but check anyway)
+                    if (isGarbled(text)) {
+                        log("[GrobidProcessor] ✗ OCR result is garbled (unexpected)")
+                        null
+                    } else {
+                        log("[GrobidProcessor] ✓ OCR result looks clean")
+                        text
+                    }
+                },
+                onFailure = { error ->
+                    log("[GrobidProcessor] ✗ OCR failed: ${error.message}")
+                    null
+                }
+            )
+        } catch (e: Exception) {
+            log("[GrobidProcessor] OCR fallback error: ${e.message}")
             null
         }
     }

@@ -174,7 +174,8 @@ class PdfDownloadService(
      */
     suspend fun downloadFromArxiv(arxivId: String): Result<String> = runCatching {
         val arxivUrl = buildArxivPdfUrl(arxivId)
-        val fileName = "arxiv_${arxivId.removePrefix("arXiv:")}"
+        val cleanedId = arxivId.removePrefix("arXiv:")
+        val fileName = "arxiv_${cleanedId}.pdf"  // IMPORTANT: Include .pdf extension
 
         println("[PdfDownload] Downloading arXiv PDF: $arxivUrl")
         downloadFromUrl(arxivUrl, "arxiv-fallback-${System.currentTimeMillis()}", fileName)

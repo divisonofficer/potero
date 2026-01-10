@@ -5,6 +5,7 @@ import com.potero.data.repository.GrobidRepositoryImpl
 import com.potero.data.repository.NarrativeRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
+import com.potero.data.repository.ResearchNoteRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
 import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
@@ -13,6 +14,7 @@ import com.potero.domain.repository.GrobidRepository
 import com.potero.domain.repository.NarrativeRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.ReferenceRepository
+import com.potero.domain.repository.ResearchNoteRepository
 import com.potero.domain.repository.SettingsKeys
 import com.potero.domain.repository.SettingsRepository
 import com.potero.domain.repository.TagRepository
@@ -97,6 +99,10 @@ object ServiceLocator {
 
     val settingsRepository: SettingsRepository by lazy {
         SettingsRepositoryImpl(database)
+    }
+
+    val researchNoteRepository: ResearchNoteRepository by lazy {
+        ResearchNoteRepositoryImpl(database)
     }
 
     val doiResolver: MetadataResolver by lazy {
@@ -253,6 +259,12 @@ object ServiceLocator {
         )
     }
 
+    val pdfOcrService: com.potero.service.ocr.PdfOcrService by lazy {
+        com.potero.service.ocr.PdfOcrService(
+            settingsRepository = settingsRepository
+        )
+    }
+
     val grobidProcessor: GrobidProcessor by lazy {
         GrobidProcessor(
             grobidEngine = grobidEngine,
@@ -260,7 +272,8 @@ object ServiceLocator {
             llmReferenceParser = llmReferenceParser,
             paperRepository = paperRepository,
             pdfDownloadService = pdfDownloadService,
-            settingsRepository = settingsRepository
+            settingsRepository = settingsRepository,
+            pdfOcrService = pdfOcrService
         )
     }
 

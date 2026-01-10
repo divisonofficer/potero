@@ -58,7 +58,7 @@
 	}
 
 	// Group APIs by category
-	$derived groupedAPIs = Object.entries(
+	let groupedAPIs = $derived(Object.entries(
 		apiConfigs.reduce(
 			(acc, apiConfig) => {
 				if (!acc[apiConfig.category]) acc[apiConfig.category] = [];
@@ -67,7 +67,7 @@
 			},
 			{} as Record<string, APIConfigDto[]>
 		)
-	);
+	));
 
 	function getCategoryDisplayName(category: string): string {
 		const names: Record<string, string> = {

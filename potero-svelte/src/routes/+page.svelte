@@ -33,6 +33,7 @@
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
 	import AuthorModal from '$lib/components/AuthorModal.svelte';
 	import AuthorProfileView from '$lib/components/AuthorProfileView.svelte';
+	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 	import { online } from 'svelte/reactivity/window';
 	import {
@@ -59,6 +60,9 @@
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
+
+	// Settings tab state
+	let settingsActiveTab = $state<'llm' | 'search' | 'system'>('llm');
 
 	// Author modal state
 	let selectedAuthorName = $state<string | null>(null);
@@ -1370,10 +1374,44 @@
 		{/each}
 
 		<!-- Settings tab -->
-		<div class="h-full overflow-auto p-6 {$activeTab?.type === 'settings' ? '' : 'hidden'}">
-			<h1 class="mb-6 text-2xl font-bold">Settings</h1>
+		<div class="h-full flex flex-col {$activeTab?.type === 'settings' ? '' : 'hidden'}">
+			<div class="border-b bg-muted/30 px-6 py-4">
+				<h1 class="mb-4 text-2xl font-bold">Settings</h1>
 
-			<!-- LLM Configuration -->
+				<!-- Settings Tabs -->
+				<div class="flex gap-1">
+					<button
+						class="rounded-t-md px-4 py-2 text-sm font-medium transition-colors {settingsActiveTab === 'llm'
+							? 'bg-background text-foreground border-b-2 border-primary'
+							: 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}"
+						onclick={() => (settingsActiveTab = 'llm')}
+					>
+						LLM & API
+					</button>
+					<button
+						class="rounded-t-md px-4 py-2 text-sm font-medium transition-colors {settingsActiveTab === 'search'
+							? 'bg-background text-foreground border-b-2 border-primary'
+							: 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}"
+						onclick={() => (settingsActiveTab = 'search')}
+					>
+						Search Engines
+					</button>
+					<button
+						class="rounded-t-md px-4 py-2 text-sm font-medium transition-colors {settingsActiveTab === 'system'
+							? 'bg-background text-foreground border-b-2 border-primary'
+							: 'text-muted-foreground hover:text-foreground hover:bg-muted/50'}"
+						onclick={() => (settingsActiveTab = 'system')}
+					>
+						System
+					</button>
+				</div>
+			</div>
+
+			<!-- Settings Tab Content -->
+			<div class="flex-1 overflow-auto p-6">
+				<!-- LLM & API Tab -->
+				{#if settingsActiveTab === 'llm'}
+					<!-- LLM Configuration -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">LLM Configuration</h2>
 				<div class="space-y-4 rounded-lg border bg-card p-4">
@@ -1408,44 +1446,6 @@
 							<option value="gemini">Gemini</option>
 							<option value="claude">Claude</option>
 						</select>
-					</div>
-
-					<button
-						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-						disabled={isSavingSettings}
-						onclick={saveSettings}
-					>
-						{isSavingSettings ? 'Saving...' : 'Save Settings'}
-					</button>
-				</div>
-			</section>
-
-			<!-- Semantic Scholar API -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">Semantic Scholar API</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<div>
-						<label for="semantic-scholar-api-key" class="mb-2 block text-sm font-medium">API Key (Optional)</label>
-						<input
-							id="semantic-scholar-api-key"
-							type="password"
-							placeholder={settings.semanticScholarApiKey ? 'API key is set (enter new to change)' : 'Enter your Semantic Scholar API key'}
-							bind:value={newSemanticScholarApiKey}
-							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						/>
-						{#if settings.semanticScholarApiKey}
-							<p class="mt-1 text-xs text-muted-foreground">
-								Current key: {settings.semanticScholarApiKey}
-							</p>
-						{:else}
-							<p class="mt-1 text-xs text-muted-foreground">
-								Without an API key, rate limits are stricter (100 req/5 min). Get a free key from
-								<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener" class="text-primary hover:underline">
-									Semantic Scholar API
-								</a>
-								for higher limits.
-							</p>
-						{/if}
 					</div>
 
 					<button
@@ -1537,7 +1537,67 @@
 				</div>
 			</section>
 
-			<!-- PDF Download Options -->
+			<!-- LLM Usage Log -->
+			<section class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold">LLM Usage</h2>
+				<div class="space-y-4 rounded-lg border bg-card p-4">
+					<p class="text-sm text-muted-foreground">
+						View LLM API usage logs for debugging and monitoring.
+					</p>
+					<button
+						class="rounded-md border px-4 py-2 text-sm hover:bg-muted"
+						onclick={() => (showLLMLogPanel = true)}
+					>
+						View LLM Logs
+					</button>
+				</div>
+			</section>
+				{/if}
+
+				<!-- Search Engines Tab -->
+				{#if settingsActiveTab === 'search'}
+					<!-- Academic Search APIs -->
+					<SettingsPanel />
+
+					<!-- Semantic Scholar API -->
+					<section class="mb-8 mt-8">
+						<h2 class="mb-4 text-lg font-semibold">Semantic Scholar API</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<div>
+								<label for="semantic-scholar-api-key" class="mb-2 block text-sm font-medium">API Key (Optional)</label>
+								<input
+									id="semantic-scholar-api-key"
+									type="password"
+									placeholder={settings.semanticScholarApiKey ? 'API key is set (enter new to change)' : 'Enter your Semantic Scholar API key'}
+									bind:value={newSemanticScholarApiKey}
+									class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+								/>
+								{#if settings.semanticScholarApiKey}
+									<p class="mt-1 text-xs text-muted-foreground">
+										Current key: {settings.semanticScholarApiKey}
+									</p>
+								{:else}
+									<p class="mt-1 text-xs text-muted-foreground">
+										Without an API key, rate limits are stricter (100 req/5 min). Get a free key from
+										<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener" class="text-primary hover:underline">
+											Semantic Scholar API
+										</a>
+										for higher limits.
+									</p>
+								{/if}
+							</div>
+
+							<button
+								class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+								disabled={isSavingSettings}
+								onclick={saveSettings}
+							>
+								{isSavingSettings ? 'Saving...' : 'Save Settings'}
+							</button>
+						</div>
+					</section>
+
+					<!-- PDF Download Options -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">PDF Download Options</h2>
 				<div class="space-y-4 rounded-lg border bg-card p-4">
@@ -1584,8 +1644,11 @@
 					</button>
 				</div>
 			</section>
+				{/if}
 
-			<!-- Storage -->
+				<!-- System Tab -->
+				{#if settingsActiveTab === 'system'}
+					<!-- Storage -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">Storage</h2>
 				<div class="space-y-4 rounded-lg border bg-card p-4">
@@ -1627,23 +1690,7 @@
 				</div>
 			</section>
 
-			<!-- LLM Usage Log -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">LLM Usage</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						View LLM API usage logs for debugging and monitoring.
-					</p>
-					<button
-						class="rounded-md border px-4 py-2 text-sm hover:bg-muted"
-						onclick={() => (showLLMLogPanel = true)}
-					>
-						View LLM Logs
-					</button>
-				</div>
-			</section>
-
-			<!-- Bulk Reanalyze -->
+			<!-- Library Maintenance -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">Library Maintenance</h2>
 				<div class="space-y-4 rounded-lg border bg-card p-4">
@@ -1692,6 +1739,8 @@
 					<p class="mt-2 text-xs text-muted-foreground">Version 0.1.0 (Development)</p>
 				</div>
 			</section>
+				{/if}
+			</div>
 		</div>
 	</div>
 </div>

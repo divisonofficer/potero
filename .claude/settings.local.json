@@ -11,7 +11,9 @@
       "Bash(./gradlew:*)",
       "Bash(npm install:*)",
       "Bash(dmesg:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(sqlite3:*)",
+      "Bash(potero-kmp/gradlew -p potero-kmp :shared:build -x test)"
     ]
   }
 }
