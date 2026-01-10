@@ -422,6 +422,110 @@ object DriverFactory {
             driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_target_paper_idx ON NoteLink(target_paper_id)", 0)
             driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_text_idx ON NoteLink(link_text COLLATE NOCASE)", 0)
         }
+
+        // Migration 9: Create RelatedWork tables (Related Work Auto-Investigation)
+
+        // 9.1: RelatedWork table
+        if (!tableExists("RelatedWork")) {
+            println("[DB Migration] Creating RelatedWork table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS RelatedWork (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    source_paper_id TEXT NOT NULL,
+                    related_paper_id TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    relevance_score REAL NOT NULL DEFAULT 0.5,
+                    source TEXT NOT NULL,
+                    reasoning TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY (source_paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+                    FOREIGN KEY (related_paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+                    UNIQUE(source_paper_id, related_paper_id, relationship_type)
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS related_work_source_idx ON RelatedWork(source_paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS related_work_related_idx ON RelatedWork(related_paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS related_work_score_idx ON RelatedWork(relevance_score DESC)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS related_work_type_idx ON RelatedWork(relationship_type)", 0)
+        }
+
+        // 9.2: ComparisonTable table
+        if (!tableExists("ComparisonTable")) {
+            println("[DB Migration] Creating ComparisonTable table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS ComparisonTable (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    source_paper_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    generation_method TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY (source_paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS comparison_table_source_idx ON ComparisonTable(source_paper_id)", 0)
+        }
+
+        // 9.3: ComparisonColumn table
+        if (!tableExists("ComparisonColumn")) {
+            println("[DB Migration] Creating ComparisonColumn table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS ComparisonColumn (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    table_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    data_type TEXT NOT NULL,
+                    column_order INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS comparison_column_table_idx ON ComparisonColumn(table_id)", 0)
+        }
+
+        // 9.4: ComparisonEntry table
+        if (!tableExists("ComparisonEntry")) {
+            println("[DB Migration] Creating ComparisonEntry table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS ComparisonEntry (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    table_id TEXT NOT NULL,
+                    paper_id TEXT NOT NULL,
+                    column_id TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    confidence REAL,
+                    extraction_source TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE,
+                    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+                    FOREIGN KEY (column_id) REFERENCES ComparisonColumn(id) ON DELETE CASCADE,
+                    UNIQUE(table_id, paper_id, column_id)
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS comparison_entry_table_idx ON ComparisonEntry(table_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS comparison_entry_paper_idx ON ComparisonEntry(paper_id)", 0)
+        }
+
+        // 9.5: ComparisonNarrative table
+        if (!tableExists("ComparisonNarrative")) {
+            println("[DB Migration] Creating ComparisonNarrative table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS ComparisonNarrative (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    table_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    key_insights TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE,
+                    UNIQUE(table_id)
+                )
+            """.trimIndent(), 0)
+        }
     }
 
     /**

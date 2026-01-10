@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel, openRelatedWork } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -40,6 +40,7 @@
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import NoteList from '$lib/components/notes/NoteList.svelte';
 	import NoteViewer from '$lib/components/notes/NoteViewer.svelte';
+	import RelatedWorkView from '$lib/components/relatedWork/RelatedWorkView.svelte';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 	import { online } from 'svelte/reactivity/window';
 	import {
@@ -52,7 +53,8 @@
 		Search,
 		X,
 		ChevronDown,
-		BookOpen
+		BookOpen,
+		Network
 	} from 'lucide-svelte';
 
 	// Tab icon mapping
@@ -64,7 +66,8 @@
 		tag: Tag,
 		journal: Building2,
 		notes: BookOpen,
-		'note-viewer': FileText
+		'note-viewer': FileText,
+		'related-work': Network
 	};
 
 	// LLM log panel state
@@ -1277,6 +1280,20 @@
 							{/if}
 						</div>
 						<div class="flex items-center gap-1 shrink-0">
+							<!-- Related Work Button -->
+							<button
+								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
+								onclick={() => {
+									if (tab.paper) {
+										openRelatedWork(tab.paper);
+									}
+								}}
+								title="Find and compare related work"
+							>
+								<Network class="h-4 w-4" />
+								Related Work
+							</button>
+
 							<!-- 작업 Dropdown Menu -->
 							<div class="relative">
 								<button
@@ -1577,6 +1594,15 @@
 							<p>No papers from this venue yet</p>
 						</div>
 					{/if}
+				{/if}
+			</div>
+		{/each}
+
+		<!-- Related Work tabs -->
+		{#each $tabs.filter(t => t.type === 'related-work') as tab (tab.id)}
+			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.paper}
+					<RelatedWorkView paper={tab.paper} tabId={tab.id} />
 				{/if}
 			</div>
 		{/each}

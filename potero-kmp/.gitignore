@@ -2,3 +2,4 @@
 database/build/*
 server/build/*
 shared/build/*
+.kotlin/**
