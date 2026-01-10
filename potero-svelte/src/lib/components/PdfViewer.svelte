@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { updateViewerState } from '$lib/stores/tabs';
+	import { updateViewerState, openNotePanel } from '$lib/stores/tabs';
 	import type { PdfViewerState } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
@@ -933,6 +933,15 @@
 		if (cleanedText.length >= 5 && !/^[\d\s,\-–]+$/.test(cleanedText)) {
 			citationQuery = cleanedText;
 			showCitationModal = true;
+		}
+	}
+
+	/**
+	 * Handle opening notes panel for current paper
+	 */
+	function handleOpenNotes() {
+		if (paperId) {
+			openNotePanel(paperId, null);
 		}
 	}
 
@@ -2615,6 +2624,16 @@
 				title="Toggle Outline Panel"
 			>
 				<List class="h-5 w-5" />
+			</button>
+
+			<!-- Notes button -->
+			<button
+				class="rounded p-1.5 transition-colors text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700"
+				onclick={handleOpenNotes}
+				title="Open Notes"
+				disabled={!paperId}
+			>
+				<FileText class="h-5 w-5" />
 			</button>
 
 			<div class="mx-2 h-5 w-px bg-neutral-300 dark:bg-neutral-600"></div>

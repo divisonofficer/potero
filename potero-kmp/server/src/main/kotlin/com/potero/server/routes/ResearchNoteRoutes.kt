@@ -260,5 +260,116 @@ fun Route.researchNoteRoutes() {
             val combined = (titleResults + contentResults).distinctBy { it.id }
             call.respond(ApiResponse(data = combined))
         }
+
+        // POST /api/notes/generate-template - Generate markdown template for a paper
+        post("/generate-template") {
+            val paperId = call.request.queryParameters["paperId"] ?: return@post call.respond(
+                HttpStatusCode.BadRequest,
+                ApiResponse<Unit>(success = false, error = "Missing paperId parameter")
+            )
+
+            val paperRepository = ServiceLocator.paperRepository
+            val llmService = ServiceLocator.llmService
+
+            // Get paper details
+            val paperResult = paperRepository.getById(paperId)
+            val paper = paperResult.getOrNull() ?: return@post call.respond(
+                HttpStatusCode.NotFound,
+                ApiResponse<Unit>(success = false, error = "Paper not found")
+            )
+
+            try {
+                val authorNames = paper.authors.map { it.name }
+                val abstractText = paper.abstract ?: ""
+
+                // Generate template using LLM
+                val prompt = """
+                    논문 정보를 바탕으로 연구 노트 템플릿을 마크다운 형식으로 생성해주세요.
+
+                    논문 제목: ${paper.title}
+                    저자: ${authorNames.joinToString(", ")}
+                    연도: ${paper.year ?: "Unknown"}
+                    학회/저널: ${paper.conference ?: "Unknown"}
+                    ${if (abstractText.isNotEmpty()) "초록: $abstractText" else ""}
+
+                    다음 구조로 마크다운 템플릿을 생성해주세요:
+
+                    # [논문 제목]
+
+                    ## 📋 기본 정보
+                    - **저자**: [저자 목록]
+                    - **출처**: [학회/저널]
+                    - **연도**: [연도]
+                    - **DOI**: [DOI 정보]
+
+                    ## 🎯 핵심 내용
+                    [초록을 바탕으로 한 3-4줄 요약]
+
+                    ## 💡 주요 기여
+                    -
+
+                    ## 🔬 방법론
+
+                    ## 📊 실험 결과
+
+                    ## 🤔 인사이트 및 메모
+
+                    ## 🔗 관련 연구
+                    -
+
+                    ## 📝 참고사항
+
+                    위 형식을 따라 실제 내용을 채워주세요. 없는 정보는 빈 칸으로 남겨두세요.
+                """.trimIndent()
+
+                val response = llmService.chat(prompt)
+
+                if (response.isSuccess) {
+                    val template = response.getOrNull() ?: ""
+                    call.respond(ApiResponse(data = mapOf(
+                        "title" to "${paper.title} - Notes",
+                        "template" to template
+                    )))
+                } else {
+                    // Fallback template if LLM fails
+                    val fallbackTemplate = """
+                        # ${paper.title}
+
+                        ## 📋 기본 정보
+                        - **저자**: ${authorNames.joinToString(", ")}
+                        - **출처**: ${paper.conference ?: "Unknown"}
+                        - **연도**: ${paper.year ?: "Unknown"}
+                        ${if (!paper.doi.isNullOrEmpty()) "- **DOI**: ${paper.doi}" else ""}
+
+                        ## 🎯 핵심 내용
+                        ${if (abstractText.isNotEmpty()) abstractText else ""}
+
+                        ## 💡 주요 기여
+                        -
+
+                        ## 🔬 방법론
+
+                        ## 📊 실험 결과
+
+                        ## 🤔 인사이트 및 메모
+
+                        ## 🔗 관련 연구
+                        -
+
+                        ## 📝 참고사항
+                    """.trimIndent()
+
+                    call.respond(ApiResponse(data = mapOf(
+                        "title" to "${paper.title} - Notes",
+                        "template" to fallbackTemplate
+                    )))
+                }
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<Unit>(success = false, error = "Failed to generate template: ${e.message}")
+                )
+            }
+        }
     }
 }

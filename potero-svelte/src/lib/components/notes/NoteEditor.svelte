@@ -7,9 +7,10 @@
 		onSave: (title: string, content: string) => void;
 		onCancel: () => void;
 		placeholder?: string;
+		isLoading?: boolean;
 	}
 
-	let { title = '', content = '', onSave, onCancel, placeholder = 'Start writing...' }: Props = $props();
+	let { title = '', content = '', onSave, onCancel, placeholder = 'Start writing...', isLoading = false }: Props = $props();
 
 	let editTitle = $state(title);
 	let editContent = $state(content);

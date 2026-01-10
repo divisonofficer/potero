@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -29,6 +29,7 @@
 	import { createNote } from '$lib/stores/notes';
 	import { browser } from '$app/environment';
 	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
+	import FloatingNotePanel from '$lib/components/notes/FloatingNotePanel.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
 	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
@@ -1870,5 +1871,14 @@
 		authorName={selectedAuthorName}
 		papers={selectedAuthorPapers}
 		onClose={closeAuthorModal}
+	/>
+{/if}
+
+<!-- Floating Note Panel -->
+{#if $isNotePanelOpen}
+	<FloatingNotePanel
+		paperId={$notePanelPaperId}
+		initialNoteId={$notePanelNoteId}
+		onClose={closeNotePanel}
 	/>
 {/if}

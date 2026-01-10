@@ -84,6 +84,13 @@ export function Settings({ onClose }: SettingsProps) {
   // Citation Format
   const [citationFormat, setCitationFormat] = useState<CitationFormat>('apa');
 
+  // Reference Extraction Engines
+  const [referenceEngines, setReferenceEngines] = useState({
+    grobid: true,
+    pdftotext: true,
+    ocr: false
+  });
+
   // Storage Settings
   const [pdfDownloadPath, setPdfDownloadPath] = useState('/Users/username/Downloads/Papers');
   const [cacheSize, setCacheSize] = useState('500');
@@ -150,6 +157,7 @@ export function Settings({ onClose }: SettingsProps) {
     { id: 'ui', icon: Palette, label: 'UI & Display' },
     { id: 'viewer', icon: FileText, label: 'PDF Viewer' },
     { id: 'citation', icon: Quote, label: 'Citation Format' },
+    { id: 'reference-engines', icon: FileText, label: 'Reference Extraction' },
     { id: 'automation', icon: Clock, label: 'Automation' },
     { id: 'storage', icon: HardDrive, label: 'Storage & Cache' },
     { id: 'knowledge-map', icon: Network, label: 'Knowledge Map' },
@@ -651,6 +659,98 @@ export function Settings({ onClose }: SettingsProps) {
                       </div>
                     </button>
                   ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Reference Extraction Engines */}
+          {activeSection === 'reference-engines' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">Reference Extraction Engines</h3>
+                <p className="text-gray-600">Select which engines to use for extracting references from PDFs (multiple selection allowed)</p>
+              </div>
+
+              <div className="bg-white rounded-2xl p-6 border border-gray-200 shadow-sm space-y-4">
+                {/* GROBID */}
+                <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+                  <label className="relative inline-block w-12 h-6 flex-shrink-0 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={referenceEngines.grobid}
+                      onChange={(e) => setReferenceEngines({ ...referenceEngines, grobid: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-12 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-6 peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                  <div className="flex-1">
+                    <div className="font-semibold text-gray-900 mb-1">GROBID</div>
+                    <div className="text-sm text-gray-600">
+                      Machine learning-based reference extraction. Most accurate for extracting citation metadata and location information. Requires GROBID server.
+                    </div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      ⚡ Recommended • High accuracy • Extracts citation spans
+                    </div>
+                  </div>
+                </div>
+
+                {/* pdftotext */}
+                <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+                  <label className="relative inline-block w-12 h-6 flex-shrink-0 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={referenceEngines.pdftotext}
+                      onChange={(e) => setReferenceEngines({ ...referenceEngines, pdftotext: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-12 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-6 peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                  <div className="flex-1">
+                    <div className="font-semibold text-gray-900 mb-1">pdftotext (Poppler)</div>
+                    <div className="text-sm text-gray-600">
+                      Fallback text extraction tool. Better at handling PDFs with font encoding issues (ToUnicode CMap problems). Used when GROBID fails.
+                    </div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      🔄 Fallback option • Good for garbled PDFs • Requires poppler-utils
+                    </div>
+                  </div>
+                </div>
+
+                {/* OCR */}
+                <div className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
+                  <label className="relative inline-block w-12 h-6 flex-shrink-0 mt-1">
+                    <input
+                      type="checkbox"
+                      checked={referenceEngines.ocr}
+                      onChange={(e) => setReferenceEngines({ ...referenceEngines, ocr: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-12 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-6 peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                  <div className="flex-1">
+                    <div className="font-semibold text-gray-900 mb-1">OCR (Tesseract)</div>
+                    <div className="text-sm text-gray-600">
+                      Optical character recognition for image-based or severely corrupted PDFs. Slowest but can extract text from scanned documents. Used as last resort.
+                    </div>
+                    <div className="text-xs text-gray-500 mt-2">
+                      🐢 Slow • Requires Tesseract • For scanned/image PDFs only
+                    </div>
+                  </div>
+                </div>
+
+                {/* Info Box */}
+                <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                  <div className="flex items-start gap-3">
+                    <div className="text-2xl">ℹ️</div>
+                    <div className="flex-1">
+                      <div className="font-medium text-blue-900 mb-1">Extraction Strategy</div>
+                      <div className="text-sm text-blue-700">
+                        Engines are tried in order: <strong>GROBID → arXiv PDF fallback → pdftotext → OCR → LLM parsing</strong>.
+                        Each enabled engine increases the chance of successful extraction but may slow down processing.
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

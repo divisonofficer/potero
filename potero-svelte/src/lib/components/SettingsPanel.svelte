@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type APIConfigDto } from '$lib/api/client';
+	import { api, type APIConfigDto, type Settings } from '$lib/api/client';
 
 	let apiConfigs: APIConfigDto[] = $state([]);
+	let settings: Settings | null = $state(null);
 	let loading = $state(false);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 
 	onMount(async () => {
 		await loadAPIConfigs();
+		await loadSettings();
 	});
 
 	async function loadAPIConfigs() {
@@ -20,6 +22,20 @@
 			apiConfigs = response.data;
 		} else {
 			error = response.error?.message || 'Failed to load API configurations';
+		}
+
+		loading = false;
+	}
+
+	async function loadSettings() {
+		loading = true;
+		error = null;
+
+		const response = await api.getSettings();
+		if (response.success && response.data) {
+			settings = response.data;
+		} else {
+			error = response.error?.message || 'Failed to load settings';
 		}
 
 		loading = false;
@@ -57,6 +73,27 @@
 		saving = false;
 	}
 
+	async function toggleReferenceEngine(engine: 'grobid' | 'pdftotext' | 'ocr', enabled: boolean) {
+		if (!settings) return;
+
+		saving = true;
+		error = null;
+
+		const updateData: Partial<Settings> = {};
+		if (engine === 'grobid') updateData.grobidEnabled = enabled;
+		else if (engine === 'pdftotext') updateData.pdftotextEnabled = enabled;
+		else if (engine === 'ocr') updateData.ocrEnabled = enabled;
+
+		const response = await api.updateSettings(updateData);
+		if (response.success && response.data) {
+			settings = response.data;
+		} else {
+			error = response.error?.message || 'Failed to update reference engine settings';
+		}
+
+		saving = false;
+	}
+
 	// Group APIs by category
 	let groupedAPIs = $derived(Object.entries(
 		apiConfigs.reduce(
@@ -81,10 +118,9 @@
 </script>
 
 <div class="settings-panel">
-	<h2>Search API Configuration</h2>
+	<h2>Settings</h2>
 	<p class="description">
-		Configure which academic APIs to use for searching papers. Enable or disable each API and
-		provide API keys where required.
+		Configure application settings including reference extraction engines and search APIs.
 	</p>
 
 	{#if error}
@@ -94,8 +130,110 @@
 	{/if}
 
 	{#if loading}
-		<div class="loading">Loading API configurations...</div>
+		<div class="loading">Loading settings...</div>
 	{:else}
+		<!-- Reference Extraction Engines -->
+		{#if settings}
+			<section class="settings-section">
+				<h3>📄 Reference Extraction Engines</h3>
+				<p class="section-description">
+					Select which engines to use for extracting references from PDFs. Multiple engines can be enabled.
+					Engines are tried in order: GROBID → arXiv fallback → pdftotext → OCR → LLM parsing.
+				</p>
+
+				<div class="engine-grid">
+					<!-- GROBID -->
+					<div class="engine-card">
+						<div class="engine-header">
+							<label class="engine-toggle">
+								<input
+									type="checkbox"
+									checked={settings.grobidEnabled ?? true}
+									disabled={saving}
+									onchange={(e) => {
+										const target = e.target as HTMLInputElement;
+										toggleReferenceEngine('grobid', target.checked);
+									}}
+								/>
+								<span class="engine-name">GROBID</span>
+							</label>
+							<span class="engine-badge recommended">⚡ Recommended</span>
+						</div>
+						<p class="engine-description">
+							Machine learning-based extraction. Most accurate for citation metadata and location information.
+						</p>
+						<div class="engine-features">
+							<span class="feature">High accuracy</span>
+							<span class="feature">Extracts citation spans</span>
+							<span class="feature">Requires GROBID server</span>
+						</div>
+					</div>
+
+					<!-- pdftotext -->
+					<div class="engine-card">
+						<div class="engine-header">
+							<label class="engine-toggle">
+								<input
+									type="checkbox"
+									checked={settings.pdftotextEnabled ?? true}
+									disabled={saving}
+									onchange={(e) => {
+										const target = e.target as HTMLInputElement;
+										toggleReferenceEngine('pdftotext', target.checked);
+									}}
+								/>
+								<span class="engine-name">pdftotext (Poppler)</span>
+							</label>
+							<span class="engine-badge fallback">🔄 Fallback</span>
+						</div>
+						<p class="engine-description">
+							Fallback text extraction. Better at handling PDFs with font encoding issues (ToUnicode CMap problems).
+						</p>
+						<div class="engine-features">
+							<span class="feature">Good for garbled PDFs</span>
+							<span class="feature">Fast extraction</span>
+							<span class="feature">Requires poppler-utils</span>
+						</div>
+					</div>
+
+					<!-- OCR -->
+					<div class="engine-card">
+						<div class="engine-header">
+							<label class="engine-toggle">
+								<input
+									type="checkbox"
+									checked={settings.ocrEnabled ?? false}
+									disabled={saving}
+									onchange={(e) => {
+										const target = e.target as HTMLInputElement;
+										toggleReferenceEngine('ocr', target.checked);
+									}}
+								/>
+								<span class="engine-name">OCR (Tesseract)</span>
+							</label>
+							<span class="engine-badge slow">🐢 Slow</span>
+						</div>
+						<p class="engine-description">
+							Optical character recognition for image-based or severely corrupted PDFs. Used as last resort.
+						</p>
+						<div class="engine-features">
+							<span class="feature">For scanned PDFs</span>
+							<span class="feature">Slowest option</span>
+							<span class="feature">Requires Tesseract</span>
+						</div>
+					</div>
+				</div>
+			</section>
+		{/if}
+
+		<!-- Search API Configuration -->
+		<section class="settings-section">
+			<h3>🔍 Search API Configuration</h3>
+			<p class="section-description">
+				Configure which academic APIs to use for searching papers. Enable or disable each API and
+				provide API keys where required.
+			</p>
+
 		{#each groupedAPIs as [category, apis]}
 			<section class="api-category">
 				<h3>{getCategoryDisplayName(category)}</h3>
@@ -157,6 +295,7 @@
 				{/each}
 			</section>
 		{/each}
+		</section>
 	{/if}
 </div>
 
@@ -165,6 +304,118 @@
 		padding: 2rem;
 		max-width: 1200px;
 		margin: 0 auto;
+	}
+
+	.settings-section {
+		margin-bottom: 3rem;
+	}
+
+	.settings-section h3 {
+		font-size: 1.5rem;
+		font-weight: 600;
+		margin-bottom: 0.75rem;
+		color: var(--color-text-primary, #333);
+	}
+
+	.section-description {
+		color: var(--color-text-secondary, #666);
+		margin-bottom: 1.5rem;
+		font-size: 0.95rem;
+		line-height: 1.6;
+	}
+
+	.engine-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+		gap: 1rem;
+	}
+
+	.engine-card {
+		background: var(--color-surface, #fff);
+		border: 1px solid var(--color-border, #e0e0e0);
+		border-radius: 8px;
+		padding: 1.25rem;
+		transition: box-shadow 0.2s, border-color 0.2s;
+	}
+
+	.engine-card:hover {
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		border-color: var(--color-border-hover, #ccc);
+	}
+
+	.engine-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 0.75rem;
+	}
+
+	.engine-toggle {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	.engine-toggle input[type='checkbox'] {
+		width: 18px;
+		height: 18px;
+		cursor: pointer;
+	}
+
+	.engine-toggle input[type='checkbox']:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+
+	.engine-name {
+		font-weight: 600;
+		font-size: 1.05rem;
+	}
+
+	.engine-badge {
+		padding: 0.25rem 0.75rem;
+		border-radius: 12px;
+		font-size: 0.8rem;
+		font-weight: 500;
+	}
+
+	.engine-badge.recommended {
+		background-color: #e6f7ff;
+		color: #0066cc;
+	}
+
+	.engine-badge.fallback {
+		background-color: #fff7e6;
+		color: #cc7a00;
+	}
+
+	.engine-badge.slow {
+		background-color: #fff0f0;
+		color: #cc0000;
+	}
+
+	.engine-description {
+		color: var(--color-text-secondary, #666);
+		font-size: 0.9rem;
+		margin: 0.5rem 0;
+		line-height: 1.5;
+	}
+
+	.engine-features {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.75rem;
+	}
+
+	.feature {
+		padding: 0.25rem 0.625rem;
+		background-color: var(--color-surface-secondary, #f5f5f5);
+		border-radius: 6px;
+		font-size: 0.8rem;
+		color: var(--color-text-tertiary, #666);
 	}
 
 	h2 {

@@ -21,7 +21,11 @@ data class SettingsDto(
     val ssoTokenExpiresAt: Long? = null,
     val ssoSiteName: String = "robi-gpt-dev",
     // PDF Download options
-    val enableSciHub: Boolean = false
+    val enableSciHub: Boolean = false,
+    // Reference Extraction Engines
+    val grobidEnabled: Boolean = true,
+    val pdftotextEnabled: Boolean = true,
+    val ocrEnabled: Boolean = false
 )
 
 @Serializable
@@ -36,7 +40,11 @@ data class UpdateSettingsRequest(
     val ssoTokenExpiry: Long? = null,
     val ssoSiteName: String? = null,
     // PDF Download options
-    val enableSciHub: Boolean? = null
+    val enableSciHub: Boolean? = null,
+    // Reference Extraction Engines
+    val grobidEnabled: Boolean? = null,
+    val pdftotextEnabled: Boolean? = null,
+    val ocrEnabled: Boolean? = null
 )
 
 @Serializable
@@ -122,7 +130,10 @@ fun Route.settingsRoutes() {
                         ssoConfigured = ssoConfigured,
                         ssoTokenExpiresAt = ssoExpiry,
                         ssoSiteName = settings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev",
-                        enableSciHub = settings["scihub.enabled"]?.toBoolean() ?: false
+                        enableSciHub = settings["scihub.enabled"]?.toBoolean() ?: false,
+                        grobidEnabled = settings[SettingsKeys.GROBID_ENABLED]?.equals("true", ignoreCase = true) ?: true,
+                        pdftotextEnabled = settings[SettingsKeys.PDFTOTEXT_ENABLED]?.equals("true", ignoreCase = true) ?: true,
+                        ocrEnabled = settings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false
                     )
                     call.respond(ApiResponse(data = dto))
                 },
@@ -176,6 +187,17 @@ fun Route.settingsRoutes() {
                     settingsRepository.set("scihub.enabled", it.toString())
                 }
 
+                // Reference Extraction Engines
+                request.grobidEnabled?.let {
+                    settingsRepository.set(SettingsKeys.GROBID_ENABLED, it.toString())
+                }
+                request.pdftotextEnabled?.let {
+                    settingsRepository.set(SettingsKeys.PDFTOTEXT_ENABLED, it.toString())
+                }
+                request.ocrEnabled?.let {
+                    settingsRepository.set(SettingsKeys.OCR_ENABLED, it.toString())
+                }
+
                 // Return updated settings
                 val allSettings = settingsRepository.getAll().getOrDefault(emptyMap())
                 val ssoToken = allSettings[SettingsKeys.SSO_ACCESS_TOKEN]
@@ -196,7 +218,10 @@ fun Route.settingsRoutes() {
                     ssoConfigured = ssoConfigured,
                     ssoTokenExpiresAt = ssoExpiry,
                     ssoSiteName = allSettings[SettingsKeys.SSO_SITE_NAME] ?: "robi-gpt-dev",
-                    enableSciHub = allSettings["scihub.enabled"]?.toBoolean() ?: false
+                    enableSciHub = allSettings["scihub.enabled"]?.toBoolean() ?: false,
+                    grobidEnabled = allSettings[SettingsKeys.GROBID_ENABLED]?.equals("true", ignoreCase = true) ?: true,
+                    pdftotextEnabled = allSettings[SettingsKeys.PDFTOTEXT_ENABLED]?.equals("true", ignoreCase = true) ?: true,
+                    ocrEnabled = allSettings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false
                 )
                 call.respond(ApiResponse(data = dto))
             } catch (e: Exception) {

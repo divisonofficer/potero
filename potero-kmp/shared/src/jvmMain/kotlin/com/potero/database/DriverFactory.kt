@@ -381,6 +381,47 @@ object DriverFactory {
             driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_cache_paper_idx ON NarrativeCache(paper_id)", 0)
             driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_cache_expires_idx ON NarrativeCache(expires_at)", 0)
         }
+
+        // Migration 8: Create ResearchNote tables (markdown notes with wiki-style links)
+
+        // 8.1: ResearchNote table
+        if (!tableExists("ResearchNote")) {
+            println("[DB Migration] Creating ResearchNote table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS ResearchNote (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS research_note_paper_idx ON ResearchNote(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS research_note_updated_idx ON ResearchNote(updated_at DESC)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS research_note_title_idx ON ResearchNote(title COLLATE NOCASE)", 0)
+        }
+
+        // 8.2: NoteLink table
+        if (!tableExists("NoteLink")) {
+            println("[DB Migration] Creating NoteLink table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS NoteLink (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    source_note_id TEXT NOT NULL REFERENCES ResearchNote(id) ON DELETE CASCADE,
+                    target_note_id TEXT REFERENCES ResearchNote(id) ON DELETE CASCADE,
+                    target_paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+                    link_text TEXT NOT NULL,
+                    link_type TEXT NOT NULL,
+                    position_in_content INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_source_idx ON NoteLink(source_note_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_target_note_idx ON NoteLink(target_note_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_target_paper_idx ON NoteLink(target_paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS note_link_text_idx ON NoteLink(link_text COLLATE NOCASE)", 0)
+        }
     }
 
     /**

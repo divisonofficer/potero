@@ -23,6 +23,21 @@ export function toggleChatPanel() {
 	isChatPanelOpen.update((v) => !v);
 }
 
+// Note panel state
+export const isNotePanelOpen = writable(false);
+export const notePanelPaperId = writable<string | null>(null);
+export const notePanelNoteId = writable<string | null>(null);
+
+export function openNotePanel(paperId?: string | null, noteId?: string | null) {
+	notePanelPaperId.set(paperId ?? null);
+	notePanelNoteId.set(noteId ?? null);
+	isNotePanelOpen.set(true);
+}
+
+export function closeNotePanel() {
+	isNotePanelOpen.set(false);
+}
+
 // Derived: active tab
 export const activeTab = derived([tabs, activeTabId], ([$tabs, $activeTabId]) =>
 	$tabs.find((t) => t.id === $activeTabId)

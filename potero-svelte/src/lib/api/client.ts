@@ -751,6 +751,10 @@ class ApiClient {
 	async searchNotes(query: string): Promise<ApiResponse<ResearchNote[]>> {
 		return this.request('GET', `/notes/search?q=${encodeURIComponent(query)}`);
 	}
+
+	async generateNoteTemplate(paperId: string): Promise<ApiResponse<{ title: string; template: string }>> {
+		return this.request('POST', `/notes/generate-template?paperId=${paperId}`);
+	}
 }
 
 // Types
@@ -796,6 +800,10 @@ export interface Settings {
 	ssoSiteName: string;
 	// PDF Download options
 	enableSciHub?: boolean;
+	// Reference Extraction Engines
+	grobidEnabled?: boolean;
+	pdftotextEnabled?: boolean;
+	ocrEnabled?: boolean;
 }
 
 export interface APIConfigDto {
