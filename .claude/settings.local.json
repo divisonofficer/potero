@@ -10,7 +10,8 @@
       "Bash(curl:*)",
       "Bash(./gradlew:*)",
       "Bash(npm install:*)",
-      "Bash(dmesg:*)"
+      "Bash(dmesg:*)",
+      "Bash(find:*)"
     ]
   }
 }

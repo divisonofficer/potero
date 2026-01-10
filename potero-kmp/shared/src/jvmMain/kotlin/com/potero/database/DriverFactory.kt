@@ -303,6 +303,84 @@ object DriverFactory {
             driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_page ON PersonMention(paper_id, page_num)", 0)
             driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_name ON PersonMention(person_name)", 0)
         }
+
+        // Migration 7: Create Narrative tables
+
+        // 7.1: Narrative table
+        if (!tableExists("Narrative")) {
+            println("[DB Migration] Creating Narrative table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS Narrative (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    style TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    estimated_read_time INTEGER NOT NULL DEFAULT 5,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(paper_id, style, language)
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_paper_idx ON Narrative(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_style_idx ON Narrative(style)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_language_idx ON Narrative(language)", 0)
+        }
+
+        // 7.2: NarrativeFigureExplanation table
+        if (!tableExists("NarrativeFigureExplanation")) {
+            println("[DB Migration] Creating NarrativeFigureExplanation table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS NarrativeFigureExplanation (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    narrative_id TEXT NOT NULL REFERENCES Narrative(id) ON DELETE CASCADE,
+                    figure_id TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    original_caption TEXT,
+                    explanation TEXT NOT NULL,
+                    relevance TEXT,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_figure_narrative_idx ON NarrativeFigureExplanation(narrative_id)", 0)
+        }
+
+        // 7.3: NarrativeConceptExplanation table
+        if (!tableExists("NarrativeConceptExplanation")) {
+            println("[DB Migration] Creating NarrativeConceptExplanation table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS NarrativeConceptExplanation (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    narrative_id TEXT NOT NULL REFERENCES Narrative(id) ON DELETE CASCADE,
+                    term TEXT NOT NULL,
+                    definition TEXT NOT NULL,
+                    analogy TEXT,
+                    related_terms TEXT,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_concept_narrative_idx ON NarrativeConceptExplanation(narrative_id)", 0)
+        }
+
+        // 7.4: NarrativeCache table
+        if (!tableExists("NarrativeCache")) {
+            println("[DB Migration] Creating NarrativeCache table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS NarrativeCache (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    stage TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    UNIQUE(paper_id, stage)
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_cache_paper_idx ON NarrativeCache(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS narrative_cache_expires_idx ON NarrativeCache(expires_at)", 0)
+        }
     }
 
     /**

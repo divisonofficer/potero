@@ -4,8 +4,9 @@
 	import type { PdfViewerState } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
-	import { api, type Reference, type CitationSpan } from '$lib/api/client';
-	import { List } from 'lucide-svelte';
+	import { api, type Reference, type CitationSpan, type Narrative, type NarrativeStyle } from '$lib/api/client';
+	import { getErrorMessage } from '$lib/types';
+	import { List, BookOpen, FileText, RefreshCw } from 'lucide-svelte';
 
 	interface Props {
 		pdfUrl: string;
@@ -58,6 +59,258 @@
 	let citationSpans = $state<CitationSpan[]>([]);
 	let isLoadingCitations = $state(false);
 	let citationsSource = $state<'backend' | 'pattern' | null>(null);
+
+	// Content view mode (Reader vs Blog)
+	let contentViewMode = $state<'reader' | 'blog'>('reader');
+
+	// Narrative (Blog) state
+	let narratives = $state<Narrative[]>([]);
+	let selectedNarrative = $state<Narrative | null>(null);
+	let selectedStyle = $state<NarrativeStyle>('BLOG');
+	let selectedLanguageCode = $state<string>('ko'); // 'ko' or 'en'
+	let isLoadingNarratives = $state(false);
+	let isGeneratingNarratives = $state(false);
+	let narrativeError = $state<string | null>(null);
+	let narrativeJobProgress = $state<number>(0);
+	let narrativeJobMessage = $state<string>('');
+	let llmLogPreview = $state<string>('');
+	let llmLogType = $state<'input' | 'output'>('input');
+	let llmLogLineIndex = $state<number>(0);
+
+	/**
+	 * Load narratives for the current paper
+	 */
+	async function loadNarratives() {
+		if (!paperId) return;
+
+		isLoadingNarratives = true;
+		narrativeError = null;
+
+		try {
+			const result = await api.getNarratives(paperId);
+			if (result.success && result.data) {
+				narratives = result.data;
+				// Auto-select narrative matching current style/language
+				selectNarrative(selectedStyle, selectedLanguageCode);
+			} else {
+				narratives = [];
+				selectedNarrative = null;
+			}
+
+			// Check for active narrative generation job
+			if (narratives.length === 0) {
+				await checkActiveNarrativeJob();
+			}
+		} catch (e) {
+			console.error('[PdfViewer] Failed to load narratives:', e);
+			narrativeError = e instanceof Error ? e.message : 'Failed to load narratives';
+		} finally {
+			isLoadingNarratives = false;
+		}
+	}
+
+	/**
+	 * Check if there's an active narrative generation job for this paper
+	 */
+	async function checkActiveNarrativeJob() {
+		if (!paperId) return;
+
+		try {
+			const jobsResult = await api.getJobsForPaper(paperId);
+			if (jobsResult.success && jobsResult.data) {
+				const activeJob = jobsResult.data.find(
+					j => j.type === 'NARRATIVE_GENERATION' && (j.status === 'PENDING' || j.status === 'RUNNING')
+				);
+				if (activeJob) {
+					console.log('[PdfViewer] Found active narrative job:', activeJob.id);
+					isGeneratingNarratives = true;
+					narrativeJobProgress = activeJob.progress;
+					narrativeJobMessage = activeJob.progressMessage || 'Generating...';
+					// Start polling for this job
+					await pollNarrativeGeneration(activeJob.id);
+				}
+			}
+		} catch (e) {
+			console.error('[PdfViewer] Failed to check active jobs:', e);
+		}
+	}
+
+	/**
+	 * Select a narrative by style and language code
+	 */
+	function selectNarrative(style: NarrativeStyle, langCode: string) {
+		selectedStyle = style;
+		selectedLanguageCode = langCode;
+		selectedNarrative = narratives.find(n => n.style === style && n.language === langCode) ?? null;
+	}
+
+	/**
+	 * Generate narratives for the current paper
+	 */
+	async function generateNarratives(regenerate: boolean = false) {
+		if (!paperId) return;
+
+		isGeneratingNarratives = true;
+		narrativeError = null;
+
+		try {
+			const result = await api.generateNarratives(paperId, {
+				styles: ['BLOG', 'NEWS', 'REDDIT'],
+				languages: ['KOREAN', 'ENGLISH'],
+				regenerate,
+				includeConceptExplanations: true
+			});
+
+			if (result.success && result.data) {
+				console.log('[PdfViewer] Narrative generation started:', result.data.jobId);
+				// Poll for completion
+				await pollNarrativeGeneration(result.data.jobId);
+			} else {
+				throw new Error(getErrorMessage(result.error));
+			}
+		} catch (e) {
+			console.error('[PdfViewer] Failed to generate narratives:', e);
+			narrativeError = e instanceof Error ? e.message : 'Failed to generate narratives';
+			isGeneratingNarratives = false;
+		}
+	}
+
+	/**
+	 * Poll for narrative generation completion
+	 */
+	async function pollNarrativeGeneration(jobId: string) {
+		const maxAttempts = 300; // 5 minutes with 1 second interval (narrative generation can take a while)
+		let attempts = 0;
+
+		while (attempts < maxAttempts) {
+			try {
+				// Fetch job status and LLM logs in parallel
+				const [jobResult, logsResult] = await Promise.all([
+					api.getJob(jobId),
+					api.getLLMLogs(1) // Get most recent log
+				]);
+
+				if (jobResult.success && jobResult.data) {
+					const job = jobResult.data;
+
+					// Update progress state
+					narrativeJobProgress = job.progress;
+					narrativeJobMessage = job.progressMessage || 'Generating...';
+
+					if (job.status === 'COMPLETED') {
+						// Reload narratives
+						narrativeJobProgress = 100;
+						narrativeJobMessage = 'Complete!';
+						llmLogPreview = '';
+						isGeneratingNarratives = false;
+						await loadNarratives();
+						return;
+					} else if (job.status === 'FAILED') {
+						narrativeError = job.error || 'Narrative generation failed';
+						isGeneratingNarratives = false;
+						narrativeJobProgress = 0;
+						narrativeJobMessage = '';
+						llmLogPreview = '';
+						return;
+					}
+					// Still running, continue polling
+				} else {
+					// API call failed but not critically - continue polling
+					console.warn('[PdfViewer] Job poll failed:', getErrorMessage(jobResult.error));
+				}
+
+				// Update LLM log preview - cycle through lines on each switch
+				if (logsResult.success && logsResult.data && logsResult.data.length > 0) {
+					const latestLog = logsResult.data[0];
+					// Alternate between showing input and output, advancing line each time
+					const newType = attempts % 2 === 0 ? 'input' : 'output';
+					const text = newType === 'input'
+						? latestLog.inputPromptPreview
+						: latestLog.outputResponsePreview;
+
+					if (text) {
+						// Split into lines and filter out empty ones
+						const lines = text.split('\n').filter((l: string) => l.trim().length > 0);
+						if (lines.length > 0) {
+							// Advance line index on each switch
+							if (newType !== llmLogType) {
+								llmLogLineIndex = 0; // Reset when switching type
+							} else {
+								llmLogLineIndex = (llmLogLineIndex + 1) % lines.length;
+							}
+							// Show current line (truncate if too long)
+							const currentLine = lines[llmLogLineIndex];
+							llmLogPreview = currentLine.length > 120
+								? currentLine.substring(0, 120) + '...'
+								: currentLine;
+							llmLogType = newType;
+						}
+					}
+				}
+			} catch (e) {
+				console.error('[PdfViewer] Poll error:', e);
+				// Network error - continue trying
+			}
+
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			attempts++;
+		}
+
+		narrativeError = 'Generation timed out. Check the Jobs panel for status.';
+		isGeneratingNarratives = false;
+		narrativeJobProgress = 0;
+		narrativeJobMessage = '';
+		llmLogPreview = '';
+	}
+
+	/**
+	 * Switch to blog view and load narratives if needed
+	 */
+	async function switchToBlogView() {
+		contentViewMode = 'blog';
+		if (narratives.length === 0 && !isLoadingNarratives) {
+			await loadNarratives();
+		}
+	}
+
+	/**
+	 * Simple markdown to HTML converter for narrative content
+	 */
+	function formatMarkdown(text: string): string {
+		if (!text) return '';
+
+		return text
+			// Headers
+			.replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold mt-6 mb-2">$1</h3>')
+			.replace(/^## (.+)$/gm, '<h2 class="text-xl font-semibold mt-8 mb-3">$1</h2>')
+			.replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold mt-8 mb-4">$1</h1>')
+			// Bold and italic
+			.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+			.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+			.replace(/\*(.+?)\*/g, '<em>$1</em>')
+			// Code blocks
+			.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="bg-neutral-100 dark:bg-neutral-800 p-4 rounded-lg overflow-x-auto my-4"><code>$2</code></pre>')
+			// Inline code
+			.replace(/`([^`]+)`/g, '<code class="bg-neutral-100 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-sm">$1</code>')
+			// Blockquotes
+			.replace(/^> (.+)$/gm, '<blockquote class="border-l-4 border-purple-500 pl-4 italic text-neutral-600 dark:text-neutral-400 my-4">$1</blockquote>')
+			// Unordered lists
+			.replace(/^- (.+)$/gm, '<li class="ml-4">$1</li>')
+			.replace(/(<li.*<\/li>\n?)+/g, '<ul class="list-disc list-inside my-4 space-y-1">$&</ul>')
+			// Ordered lists
+			.replace(/^\d+\. (.+)$/gm, '<li class="ml-4">$1</li>')
+			// Links
+			.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-purple-600 dark:text-purple-400 hover:underline" target="_blank" rel="noopener">$1</a>')
+			// Line breaks (double newline = paragraph)
+			.replace(/\n\n/g, '</p><p class="my-4">')
+			// Wrap in paragraph
+			.replace(/^(.+)$/gm, (match) => {
+				if (match.startsWith('<')) return match;
+				return `<p class="my-4">${match}</p>`;
+			})
+			// Clean up empty paragraphs
+			.replace(/<p class="my-4"><\/p>/g, '');
+	}
 
 	async function initPdfJs() {
 		if (pdfjsLib) return;
@@ -2356,22 +2609,280 @@
 			<div class="mx-2 h-5 w-px bg-neutral-300 dark:bg-neutral-600"></div>
 
 			<button
-				class="rounded bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300"
-				title="Reader view (current)"
+				class="flex items-center gap-1 rounded px-3 py-1 text-sm transition-colors {contentViewMode === 'reader'
+					? 'bg-blue-100 font-medium text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+					: 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-700'}"
+				onclick={() => contentViewMode = 'reader'}
+				title="Reader view - Show original PDF"
 			>
+				<FileText class="h-4 w-4" />
 				Reader
 			</button>
 			<button
-				class="rounded px-3 py-1 text-sm text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-700"
-				title="Blog view (coming soon)"
-				disabled
+				class="flex items-center gap-1 rounded px-3 py-1 text-sm transition-colors {contentViewMode === 'blog'
+					? 'bg-purple-100 font-medium text-purple-700 dark:bg-purple-900 dark:text-purple-300'
+					: 'text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-700'}"
+				onclick={switchToBlogView}
+				title="Blog view - AI-generated readable summary"
+				disabled={!paperId}
 			>
+				<BookOpen class="h-4 w-4" />
 				Blog
+				{#if isGeneratingNarratives}
+					<svg class="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
+					</svg>
+				{/if}
 			</button>
 		</div>
 	</div>
 
-	<!-- PDF Content -->
+	<!-- Content Area: Reader (PDF) or Blog View -->
+	{#if contentViewMode === 'blog'}
+		<!-- Blog View -->
+		<div class="flex-1 overflow-auto bg-neutral-50 dark:bg-neutral-900">
+			<!-- Style/Language Selector -->
+			<div class="sticky top-0 z-10 flex items-center justify-between border-b border-neutral-200 bg-white px-6 py-3 dark:border-neutral-700 dark:bg-neutral-800">
+				<div class="flex items-center gap-4">
+					<!-- Style Tabs -->
+					<div class="flex items-center gap-1 rounded-lg bg-neutral-100 p-1 dark:bg-neutral-700">
+						{#each ['BLOG', 'NEWS', 'REDDIT'] as style}
+							<button
+								class="rounded-md px-3 py-1.5 text-sm transition-colors {selectedStyle === style
+									? 'bg-white font-medium text-neutral-900 shadow-sm dark:bg-neutral-600 dark:text-white'
+									: 'text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'}"
+								onclick={() => selectNarrative(style as NarrativeStyle, selectedLanguageCode)}
+							>
+								{style === 'BLOG' ? 'Blog' : style === 'NEWS' ? 'News' : 'Reddit'}
+							</button>
+						{/each}
+					</div>
+
+					<!-- Language Toggle -->
+					<div class="flex items-center gap-1 rounded-lg bg-neutral-100 p-1 dark:bg-neutral-700">
+						<button
+							class="rounded-md px-3 py-1.5 text-sm transition-colors {selectedLanguageCode === 'ko'
+								? 'bg-white font-medium text-neutral-900 shadow-sm dark:bg-neutral-600 dark:text-white'
+								: 'text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'}"
+							onclick={() => selectNarrative(selectedStyle, 'ko')}
+						>
+							한국어
+						</button>
+						<button
+							class="rounded-md px-3 py-1.5 text-sm transition-colors {selectedLanguageCode === 'en'
+								? 'bg-white font-medium text-neutral-900 shadow-sm dark:bg-neutral-600 dark:text-white'
+								: 'text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white'}"
+							onclick={() => selectNarrative(selectedStyle, 'en')}
+						>
+							English
+						</button>
+					</div>
+				</div>
+
+				<!-- Generate/Regenerate Button -->
+				<div class="flex items-center gap-2">
+					{#if selectedNarrative}
+						<span class="text-xs text-neutral-500 dark:text-neutral-400">
+							{selectedNarrative.estimatedReadTime} min read
+						</span>
+					{/if}
+					<button
+						class="flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+						onclick={() => generateNarratives(narratives.length > 0)}
+						disabled={isGeneratingNarratives || !paperId}
+					>
+						<RefreshCw class="h-4 w-4 {isGeneratingNarratives ? 'animate-spin' : ''}" />
+						{narratives.length > 0 ? 'Regenerate' : 'Generate'}
+					</button>
+				</div>
+			</div>
+
+			<!-- Narrative Content -->
+			<div class="mx-auto max-w-3xl px-6 py-8">
+				{#if isLoadingNarratives}
+					<div class="flex flex-col items-center justify-center py-16">
+						<div class="h-10 w-10 animate-spin rounded-full border-3 border-purple-500 border-t-transparent"></div>
+						<p class="mt-4 text-sm text-neutral-500 dark:text-neutral-400">Loading narratives...</p>
+					</div>
+				{:else if isGeneratingNarratives}
+					<!-- Generation in progress with progress bar -->
+					<div class="flex flex-col items-center justify-center py-16">
+						<div class="w-full max-w-lg">
+							<!-- Progress bar -->
+							<div class="mb-4 h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+								<div
+									class="h-full rounded-full bg-purple-500 transition-all duration-300"
+									style="width: {narrativeJobProgress}%"
+								></div>
+							</div>
+
+							<div class="flex items-center justify-between text-sm">
+								<span class="text-neutral-600 dark:text-neutral-300">
+									{narrativeJobMessage || 'Generating narratives with AI...'}
+								</span>
+								<span class="font-medium text-purple-600 dark:text-purple-400">
+									{narrativeJobProgress}%
+								</span>
+							</div>
+
+							<!-- LLM Log Preview -->
+							{#if llmLogPreview}
+								<div class="mt-6 rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-700 dark:bg-neutral-800/50">
+									<div class="mb-2 flex items-center gap-2">
+										<span class="rounded px-2 py-0.5 text-xs font-medium {llmLogType === 'input'
+											? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
+											: 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300'}">
+											{llmLogType === 'input' ? 'LLM Input' : 'LLM Output'}
+										</span>
+										<div class="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-500"></div>
+									</div>
+									<p class="font-mono text-xs leading-relaxed text-neutral-600 dark:text-neutral-400 line-clamp-3 transition-all duration-500">
+										{llmLogPreview}
+									</p>
+								</div>
+							{/if}
+
+							<p class="mt-4 text-center text-xs text-neutral-400 dark:text-neutral-500">
+								{selectedLanguageCode === 'ko'
+									? 'AI가 논문을 분석하고 읽기 쉬운 형태로 변환 중입니다...'
+									: 'AI is analyzing the paper and transforming it into readable format...'}
+							</p>
+
+							<p class="mt-2 text-center text-xs text-neutral-400 dark:text-neutral-500">
+								{selectedLanguageCode === 'ko'
+									? '이 과정은 1-3분 정도 소요될 수 있습니다'
+									: 'This may take 1-3 minutes'}
+							</p>
+						</div>
+					</div>
+				{:else if narrativeError}
+					<div class="flex flex-col items-center justify-center py-16 text-neutral-500 dark:text-neutral-400">
+						<svg class="mb-4 h-12 w-12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+							<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+						</svg>
+						<p class="text-lg font-medium">
+							{selectedLanguageCode === 'ko' ? '오류 발생' : 'Error'}
+						</p>
+						<p class="mt-1 text-sm text-center max-w-md">{narrativeError}</p>
+						<div class="mt-4 flex gap-2">
+							<button
+								class="rounded-md bg-neutral-200 px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-300 dark:bg-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-600"
+								onclick={() => { narrativeError = null; loadNarratives(); }}
+							>
+								{selectedLanguageCode === 'ko' ? '다시 시도' : 'Retry'}
+							</button>
+							<button
+								class="rounded-md bg-purple-600 px-4 py-2 text-sm text-white hover:bg-purple-700 disabled:opacity-50"
+								onclick={() => { narrativeError = null; generateNarratives(false); }}
+								disabled={isGeneratingNarratives}
+							>
+								{selectedLanguageCode === 'ko' ? '새로 생성' : 'Generate New'}
+							</button>
+						</div>
+					</div>
+				{:else if selectedNarrative}
+					<!-- Narrative Display -->
+					<article class="prose prose-neutral dark:prose-invert max-w-none">
+						<h1 class="text-2xl font-bold leading-tight text-neutral-900 dark:text-white">
+							{selectedNarrative.title}
+						</h1>
+
+						{#if selectedNarrative.summary}
+							<p class="text-lg text-neutral-600 dark:text-neutral-300 border-l-4 border-purple-500 pl-4 italic">
+								{selectedNarrative.summary}
+							</p>
+						{/if}
+
+						<!-- Main Content (Markdown) -->
+						<div class="mt-8 narrative-content">
+							{@html formatMarkdown(selectedNarrative.content)}
+						</div>
+
+						<!-- Concept Explanations -->
+						{#if selectedNarrative.conceptExplanations && selectedNarrative.conceptExplanations.length > 0}
+							<div class="mt-12 rounded-lg bg-neutral-100 p-6 dark:bg-neutral-800">
+								<h2 class="mb-4 text-lg font-semibold text-neutral-900 dark:text-white">
+									{selectedLanguageCode === 'ko' ? '주요 개념 설명' : 'Key Concepts'}
+								</h2>
+								<dl class="space-y-4">
+									{#each selectedNarrative.conceptExplanations as concept}
+										<div>
+											<dt class="font-medium text-neutral-900 dark:text-white">{concept.term}</dt>
+											<dd class="mt-1 text-sm text-neutral-600 dark:text-neutral-300">
+												{concept.definition}
+												{#if concept.analogy}
+													<span class="block mt-1 italic text-purple-600 dark:text-purple-400">
+														{selectedLanguageCode === 'ko' ? '비유: ' : 'Analogy: '}{concept.analogy}
+													</span>
+												{/if}
+											</dd>
+										</div>
+									{/each}
+								</dl>
+							</div>
+						{/if}
+
+						<!-- Figure Explanations -->
+						{#if selectedNarrative.figureExplanations && selectedNarrative.figureExplanations.length > 0}
+							<div class="mt-8 rounded-lg bg-blue-50 p-6 dark:bg-blue-900/20">
+								<h2 class="mb-4 text-lg font-semibold text-neutral-900 dark:text-white">
+									{selectedLanguageCode === 'ko' ? 'Figure 설명' : 'Figure Explanations'}
+								</h2>
+								<div class="space-y-4">
+									{#each selectedNarrative.figureExplanations as fig}
+										<div class="border-l-2 border-blue-400 pl-4">
+											<h3 class="font-medium text-neutral-900 dark:text-white">{fig.label}</h3>
+											<p class="mt-1 text-sm text-neutral-600 dark:text-neutral-300">{fig.explanation}</p>
+											{#if fig.relevance}
+												<p class="mt-1 text-xs text-blue-600 dark:text-blue-400">
+													{selectedLanguageCode === 'ko' ? '중요성: ' : 'Relevance: '}{fig.relevance}
+												</p>
+											{/if}
+										</div>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</article>
+				{:else if narratives.length === 0}
+					<!-- No narratives yet -->
+					<div class="flex flex-col items-center justify-center py-16 text-neutral-500 dark:text-neutral-400">
+						<BookOpen class="mb-4 h-16 w-16 text-neutral-300 dark:text-neutral-600" />
+						<p class="text-lg font-medium text-neutral-700 dark:text-neutral-300">
+							{selectedLanguageCode === 'ko' ? '블로그 글이 아직 없습니다' : 'No blog posts yet'}
+						</p>
+						<p class="mt-2 text-sm">
+							{selectedLanguageCode === 'ko'
+								? 'AI가 이 논문을 읽기 쉬운 형태로 변환합니다'
+								: 'AI will transform this paper into an easy-to-read format'}
+						</p>
+						<button
+							class="mt-6 flex items-center gap-2 rounded-md bg-purple-600 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-purple-700"
+							onclick={() => generateNarratives(false)}
+							disabled={isGeneratingNarratives}
+						>
+							<BookOpen class="h-5 w-5" />
+							{selectedLanguageCode === 'ko' ? '블로그 글 생성하기' : 'Generate Blog Posts'}
+						</button>
+					</div>
+				{:else}
+					<!-- Narrative not found for selected style/language -->
+					<div class="flex flex-col items-center justify-center py-16 text-neutral-500 dark:text-neutral-400">
+						<p class="text-lg font-medium">
+							{selectedStyle} / {selectedLanguageCode === 'ko' ? '한국어' : 'English'} not available
+						</p>
+						<button
+							class="mt-4 rounded-md bg-purple-600 px-4 py-2 text-sm text-white hover:bg-purple-700"
+							onclick={() => generateNarratives(true)}
+						>
+							Generate All Styles
+						</button>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{:else}
+		<!-- PDF Content -->
 	<div
 		class="flex-1 overflow-auto p-6"
 		style="scroll-behavior: smooth;"
@@ -2435,6 +2946,7 @@
 			</div>
 		{/if}
 	</div>
+	{/if}
 </div>
 
 <!-- Citation Lookup Modal -->

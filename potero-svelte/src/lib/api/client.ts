@@ -546,6 +546,38 @@ class ApiClient {
 		return this.request('GET', `/references/${referenceId}/citations`);
 	}
 
+	// Narratives API - Paper-to-Narrative Engine
+	async getNarratives(paperId: string): Promise<ApiResponse<Narrative[]>> {
+		return this.request('GET', `/papers/${paperId}/narratives`);
+	}
+
+	async getNarrative(
+		paperId: string,
+		style: NarrativeStyle,
+		language: NarrativeLanguage
+	): Promise<ApiResponse<Narrative>> {
+		return this.request('GET', `/papers/${paperId}/narratives/${style}/${language}`);
+	}
+
+	async generateNarratives(
+		paperId: string,
+		request?: NarrativeGenerationRequest
+	): Promise<ApiResponse<NarrativeGenerationResponse>> {
+		return this.request('POST', `/papers/${paperId}/narratives/generate`, request ?? {});
+	}
+
+	async deleteNarratives(paperId: string): Promise<ApiResponse<{ deleted: boolean }>> {
+		return this.request('DELETE', `/papers/${paperId}/narratives`);
+	}
+
+	async getNarrativeStyles(): Promise<ApiResponse<NarrativeOptionsResponse['styles']>> {
+		return this.request('GET', '/narratives/styles');
+	}
+
+	async getNarrativeLanguages(): Promise<ApiResponse<NarrativeOptionsResponse['languages']>> {
+		return this.request('GET', '/narratives/languages');
+	}
+
 	// Bulk Re-analyze API
 	async bulkReanalyze(request: BulkReanalyzeRequest): Promise<ApiResponse<BulkReanalyzeResponse>> {
 		return this.request('POST', '/upload/bulk-reanalyze', request);
@@ -963,6 +995,99 @@ export interface CitationExtractionResponse {
 	spans: CitationSpan[];
 	links: CitationLink[];
 	stats: CitationStats;
+}
+
+// ============================================
+// Narrative Types (Paper-to-Narrative Engine)
+// ============================================
+
+/**
+ * Narrative style options
+ */
+export type NarrativeStyle = 'BLOG' | 'NEWS' | 'REDDIT';
+
+/**
+ * Narrative language options
+ */
+export type NarrativeLanguage = 'KOREAN' | 'ENGLISH';
+
+/**
+ * Figure explanation within a narrative
+ */
+export interface NarrativeFigureExplanation {
+	figureId: string;
+	label: string;
+	originalCaption: string | null;
+	explanation: string;
+	relevance: string;
+}
+
+/**
+ * Concept explanation for technical terms
+ */
+export interface NarrativeConceptExplanation {
+	term: string;
+	definition: string;
+	analogy: string | null;
+	relatedTerms: string[];
+}
+
+/**
+ * Generated narrative for a paper
+ * Note: Backend returns style as uppercase string (BLOG, NEWS, REDDIT)
+ * and language as code (ko, en)
+ */
+export interface Narrative {
+	id: string;
+	paperId: string;
+	style: NarrativeStyle; // Backend returns: "BLOG", "NEWS", "REDDIT"
+	language: string; // Backend returns language code: "ko", "en"
+	title: string;
+	content: string;
+	summary: string;
+	figureExplanations: NarrativeFigureExplanation[];
+	conceptExplanations: NarrativeConceptExplanation[];
+	estimatedReadTime: number;
+	createdAt: string;
+}
+
+/**
+ * Request to generate narratives
+ */
+export interface NarrativeGenerationRequest {
+	styles?: NarrativeStyle[];
+	languages?: NarrativeLanguage[];
+	regenerate?: boolean;
+	includeConceptExplanations?: boolean;
+}
+
+/**
+ * Response from narrative generation start
+ */
+export interface NarrativeGenerationResponse {
+	jobId: string;
+	status: string;
+	message: string;
+}
+
+/**
+ * Progress update for narrative generation
+ */
+export interface NarrativeGenerationProgress {
+	paperId: string;
+	totalNarratives: number;
+	completedNarratives: number;
+	currentStage: string;
+	currentStyle?: NarrativeStyle;
+	currentLanguage?: NarrativeLanguage;
+}
+
+/**
+ * Available styles/languages response
+ */
+export interface NarrativeOptionsResponse {
+	styles: { name: NarrativeStyle; displayName: string; description: string }[];
+	languages: { code: string; name: NarrativeLanguage; displayName: string }[];
 }
 
 export const api = new ApiClient();

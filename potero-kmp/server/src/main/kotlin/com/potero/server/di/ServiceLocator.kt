@@ -2,6 +2,7 @@ package com.potero.server.di
 
 import com.potero.data.repository.CitationRepositoryImpl
 import com.potero.data.repository.GrobidRepositoryImpl
+import com.potero.data.repository.NarrativeRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
@@ -9,6 +10,7 @@ import com.potero.data.repository.TagRepositoryImpl
 import com.potero.database.DriverFactory
 import com.potero.domain.repository.CitationRepository
 import com.potero.domain.repository.GrobidRepository
+import com.potero.domain.repository.NarrativeRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.SettingsKeys
@@ -37,10 +39,14 @@ import com.potero.service.grobid.GrobidEngine
 import com.potero.service.grobid.GrobidProcessor
 import com.potero.service.grobid.GrobidRestEngine
 import com.potero.service.grobid.DisabledGrobidEngine
+import com.potero.service.grobid.LLMReferenceParser
 import com.potero.service.pdf.PdfDownloadService
 import com.potero.service.metadata.UnpaywallResolver
 import com.potero.service.metadata.SciHubResolver
 import com.potero.service.metadata.CVFOpenAccessResolver
+import com.potero.service.narrative.NarrativeCacheService
+import com.potero.service.narrative.NarrativeEngineService
+import com.potero.service.pdf.PdfAnalyzer
 import io.ktor.client.HttpClient
 
 /**
@@ -78,6 +84,10 @@ object ServiceLocator {
 
     val grobidRepository: GrobidRepository by lazy {
         GrobidRepositoryImpl(database)
+    }
+
+    val narrativeRepository: NarrativeRepository by lazy {
+        NarrativeRepositoryImpl(database)
     }
 
     val settingsRepository: SettingsRepository by lazy {
@@ -203,10 +213,18 @@ object ServiceLocator {
         }
     }
 
+    val llmReferenceParser: LLMReferenceParser by lazy {
+        LLMReferenceParser(
+            llmService = llmService,
+            llmLogger = llmLogger
+        )
+    }
+
     val grobidProcessor: GrobidProcessor by lazy {
         GrobidProcessor(
             grobidEngine = grobidEngine,
-            grobidRepository = grobidRepository
+            grobidRepository = grobidRepository,
+            llmReferenceParser = llmReferenceParser
         )
     }
 
@@ -238,6 +256,46 @@ object ServiceLocator {
             cvfResolver = cvfOpenAccessResolver,
             unpaywallResolver = unpaywallResolver,
             sciHubResolver = sciHubResolver
+        )
+    }
+
+    val narrativeCacheService: NarrativeCacheService by lazy {
+        NarrativeCacheService(narrativeRepository)
+    }
+
+    val narrativeEngineService: NarrativeEngineService by lazy {
+        NarrativeEngineService(
+            llmService = llmService,
+            llmLogger = llmLogger,
+            paperRepository = paperRepository,
+            narrativeRepository = narrativeRepository,
+            cacheService = narrativeCacheService,
+            pdfTextProvider = { pdfPath ->
+                // Extract text from PDF for narrative generation
+                pdfPath?.let { path ->
+                    try {
+                        PdfAnalyzer(path).extractFullText()
+                    } catch (e: Exception) {
+                        println("[ServiceLocator] Failed to extract PDF text: ${e.message}")
+                        null
+                    }
+                }
+            },
+            figureProvider = { paperId ->
+                // Load figures from database
+                try {
+                    database.figureQueries.getFiguresByPaper(paperId).executeAsList().map { fig ->
+                        com.potero.service.narrative.FigureInfo(
+                            id = fig.id,
+                            label = fig.label,
+                            caption = fig.caption
+                        )
+                    }
+                } catch (e: Exception) {
+                    println("[ServiceLocator] Failed to load figures: ${e.message}")
+                    emptyList()
+                }
+            }
         )
     }
 

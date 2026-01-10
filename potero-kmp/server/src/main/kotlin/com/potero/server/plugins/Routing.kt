@@ -24,6 +24,7 @@ fun Application.configureRouting() {
             authorRoutes()
             referenceRoutes()
             citationRoutes()
+            narrativeRoutes()
         }
 
         // LLM routes (separate from /api prefix for clarity)

@@ -1,0 +1,126 @@
+-- Narrative table for storing generated narratives
+CREATE TABLE Narrative (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    style TEXT NOT NULL,
+    language TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    estimated_read_time INTEGER NOT NULL DEFAULT 5,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    UNIQUE(paper_id, style, language)
+);
+
+CREATE INDEX narrative_paper_idx ON Narrative(paper_id);
+CREATE INDEX narrative_style_idx ON Narrative(style);
+CREATE INDEX narrative_language_idx ON Narrative(language);
+
+-- Figure explanations for narratives
+CREATE TABLE NarrativeFigureExplanation (
+    id TEXT NOT NULL PRIMARY KEY,
+    narrative_id TEXT NOT NULL,
+    figure_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    original_caption TEXT,
+    explanation TEXT NOT NULL,
+    relevance TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (narrative_id) REFERENCES Narrative(id) ON DELETE CASCADE
+);
+
+CREATE INDEX narrative_figure_narrative_idx ON NarrativeFigureExplanation(narrative_id);
+
+-- Concept explanations for narratives
+CREATE TABLE NarrativeConceptExplanation (
+    id TEXT NOT NULL PRIMARY KEY,
+    narrative_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    analogy TEXT,
+    related_terms TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (narrative_id) REFERENCES Narrative(id) ON DELETE CASCADE
+);
+
+CREATE INDEX narrative_concept_narrative_idx ON NarrativeConceptExplanation(narrative_id);
+
+-- Cache for intermediate pipeline results
+CREATE TABLE NarrativeCache (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    UNIQUE(paper_id, stage)
+);
+
+CREATE INDEX narrative_cache_paper_idx ON NarrativeCache(paper_id);
+CREATE INDEX narrative_cache_expires_idx ON NarrativeCache(expires_at);
+
+-- Narrative queries
+selectAllByPaperId:
+SELECT * FROM Narrative WHERE paper_id = ? ORDER BY style, language;
+
+selectByPaperStyleLanguage:
+SELECT * FROM Narrative WHERE paper_id = ? AND style = ? AND language = ? LIMIT 1;
+
+selectById:
+SELECT * FROM Narrative WHERE id = ?;
+
+hasNarrativesForPaper:
+SELECT COUNT(*) FROM Narrative WHERE paper_id = ?;
+
+insertNarrative:
+INSERT INTO Narrative (id, paper_id, style, language, title, content, summary, estimated_read_time, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateNarrative:
+UPDATE Narrative SET title = ?, content = ?, summary = ?, estimated_read_time = ?, updated_at = ?
+WHERE id = ?;
+
+deleteByPaperId:
+DELETE FROM Narrative WHERE paper_id = ?;
+
+deleteById:
+DELETE FROM Narrative WHERE id = ?;
+
+-- Figure explanation queries
+selectFigureExplanationsByNarrativeId:
+SELECT * FROM NarrativeFigureExplanation WHERE narrative_id = ?;
+
+insertFigureExplanation:
+INSERT INTO NarrativeFigureExplanation (id, narrative_id, figure_id, label, original_caption, explanation, relevance, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteFigureExplanationsByNarrativeId:
+DELETE FROM NarrativeFigureExplanation WHERE narrative_id = ?;
+
+-- Concept explanation queries
+selectConceptExplanationsByNarrativeId:
+SELECT * FROM NarrativeConceptExplanation WHERE narrative_id = ?;
+
+insertConceptExplanation:
+INSERT INTO NarrativeConceptExplanation (id, narrative_id, term, definition, analogy, related_terms, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+deleteConceptExplanationsByNarrativeId:
+DELETE FROM NarrativeConceptExplanation WHERE narrative_id = ?;
+
+-- Cache queries
+selectCache:
+SELECT * FROM NarrativeCache WHERE paper_id = ? AND stage = ? AND expires_at > ? LIMIT 1;
+
+insertOrReplaceCache:
+INSERT OR REPLACE INTO NarrativeCache (id, paper_id, stage, data, created_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteCacheByPaperId:
+DELETE FROM NarrativeCache WHERE paper_id = ?;
+
+deleteExpiredCache:
+DELETE FROM NarrativeCache WHERE expires_at < ?;
