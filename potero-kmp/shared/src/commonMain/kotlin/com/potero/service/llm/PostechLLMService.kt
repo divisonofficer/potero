@@ -27,9 +27,10 @@ class PostechLLMService(
     ) : this(httpClient, { config.apiKey }, { config.provider })
 
     private var _providerOverride: LLMProvider? = null
+    private var _lastUsedProvider: LLMProvider = LLMProvider.GPT
 
     override val provider: LLMProvider
-        get() = _providerOverride ?: LLMProvider.GPT
+        get() = _lastUsedProvider
 
     override fun setProvider(provider: LLMProvider) {
         _providerOverride = provider
@@ -39,6 +40,9 @@ class PostechLLMService(
         // Get API key and provider dynamically from settings
         val apiKey = apiKeyProvider()
         val currentProvider = _providerOverride ?: providerProvider()
+
+        // Update last used provider for accurate logging
+        _lastUsedProvider = currentProvider
 
         // Debug logging
         println("[LLM] ========================================")
@@ -106,6 +110,9 @@ class PostechLLMService(
         // Get API key and provider dynamically from settings
         val apiKey = apiKeyProvider()
         val currentProvider = _providerOverride ?: providerProvider()
+
+        // Update last used provider for accurate logging
+        _lastUsedProvider = currentProvider
 
         // Debug logging
         println("[LLM] ========================================")

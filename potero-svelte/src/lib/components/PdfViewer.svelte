@@ -219,32 +219,43 @@
 					console.warn('[PdfViewer] Job poll failed:', getErrorMessage(jobResult.error));
 				}
 
-				// Update LLM log preview - cycle through lines on each switch
+				// Update LLM log preview - sliding window through text
 				if (logsResult.success && logsResult.data && logsResult.data.length > 0) {
 					const latestLog = logsResult.data[0];
-					// Alternate between showing input and output, advancing line each time
+					// Alternate between showing input and output
 					const newType = attempts % 2 === 0 ? 'input' : 'output';
 					const text = newType === 'input'
 						? latestLog.inputPromptPreview
 						: latestLog.outputResponsePreview;
 
 					if (text) {
-						// Split into lines and filter out empty ones
-						const lines = text.split('\n').filter((l: string) => l.trim().length > 0);
-						if (lines.length > 0) {
-							// Advance line index on each switch
-							if (newType !== llmLogType) {
-								llmLogLineIndex = 0; // Reset when switching type
-							} else {
-								llmLogLineIndex = (llmLogLineIndex + 1) % lines.length;
+						const WINDOW_SIZE = 100;
+						const SLIDE_STEP = 80; // Advance by 80 chars each time for overlap
+
+						// Reset offset when switching type, otherwise advance
+						if (newType !== llmLogType) {
+							llmLogLineIndex = 0;
+						} else {
+							llmLogLineIndex += SLIDE_STEP;
+							// Wrap around if past end
+							if (llmLogLineIndex >= text.length) {
+								llmLogLineIndex = 0;
 							}
-							// Show current line (truncate if too long)
-							const currentLine = lines[llmLogLineIndex];
-							llmLogPreview = currentLine.length > 120
-								? currentLine.substring(0, 120) + '...'
-								: currentLine;
-							llmLogType = newType;
 						}
+
+						// Extract window of text
+						const endIndex = Math.min(llmLogLineIndex + WINDOW_SIZE, text.length);
+						let preview = text.substring(llmLogLineIndex, endIndex);
+
+						// Clean up: replace literal \n with space, trim
+						preview = preview.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim();
+
+						// Add ellipsis indicators
+						if (llmLogLineIndex > 0) preview = '...' + preview;
+						if (endIndex < text.length) preview = preview + '...';
+
+						llmLogPreview = preview;
+						llmLogType = newType;
 					}
 				}
 			} catch (e) {

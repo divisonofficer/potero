@@ -228,8 +228,87 @@ class GrobidProcessor(
     }
 
     /**
-     * Extract text from the last N pages of a PDF.
+     * Check if extracted text looks garbled (encoding/mapping issues).
+     *
+     * Heuristics:
+     * - High ratio of control characters (0x00-0x1F, 0x7F)
+     * - Low ratio of printable characters
+     *
+     * This indicates ToUnicode CMap issues in PDF fonts.
+     */
+    private fun isGarbled(text: String): Boolean {
+        if (text.isBlank()) return true
+
+        // Count control characters (likely mapping errors)
+        val controlChars = text.count { it.code in 0..31 || it.code == 127 }
+        val controlRatio = controlChars.toDouble() / text.length
+
+        // Count printable characters (letters, digits, common punctuation)
+        val printableChars = text.count { ch ->
+            ch.isLetterOrDigit() || ch.isWhitespace() ||
+            ch in listOf('.', ',', ';', ':', '-', '–', '—', '(', ')', '[', ']',
+                         '{', '}', '/', '\\', '"', '\'', '?', '!')
+        }
+        val printableRatio = printableChars.toDouble() / text.length
+
+        // Empirically: >1% control chars OR <60% printable = garbled
+        val isGarbled = controlRatio > 0.01 || printableRatio < 0.60
+
+        if (isGarbled) {
+            println("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> GARBLED")
+        }
+
+        return isGarbled
+    }
+
+    /**
+     * Extract text using pdftotext (poppler) as fallback.
+     * Better at handling PDFs with ToUnicode CMap issues.
+     *
+     * @param pdfPath Path to PDF file
+     * @param startPage First page (1-indexed)
+     * @param endPage Last page (1-indexed)
+     * @return Extracted text or null if pdftotext not available
+     */
+    private fun extractWithPdftotext(pdfPath: String, startPage: Int, endPage: Int): String? {
+        return try {
+            println("[GrobidProcessor] Trying pdftotext fallback for pages $startPage-$endPage")
+
+            val process = ProcessBuilder(
+                "pdftotext",
+                "-f", startPage.toString(),
+                "-l", endPage.toString(),
+                "-layout",          // Preserve layout (helps with 2-column)
+                "-enc", "UTF-8",    // Force UTF-8 output
+                pdfPath,
+                "-"                 // Output to stdout
+            ).redirectErrorStream(true).start()
+
+            val output = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            val exitCode = process.waitFor()
+
+            if (exitCode == 0 && output.isNotBlank()) {
+                println("[GrobidProcessor] pdftotext succeeded: ${output.length} chars")
+                output
+            } else {
+                println("[GrobidProcessor] pdftotext failed with exit code $exitCode")
+                null
+            }
+        } catch (e: Exception) {
+            println("[GrobidProcessor] pdftotext not available: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Extract text from the last N pages of a PDF with fallback strategies.
      * Used as fallback when PdfAnalyzer fails to find References section.
+     *
+     * Strategy:
+     * 1. Try PDFBox with position-based sorting
+     * 2. Check if text is garbled (ToUnicode CMap issues)
+     * 3. If garbled, try pdftotext (poppler) as fallback
+     * 4. If still garbled, return what we have (LLM might still extract some info)
      *
      * @param pdfPath Path to PDF file
      * @param maxPages Maximum number of pages to extract from end
@@ -240,28 +319,62 @@ class GrobidProcessor(
             val pdfFile = java.io.File(pdfPath)
             val document = org.apache.pdfbox.Loader.loadPDF(pdfFile)
 
-            try {
-                val totalPages = document.numberOfPages
-                val startPage = maxOf(1, totalPages - maxPages + 1)
-                val endPage = totalPages
+            val totalPages = document.numberOfPages
+            val startPage = maxOf(1, totalPages - maxPages + 1)
+            val endPage = totalPages
 
+            try {
                 println("[GrobidProcessor] Extracting pages $startPage-$endPage of $totalPages")
 
+                // Step 1: Try PDFBox extraction
                 val textBuilder = StringBuilder()
+                var garbledPagesCount = 0
+
                 for (pageNum in startPage..endPage) {
                     val stripper = org.apache.pdfbox.text.PDFTextStripper()
                     stripper.startPage = pageNum
                     stripper.endPage = pageNum
 
+                    // CRITICAL: Enable position-based sorting for multi-column PDFs
+                    // This ensures text is extracted in reading order (left-to-right, top-to-bottom)
+                    stripper.setSortByPosition(true)
+
                     val pageText = stripper.getText(document)
+
+                    // Check if this page is garbled
+                    if (isGarbled(pageText)) {
+                        garbledPagesCount++
+                    }
+
                     textBuilder.append("<<<PAGE $pageNum>>>\n")
                     textBuilder.append(pageText)
                     textBuilder.append("\n\n")
                 }
 
-                val result = textBuilder.toString()
-                println("[GrobidProcessor] Extracted ${result.length} chars from last $maxPages pages")
-                result
+                val pdfboxResult = textBuilder.toString()
+                val garbledRatio = garbledPagesCount.toDouble() / maxPages
+
+                println("[GrobidProcessor] PDFBox extracted ${pdfboxResult.length} chars, ${garbledPagesCount}/${maxPages} pages garbled (${String.format("%.0f%%", garbledRatio * 100)})")
+
+                // Log a preview to verify extraction quality
+                val preview = pdfboxResult.take(500).replace("\n", "\\n")
+                println("[GrobidProcessor] Text preview: $preview")
+
+                // Step 2: If >30% pages are garbled, try pdftotext fallback
+                if (garbledRatio > 0.30) {
+                    println("[GrobidProcessor] High garbled ratio detected, trying pdftotext fallback")
+
+                    val pdftotextResult = extractWithPdftotext(pdfPath, startPage, endPage)
+
+                    if (pdftotextResult != null && !isGarbled(pdftotextResult)) {
+                        println("[GrobidProcessor] pdftotext produced clean text, using it instead")
+                        return pdftotextResult
+                    } else {
+                        println("[GrobidProcessor] pdftotext also failed or unavailable, using PDFBox result")
+                    }
+                }
+
+                pdfboxResult
             } finally {
                 document.close()
             }

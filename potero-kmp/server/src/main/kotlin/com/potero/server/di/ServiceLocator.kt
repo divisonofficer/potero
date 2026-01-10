@@ -47,6 +47,8 @@ import com.potero.service.metadata.CVFOpenAccessResolver
 import com.potero.service.narrative.NarrativeCacheService
 import com.potero.service.narrative.NarrativeEngineService
 import com.potero.service.pdf.PdfAnalyzer
+import com.potero.service.chat.*
+import com.potero.service.chat.tools.*
 import io.ktor.client.HttpClient
 
 /**
@@ -296,6 +298,38 @@ object ServiceLocator {
                     emptyList()
                 }
             }
+        )
+    }
+
+    // ===== Chat Services (Tool Calling System) =====
+
+    val toolCallParser: ToolCallParser by lazy {
+        ToolCallParser()
+    }
+
+    val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry().apply {
+            // Register available tools
+            register(ScrollToLocationTool())
+            // More tools will be added in Phase 2
+            println("[ServiceLocator] Registered ${getToolCount()} chat tools")
+        }
+    }
+
+    val toolExecutor: ToolExecutor by lazy {
+        ToolExecutor(
+            tools = toolRegistry.getAllTools(),
+            llmLogger = llmLogger
+        )
+    }
+
+    val chatService: ChatService by lazy {
+        ChatService(
+            llmService = llmService,
+            toolRegistry = toolRegistry,
+            toolParser = toolCallParser,
+            toolExecutor = toolExecutor,
+            paperRepository = paperRepository
         )
     }
 

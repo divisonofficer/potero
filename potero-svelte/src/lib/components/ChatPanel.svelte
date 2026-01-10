@@ -3,6 +3,7 @@
 	import { toast } from '$lib/stores/toast';
 	import type { Paper } from '$lib/types';
 	import { Paperclip, X } from 'lucide-svelte';
+	import { generateUUID } from '$lib/utils/uuid';
 
 	interface Props {
 		paper: Paper | null;
@@ -76,54 +77,103 @@
 
 		// Add user message immediately
 		const userMessage: ChatMessage = {
-			id: crypto.randomUUID(),
+			id: generateUUID(),
 			role: 'user',
 			content: text
 		};
 		messages = [...messages, userMessage];
 
-		// Add loading placeholder for assistant
-		const loadingId = crypto.randomUUID();
+		// Add streaming placeholder for assistant
+		const assistantId = generateUUID();
 		messages = [
 			...messages,
 			{
-				id: loadingId,
+				id: assistantId,
 				role: 'assistant',
 				content: '',
 				isLoading: true
 			}
 		];
 
+		let accumulatedContent = '';
+		let finalMessageId = assistantId;
+
 		try {
-			const result = await api.sendMessage(
+			await api.sendMessageStream(
 				text,
 				paper?.id,
 				sessionId ?? undefined,
-				attachedFiles.length > 0 ? attachedFiles : undefined
+				(event) => {
+					switch (event.type) {
+						case 'session':
+							sessionId = (event.data as { sessionId: string }).sessionId;
+							break;
+
+						case 'start':
+							// Stream started
+							break;
+
+						case 'delta':
+							// Incremental content update
+							accumulatedContent = (event.data as { content: string }).content;
+							messages = messages.map((msg) =>
+								msg.id === assistantId
+									? { ...msg, content: accumulatedContent, isLoading: true }
+									: msg
+							);
+							break;
+
+						case 'tool_call':
+							// Tool execution started - show indicator
+							const toolName = (event.data as { toolName: string }).toolName;
+							console.log('[Chat] Tool call:', toolName);
+							// Could show a "Executing tool: {toolName}" indicator here
+							break;
+
+						case 'tool_result':
+							// Tool execution completed
+							const result = event.data as { toolName: string; success: boolean; error?: string };
+							console.log('[Chat] Tool result:', result);
+							break;
+
+						case 'done':
+							// Final response with all tool executions
+							const doneData = event.data as {
+								messageId: string;
+								content: string;
+								toolExecutions: unknown[];
+							};
+							finalMessageId = doneData.messageId;
+							accumulatedContent = doneData.content;
+
+							messages = messages.map((msg) =>
+								msg.id === assistantId
+									? { id: finalMessageId, role: 'assistant' as const, content: accumulatedContent, isLoading: false }
+									: msg
+							);
+
+							// Clear attached files after successful send
+							attachedFiles = [];
+							isLoading = false;
+							break;
+
+						case 'error':
+							const errorMsg = (event.data as { message: string }).message;
+							console.error('[Chat] Error:', errorMsg);
+							toast.error(errorMsg);
+
+							// Remove loading message
+							messages = messages.filter((msg) => msg.id !== assistantId);
+							isLoading = false;
+							break;
+					}
+				}
 			);
-
-			if (result.success && result.data) {
-				sessionId = result.data.sessionId;
-
-				// Clear attached files after successful send
-				attachedFiles = [];
-
-				// Replace loading message with actual response
-				messages = messages.map((msg) =>
-					msg.id === loadingId
-						? { id: result.data!.messageId, role: 'assistant' as const, content: result.data!.content }
-						: msg
-				);
-			} else {
-				// Remove loading message and show error
-				messages = messages.filter((msg) => msg.id !== loadingId);
-				toast.error(result.error?.message ?? 'Failed to get response');
-			}
 		} catch (error) {
+			console.error('[Chat] Stream error:', error);
 			// Remove loading message and show error
-			messages = messages.filter((msg) => msg.id !== loadingId);
+			messages = messages.filter((msg) => msg.id !== assistantId);
 			toast.error('Failed to send message. Is the API key configured in Settings?');
-		} finally {
 			isLoading = false;
 		}
 	}

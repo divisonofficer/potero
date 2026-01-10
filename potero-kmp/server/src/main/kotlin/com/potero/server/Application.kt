@@ -29,5 +29,6 @@ fun Application.module() {
     configureSerialization()
     configureCORS()
     configureStatusPages()
+    configureSSE()
     configureRouting()
 }

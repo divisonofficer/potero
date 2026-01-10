@@ -2,12 +2,18 @@ package com.potero.server.routes
 
 import com.potero.server.di.ServiceLocator
 import com.potero.service.genai.GenAIFileResponse
+import com.potero.service.chat.tools.ToolExecutionDto
+import com.potero.service.chat.ChatStreamEvent
 import io.ktor.http.*
 import io.ktor.http.content.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.server.sse.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -33,7 +39,8 @@ data class ChatResponseDto(
     val sessionId: String,
     val role: String = "assistant",
     val content: String,
-    val model: String? = null
+    val model: String? = null,
+    val toolExecutions: List<ToolExecutionDto> = emptyList()  // NEW: Tool calling support
 )
 
 @Serializable
@@ -60,12 +67,150 @@ private val chatSessions = ConcurrentHashMap<String, ChatSessionDto>()
 private val chatMessages = ConcurrentHashMap<String, MutableList<ChatMessageDto>>()
 
 fun Route.chatRoutes() {
-    val llmService = ServiceLocator.llmService
+    val chatService = ServiceLocator.chatService  // NEW: Use ChatService with tool calling
     val llmLogger = ServiceLocator.llmLogger
     val paperRepository = ServiceLocator.paperRepository
 
     route("/chat") {
-        // POST /api/chat/message - Send a chat message
+        // SSE /api/chat/stream - Send a chat message with SSE streaming
+        sse("/stream") {
+            try {
+                // Parse query parameters (sent as JSON in the SSE request body would be complex,
+                // so we use query params for simple data)
+                val sessionIdParam = call.request.queryParameters["sessionId"]
+                val paperIdParam = call.request.queryParameters["paperId"]
+                val messageParam = call.request.queryParameters["message"]
+                    ?: throw IllegalArgumentException("Missing message parameter")
+
+                val sessionId = sessionIdParam ?: UUID.randomUUID().toString()
+
+                // Create or update session
+                if (!chatSessions.containsKey(sessionId)) {
+                    chatSessions[sessionId] = ChatSessionDto(
+                        id = sessionId,
+                        paperId = paperIdParam,
+                        title = messageParam.take(50) + if (messageParam.length > 50) "..." else "",
+                        messageCount = 0
+                    )
+                    chatMessages[sessionId] = mutableListOf()
+                }
+
+                // Store user message
+                val userMessageId = UUID.randomUUID().toString()
+                val userMessage = ChatMessageDto(
+                    id = userMessageId,
+                    sessionId = sessionId,
+                    role = "user",
+                    content = messageParam,
+                    createdAt = System.currentTimeMillis()
+                )
+                chatMessages.getOrPut(sessionId) { mutableListOf() }.add(userMessage)
+
+                // Get conversation history
+                val history = chatMessages[sessionId]?.takeLast(20)?.map { msg ->
+                    com.potero.service.chat.ChatMessageDto(
+                        id = msg.id,
+                        sessionId = msg.sessionId,
+                        role = msg.role,
+                        content = msg.content,
+                        model = msg.model,
+                        createdAt = msg.createdAt
+                    )
+                } ?: emptyList()
+
+                // Send session ID first
+                send(
+                    data = Json.encodeToString(mapOf("sessionId" to sessionId)),
+                    event = "session"
+                )
+
+                // Stream chat events
+                chatService.sendMessageStream(
+                    sessionId = sessionId,
+                    message = messageParam,
+                    paperId = paperIdParam,
+                    conversationHistory = history
+                ).collect { event ->
+                    when (event) {
+                        is ChatStreamEvent.Start -> {
+                            send(
+                                data = "{}",
+                                event = "start"
+                            )
+                        }
+                        is ChatStreamEvent.Delta -> {
+                            send(
+                                data = Json.encodeToString(mapOf("content" to event.content)),
+                                event = "delta"
+                            )
+                        }
+                        is ChatStreamEvent.ToolCall -> {
+                            send(
+                                data = Json.encodeToString(mapOf("toolName" to event.toolName)),
+                                event = "tool_call"
+                            )
+                        }
+                        is ChatStreamEvent.ToolResult -> {
+                            send(
+                                data = Json.encodeToString(mapOf(
+                                    "toolName" to event.toolName,
+                                    "success" to event.success,
+                                    "error" to event.error
+                                )),
+                                event = "tool_result"
+                            )
+                        }
+                        is ChatStreamEvent.Done -> {
+                            // Store assistant message
+                            val assistantMessageId = UUID.randomUUID().toString()
+                            val assistantMessage = ChatMessageDto(
+                                id = assistantMessageId,
+                                sessionId = sessionId,
+                                role = "assistant",
+                                content = event.content,
+                                model = ServiceLocator.llmService.provider.name.lowercase(),
+                                createdAt = System.currentTimeMillis()
+                            )
+                            chatMessages.getOrPut(sessionId) { mutableListOf() }.add(assistantMessage)
+
+                            // Update session
+                            val currentSession = chatSessions[sessionId]!!
+                            chatSessions[sessionId] = currentSession.copy(
+                                messageCount = chatMessages[sessionId]?.size ?: 0,
+                                lastMessage = event.content.take(100)
+                            )
+
+                            // Convert tool executions to DTOs
+                            val toolExecutionDtos = event.toolExecutions.map { it.toDto() }
+
+                            send(
+                                data = Json.encodeToString(mapOf(
+                                    "messageId" to assistantMessageId,
+                                    "content" to event.content,
+                                    "toolExecutions" to toolExecutionDtos
+                                )),
+                                event = "done"
+                            )
+                        }
+                        is ChatStreamEvent.Error -> {
+                            send(
+                                data = Json.encodeToString(mapOf("message" to event.message)),
+                                event = "error"
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("[ChatRoutes] SSE error: ${e.message}")
+                e.printStackTrace()
+                send(
+                    data = Json.encodeToString(mapOf("message" to (e.message ?: "Unknown error"))),
+                    event = "error"
+                )
+            }
+        }
+
+        // POST /api/chat/message - Send a chat message with tool calling support
         post("/message") {
             val request = call.receive<ChatRequest>()
 
@@ -93,59 +238,31 @@ fun Route.chatRoutes() {
             )
             chatMessages.getOrPut(sessionId) { mutableListOf() }.add(userMessage)
 
-            // Build prompt with paper context if available
-            val prompt = if (request.paperId != null) {
-                val paper = paperRepository.getById(request.paperId).getOrNull()
-                if (paper != null) {
-                    buildString {
-                        append("Context about the paper:\n")
-                        append("Title: ${paper.title}\n")
-                        append("Authors: ${paper.formattedAuthors}\n")
-                        paper.year?.let { append("Year: $it\n") }
-                        paper.conference?.let { append("Conference: $it\n") }
-                        paper.abstract?.let { append("Abstract: $it\n") }
-                        append("\nUser question: ${request.message}")
-                    }
-                } else {
-                    request.message
-                }
-            } else {
-                request.message
-            }
+            // Get conversation history and convert to ChatService format
+            val history = chatMessages[sessionId]?.takeLast(20)?.map { msg ->
+                com.potero.service.chat.ChatMessageDto(
+                    id = msg.id,
+                    sessionId = msg.sessionId,
+                    role = msg.role,
+                    content = msg.content,
+                    model = msg.model,
+                    createdAt = msg.createdAt
+                )
+            } ?: emptyList()
 
-            // Get paper info for logging
-            val paper = request.paperId?.let { paperRepository.getById(it).getOrNull() }
+            // Call ChatService with tool calling support
+            val chatResult = chatService.sendMessage(
+                sessionId = sessionId,
+                message = request.message,
+                paperId = request.paperId,
+                conversationHistory = history
+            )
 
-            // Call LLM service (with files if provided)
-            val startTime = System.currentTimeMillis()
-            val llmResult = if (request.files.isNotEmpty()) {
-                // Convert ChatFileAttachment to FileAttachment for LLM service
-                val fileAttachments = request.files.map { file ->
-                    com.potero.service.llm.FileAttachment(
-                        id = file.id,
-                        name = file.name,
-                        url = file.url
-                    )
-                }
-                llmService.chatWithFiles(prompt, fileAttachments)
-            } else {
-                llmService.chat(prompt)
-            }
-            val endTime = System.currentTimeMillis()
+            chatResult.fold(
+                onSuccess = { result ->
+                    println("[ChatRoutes] Chat succeeded with ${result.toolExecutions.size} tool executions")
 
-            llmResult.fold(
-                onSuccess = { responseContent ->
-                    // Log LLM usage
-                    llmLogger.log(
-                        provider = llmService.provider,
-                        purpose = "chat",
-                        inputPrompt = prompt,
-                        outputResponse = responseContent,
-                        durationMs = endTime - startTime,
-                        success = true,
-                        paperId = request.paperId,
-                        paperTitle = paper?.title
-                    )
+                    // Note: LLM logging is already done inside ChatService
 
                     // Store assistant message
                     val assistantMessageId = UUID.randomUUID().toString()
@@ -153,8 +270,8 @@ fun Route.chatRoutes() {
                         id = assistantMessageId,
                         sessionId = sessionId,
                         role = "assistant",
-                        content = responseContent,
-                        model = llmService.provider.name.lowercase(),
+                        content = result.content,
+                        model = ServiceLocator.llmService.provider.name.lowercase(),
                         createdAt = System.currentTimeMillis()
                     )
                     chatMessages.getOrPut(sessionId) { mutableListOf() }.add(assistantMessage)
@@ -163,37 +280,31 @@ fun Route.chatRoutes() {
                     val currentSession = chatSessions[sessionId]!!
                     chatSessions[sessionId] = currentSession.copy(
                         messageCount = chatMessages[sessionId]?.size ?: 0,
-                        lastMessage = responseContent.take(100)
+                        lastMessage = result.content.take(100)
                     )
+
+                    // Convert tool executions to DTOs
+                    val toolExecutionDtos = result.toolExecutions.map { it.toDto() }
 
                     val response = ChatResponseDto(
                         messageId = assistantMessageId,
                         sessionId = sessionId,
-                        content = responseContent,
-                        model = llmService.provider.name.lowercase()
+                        content = result.content,
+                        model = ServiceLocator.llmService.provider.name.lowercase(),
+                        toolExecutions = toolExecutionDtos  // NEW: Include tool executions
                     )
 
                     call.respond(ApiResponse(data = response))
                 },
                 onFailure = { error ->
-                    // Log failed LLM usage
-                    llmLogger.log(
-                        provider = llmService.provider,
-                        purpose = "chat",
-                        inputPrompt = prompt,
-                        outputResponse = null,
-                        durationMs = endTime - startTime,
-                        success = false,
-                        errorMessage = error.message,
-                        paperId = request.paperId,
-                        paperTitle = paper?.title
-                    )
+                    println("[ChatRoutes] Chat failed: ${error.message}")
+                    error.printStackTrace()
 
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         ApiResponse<ChatResponseDto>(
                             success = false,
-                            error = error.message ?: "LLM request failed"
+                            error = error.message ?: "Chat service failed"
                         )
                     )
                 }

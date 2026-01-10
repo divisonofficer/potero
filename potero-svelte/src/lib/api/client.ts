@@ -143,6 +143,90 @@ class ApiClient {
 		return this.request('GET', `/chat/sessions/${sessionId}/messages`);
 	}
 
+	/**
+	 * Send a chat message with SSE streaming support.
+	 *
+	 * Yields events as they arrive:
+	 * - session: { sessionId }
+	 * - start: {}
+	 * - delta: { content }
+	 * - tool_call: { toolName }
+	 * - tool_result: { toolName, success, error }
+	 * - done: { messageId, content, toolExecutions }
+	 * - error: { message }
+	 *
+	 * @param message User message
+	 * @param paperId Optional paper ID
+	 * @param sessionId Optional session ID
+	 * @param onEvent Callback for each SSE event
+	 */
+	async sendMessageStream(
+		message: string,
+		paperId: string | undefined,
+		sessionId: string | undefined,
+		onEvent: (event: {
+			type: 'session' | 'start' | 'delta' | 'tool_call' | 'tool_result' | 'done' | 'error';
+			data: unknown;
+		}) => void
+	): Promise<void> {
+		// Build query parameters
+		const params = new URLSearchParams();
+		params.append('message', message);
+		if (paperId) params.append('paperId', paperId);
+		if (sessionId) params.append('sessionId', sessionId);
+
+		const url = `${this.baseUrl}/chat/stream?${params.toString()}`;
+
+		const response = await fetch(url);
+		if (!response.body) {
+			throw new Error('No response body');
+		}
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = '';
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+
+				buffer += decoder.decode(value, { stream: true });
+
+				// Process complete SSE messages
+				const lines = buffer.split('\n');
+				buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+				let currentEvent: string | null = null;
+				let currentData = '';
+
+				for (const line of lines) {
+					if (line.startsWith('event:')) {
+						currentEvent = line.substring(6).trim();
+					} else if (line.startsWith('data:')) {
+						currentData = line.substring(5).trim();
+					} else if (line === '' && currentEvent && currentData) {
+						// Complete event - parse and emit
+						try {
+							const data = JSON.parse(currentData);
+							onEvent({
+								type: currentEvent as any,
+								data
+							});
+						} catch (e) {
+							console.error('[API] Failed to parse SSE data:', currentData, e);
+						}
+
+						currentEvent = null;
+						currentData = '';
+					}
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	}
+
 	// Search
 	async search(query: string, filters?: object): Promise<ApiResponse<unknown>> {
 		return this.request('POST', '/search', { query, ...filters });

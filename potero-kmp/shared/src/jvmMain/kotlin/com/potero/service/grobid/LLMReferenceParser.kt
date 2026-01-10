@@ -37,37 +37,84 @@ class LLMReferenceParser(
     suspend fun parse(referencesText: String, paperId: String): Result<List<GrobidReference>> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                val startTime = System.currentTimeMillis()
+
                 println("[LLMReferenceParser] Parsing ${referencesText.length} chars of references")
 
+                // Log first 500 chars of input to debug
+                val preview = referencesText.take(500).replace("\n", "\\n")
+                println("[LLMReferenceParser] Input preview: $preview")
+
+                // Truncate if too long (LLM context limit)
+                val truncatedText = if (referencesText.length > 50000) {
+                    println("[LLMReferenceParser] Warning: Input too long (${referencesText.length} chars), truncating to 50000")
+                    referencesText.take(50000)
+                } else {
+                    referencesText
+                }
+
                 // Step 1: Build LLM prompt with anti-hallucination rules
-                val prompt = buildPrompt(referencesText)
+                val prompt = buildPrompt(truncatedText)
 
                 // Step 2: Call LLM service
-                val response = llmService.chat(prompt).getOrElse { error ->
-                    println("[LLMReferenceParser] LLM call failed: ${error.message}")
-                    throw error
-                }
+                val llmResult = llmService.chat(prompt)
+                val endTime = System.currentTimeMillis()
+                val durationMs = endTime - startTime
 
-                println("[LLMReferenceParser] Received LLM response: ${response.length} chars")
+                llmResult.fold(
+                    onSuccess = { response ->
+                        println("[LLMReferenceParser] Received LLM response: ${response.length} chars")
+                        println("[LLMReferenceParser] Response preview: ${response.take(200)}")
 
-                // Step 3: Parse JSON response
-                val llmResponse = parseJsonResponse(response)
+                        // Log successful LLM usage
+                        llmLogger.log(
+                            provider = llmService.provider,
+                            purpose = "grobid_fallback_references",
+                            inputPrompt = prompt,
+                            outputResponse = response,
+                            durationMs = durationMs,
+                            success = true,
+                            paperTitle = "Paper ID: $paperId"
+                        )
 
-                if (llmResponse.references.isEmpty()) {
-                    println("[LLMReferenceParser] LLM returned no references")
-                    return@runCatching emptyList()
-                }
+                        // Step 3: Parse JSON response
+                        val llmResponse = parseJsonResponse(response)
 
-                println("[LLMReferenceParser] Parsed ${llmResponse.references.size} references from LLM")
+                        if (llmResponse.references.isEmpty()) {
+                            println("[LLMReferenceParser] WARNING: LLM returned empty array")
+                            println("[LLMReferenceParser] This usually means the input text format was not recognized")
+                            return@runCatching emptyList()
+                        }
 
-                // Step 4: Convert to GrobidReference
-                val grobidReferences = llmResponse.references.mapIndexed { index, llmRef ->
-                    convertToGrobidReference(llmRef, paperId, index)
-                }
+                        println("[LLMReferenceParser] Parsed ${llmResponse.references.size} references from LLM")
 
-                println("[LLMReferenceParser] Converted to ${grobidReferences.size} GrobidReferences")
+                        // Step 4: Convert to GrobidReference
+                        val grobidReferences = llmResponse.references.mapIndexed { index, llmRef ->
+                            convertToGrobidReference(llmRef, paperId, index)
+                        }
 
-                grobidReferences
+                        println("[LLMReferenceParser] Converted to ${grobidReferences.size} GrobidReferences")
+
+                        grobidReferences
+                    },
+                    onFailure = { error ->
+                        println("[LLMReferenceParser] LLM call failed: ${error.message}")
+
+                        // Log failed LLM usage
+                        llmLogger.log(
+                            provider = llmService.provider,
+                            purpose = "grobid_fallback_references",
+                            inputPrompt = prompt,
+                            outputResponse = null,
+                            durationMs = durationMs,
+                            success = false,
+                            errorMessage = error.message,
+                            paperTitle = "Paper ID: $paperId"
+                        )
+
+                        throw error
+                    }
+                )
             }
         }
     }
@@ -78,65 +125,75 @@ class LLMReferenceParser(
      */
     private fun buildPrompt(referencesText: String): String {
         return """
-You are a reference parser for academic papers. Your task is to extract bibliographic references from the provided text.
+You are a bibliographic reference parser. Extract ALL academic references from the text below.
 
-**CRITICAL INSTRUCTIONS:**
-1. Output ONLY valid JSON, no markdown, no explanation, no code blocks
-2. Look for entries that start with numbers like [1], [2], (1), (2), or similar patterns
-3. Each reference typically includes: authors, title, venue/journal, year, and optional DOI
-4. Parse ALL references you can find - do NOT return empty array unless text truly has no references
-5. Do not invent anything - if unsure, use null for that field
-6. Extract DOI only if explicitly present (pattern: 10.xxxx/xxxx)
-7. Always include the complete raw text for each reference
+## INPUT FORMAT
+The text may contain:
+- Page markers like "<<<PAGE 10>>>" (ignore these)
+- Multiple pages of text
+- A "References" or "Bibliography" section (usually at the end)
+- Numbered entries like [1], [2], (1), (2), etc.
 
-**Output Schema:**
-{
-  "references": [
-    {
-      "refIndex": <number or null>,
-      "refLabel": "<[1] or (1) or null>",
-      "raw": "<complete raw text of this reference entry>",
-      "authors": [{"family": "<last name>", "given": "<first name>", "raw": "<author name as-is>"}],
-      "title": "<paper title or null>",
-      "year": <4-digit year or null>,
-      "venue": "<conference/journal name or null>",
-      "doi": "<10.xxxx/xxxx or null>",
-      "url": "<http(s)://... or null>",
-      "confidence": <0.0-1.0, your confidence in this parse>
-    }
-  ]
-}
+## YOUR TASK
+1. Find the References/Bibliography section (if present)
+2. Parse EVERY reference entry you can find
+3. DO NOT return empty array unless there are truly NO references
+4. Output ONLY valid JSON (no markdown, no explanation)
 
-**Example Input:**
-[1] Smith, J. and Doe, A. Deep Learning for Computer Vision. In CVPR 2020, pp. 123-456. DOI: 10.1109/CVPR.2020.00123
-[2] Johnson et al. Natural Language Processing: A Survey. arXiv:2012.12345, 2020.
+## CRITICAL RULES
+- **PARSE EVERY SINGLE REFERENCE** - Do NOT skip or omit any entries
+- **DO NOT use placeholders** like "... (중략)" or "... (omitted for brevity)"
+- **DO NOT summarize** - Every reference must be included in full
+- If there are 50+ references, parse ALL of them (not just a few examples)
+- Extract DOI only if explicitly present (format: 10.xxxx/xxxx)
+- Use null for unknown fields (do NOT invent data)
+- Include complete raw text for each reference
+- Preserve reference numbering from original text
+- Typical references include: author names, title, venue/journal, year, pages, DOI
 
-**Example Output:**
-{"references":[{"refIndex":1,"refLabel":"[1]","raw":"Smith, J. and Doe, A. Deep Learning for Computer Vision. In CVPR 2020, pp. 123-456. DOI: 10.1109/CVPR.2020.00123","authors":[{"family":"Smith","given":"J.","raw":"Smith, J."},{"family":"Doe","given":"A.","raw":"Doe, A."}],"title":"Deep Learning for Computer Vision","year":2020,"venue":"CVPR","doi":"10.1109/CVPR.2020.00123","url":null,"confidence":0.95},{"refIndex":2,"refLabel":"[2]","raw":"Johnson et al. Natural Language Processing: A Survey. arXiv:2012.12345, 2020.","authors":[{"family":"Johnson","given":null,"raw":"Johnson et al."}],"title":"Natural Language Processing: A Survey","year":2020,"venue":"arXiv","doi":null,"url":null,"confidence":0.85}]}
+## OUTPUT FORMAT
+{"references":[{"refIndex":1,"refLabel":"[1]","raw":"Full text of reference...","authors":[{"family":"LastName","given":"FirstName","raw":"Name as appears"}],"title":"Paper Title","year":2020,"venue":"Conference/Journal","doi":"10.xxxx/yyyy","url":"https://...","confidence":0.9}]}
 
-**Now parse the following text:**
+## EXAMPLE
+Input text:
+```
+References
+[1] A. Smith and B. Jones. Deep Learning for Vision. CVPR 2020, pp. 1-10. DOI: 10.1109/CVPR.2020.001
+[2] C. Lee et al. Natural Language Processing. arXiv:2001.12345, 2021.
+```
+
+Output:
+{"references":[{"refIndex":1,"refLabel":"[1]","raw":"A. Smith and B. Jones. Deep Learning for Vision. CVPR 2020, pp. 1-10. DOI: 10.1109/CVPR.2020.001","authors":[{"family":"Smith","given":"A.","raw":"A. Smith"},{"family":"Jones","given":"B.","raw":"B. Jones"}],"title":"Deep Learning for Vision","year":2020,"venue":"CVPR","doi":"10.1109/CVPR.2020.001","url":null,"confidence":0.95},{"refIndex":2,"refLabel":"[2]","raw":"C. Lee et al. Natural Language Processing. arXiv:2001.12345, 2021.","authors":[{"family":"Lee","given":"C.","raw":"C. Lee et al."}],"title":"Natural Language Processing","year":2021,"venue":"arXiv","doi":null,"url":null,"confidence":0.85}]}
+
+## TEXT TO PARSE
 
 $referencesText
 
-**Remember:** Output ONLY the JSON object, starting with { and ending with }. No other text.
+## OUTPUT
+Now output the JSON object with ALL references (no omissions, no placeholders):
         """.trimIndent()
     }
 
     /**
      * Parse JSON response from LLM
-     * Handles markdown code blocks and malformed JSON
+     * Handles markdown code blocks, HTML comments, and malformed JSON
      */
     private fun parseJsonResponse(response: String): LLMReferenceResponse {
+        // Clean up response: remove HTML comments and trim
+        var cleanedResponse = response
+            .replace(Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL), "") // Remove <!-- ... -->
+            .trim()
+
         // Try to parse as-is first
         try {
-            return json.decodeFromString<LLMReferenceResponse>(response)
+            return json.decodeFromString<LLMReferenceResponse>(cleanedResponse)
         } catch (e: Exception) {
             println("[LLMReferenceParser] Direct JSON parse failed, trying markdown extraction")
         }
 
         // Try to extract from markdown code block
         val markdownPattern = Regex("""```json\s*(.*?)\s*```""", RegexOption.DOT_MATCHES_ALL)
-        val markdownMatch = markdownPattern.find(response)
+        val markdownMatch = markdownPattern.find(cleanedResponse)
         if (markdownMatch != null) {
             val jsonContent = markdownMatch.groupValues[1]
             try {
@@ -146,8 +203,20 @@ $referencesText
             }
         }
 
+        // Try to extract just the JSON object (from { to })
+        val jsonPattern = Regex("""\{.*"references".*\}""", RegexOption.DOT_MATCHES_ALL)
+        val jsonMatch = jsonPattern.find(cleanedResponse)
+        if (jsonMatch != null) {
+            val jsonContent = jsonMatch.value
+            try {
+                return json.decodeFromString<LLMReferenceResponse>(jsonContent)
+            } catch (e: Exception) {
+                println("[LLMReferenceParser] Extracted JSON parse failed: ${e.message}")
+            }
+        }
+
         // Try to fix common JSON issues
-        val fixedJson = response
+        val fixedJson = cleanedResponse
             .replace(Regex(",\\s*}"), "}") // Remove trailing commas before }
             .replace(Regex(",\\s*]"), "]") // Remove trailing commas before ]
 

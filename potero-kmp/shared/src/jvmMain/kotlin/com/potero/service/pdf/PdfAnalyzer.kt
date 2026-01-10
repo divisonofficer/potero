@@ -73,6 +73,8 @@ class PdfAnalyzer(private val pdfPath: String) {
             val stripper = PDFTextStripper().apply {
                 startPage = 1
                 endPage = minOf(maxPages, doc.numberOfPages)
+                // Enable position-based sorting for multi-column PDFs
+                setSortByPosition(true)
             }
             stripper.getText(doc)
         }
@@ -84,6 +86,8 @@ class PdfAnalyzer(private val pdfPath: String) {
     fun extractFullText(): String {
         return withDocument { doc ->
             val stripper = PDFTextStripper()
+            // Enable position-based sorting for multi-column PDFs
+            stripper.setSortByPosition(true)
             stripper.getText(doc)
         }
     }
@@ -170,6 +174,8 @@ class PdfAnalyzer(private val pdfPath: String) {
                 val stripper = PDFTextStripper().apply {
                     this.startPage = pageNum
                     this.endPage = pageNum
+                    // Enable position-based sorting for multi-column PDFs
+                    setSortByPosition(true)
                 }
                 val pageText = stripper.getText(doc)
                 val lines = pageText.lines().map { it.trim() }.filter { it.isNotBlank() }
@@ -212,6 +218,8 @@ class PdfAnalyzer(private val pdfPath: String) {
                     val stripper = PDFTextStripper().apply {
                         this.startPage = pageNum
                         this.endPage = pageNum
+                        // Enable position-based sorting for multi-column PDFs
+                        setSortByPosition(true)
                     }
                     val pageText = stripper.getText(doc)
                     val lines = pageText.lines()

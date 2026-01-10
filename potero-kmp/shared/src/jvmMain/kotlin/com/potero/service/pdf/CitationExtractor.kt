@@ -300,6 +300,8 @@ class CitationExtractor(private val pdfPath: String) {
 
         stripper.startPage = pageNum
         stripper.endPage = pageNum
+        // Enable position-based sorting for multi-column PDFs
+        stripper.setSortByPosition(true)
         stripper.getText(doc)
 
         return positions
@@ -402,6 +404,8 @@ class CitationExtractor(private val pdfPath: String) {
             val stripper = PDFTextStripper().apply {
                 startPage = pageNum
                 endPage = pageNum
+                // Enable position-based sorting for multi-column PDFs
+                setSortByPosition(true)
             }
             val pageText = stripper.getText(doc)
             val lines = pageText.lines().map { it.trim() }.filter { it.isNotBlank() }
