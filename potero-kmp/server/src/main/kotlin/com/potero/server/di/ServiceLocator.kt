@@ -99,6 +99,10 @@ object ServiceLocator {
         GrobidRepositoryImpl(database)
     }
 
+    val formulaRepository: com.potero.domain.repository.FormulaRepository by lazy {
+        com.potero.data.repository.FormulaRepositoryImpl(database)
+    }
+
     val narrativeRepository: NarrativeRepository by lazy {
         NarrativeRepositoryImpl(database)
     }
@@ -287,6 +291,7 @@ object ServiceLocator {
         GrobidProcessor(
             grobidEngine = grobidEngine,
             grobidRepository = grobidRepository,
+            formulaRepository = formulaRepository,
             llmReferenceParser = llmReferenceParser,
             paperRepository = paperRepository,
             pdfDownloadService = pdfDownloadService,
@@ -370,6 +375,22 @@ object ServiceLocator {
                     }
                 } catch (e: Exception) {
                     println("[ServiceLocator] Failed to load figures: ${e.message}")
+                    emptyList()
+                }
+            },
+            formulaProvider = { paperId ->
+                // Load formulas from database
+                try {
+                    database.formulaQueries.getFormulasByPaper(paperId).executeAsList().map { formula ->
+                        com.potero.service.narrative.FormulaInfo(
+                            id = formula.id,
+                            label = formula.label,
+                            latex = formula.latex,
+                            pageNum = formula.page_num.toInt()
+                        )
+                    }
+                } catch (e: Exception) {
+                    println("[ServiceLocator] Failed to load formulas: ${e.message}")
                     emptyList()
                 }
             }

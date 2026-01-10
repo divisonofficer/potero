@@ -27,9 +27,10 @@ class ContentRecompositionProcessor(
      */
     suspend fun process(
         structural: StructuralUnderstanding,
-        figures: List<FigureInfo>
+        figures: List<FigureInfo>,
+        formulas: List<FormulaInfo> = emptyList()
     ): Result<RecomposedContent> = runCatching {
-        val prompt = buildRecompositionPrompt(structural, figures)
+        val prompt = buildRecompositionPrompt(structural, figures, formulas)
 
         val startTime = System.currentTimeMillis()
         val llmResult = llmService.chat(prompt)
@@ -67,7 +68,8 @@ class ContentRecompositionProcessor(
 
     private fun buildRecompositionPrompt(
         structural: StructuralUnderstanding,
-        figures: List<FigureInfo>
+        figures: List<FigureInfo>,
+        formulas: List<FormulaInfo>
     ): String = """
 You are a science communicator. Based on the structural understanding below, create a narrative outline that will be engaging for general readers.
 
@@ -89,6 +91,11 @@ ${structural.sections.map { s ->
 ${if (figures.isEmpty()) "No figures available" else figures.mapIndexed { i, f ->
     "Figure ${i + 1} (id: ${f.id}): ${f.caption ?: "No caption"}"
 }.joinToString("\n")}
+
+## Available Formulas (Key Equations)
+${if (formulas.isEmpty()) "No formulas extracted" else formulas.take(10).mapIndexed { i, f ->
+    "Formula ${i + 1} (id: ${f.id}): ${f.label ?: "No label"} - ${f.latex?.take(80) ?: "LaTeX not available"}"
+}.joinToString("\n")}${if (formulas.size > 10) "\n... and ${formulas.size - 10} more formulas" else ""}
 
 ## Your Task
 Create a narrative outline that:
@@ -151,12 +158,20 @@ Respond in JSON:
             "narrativeRole": "illustrates the main concept"
         }
     ],
+    "formulaIntegrationPlan": [
+        {
+            "formulaId": "formula_id",
+            "suggestedSection": 4,
+            "narrativeRole": "shows the key mathematical relationship"
+        }
+    ],
     "conceptsToExplain": ["Concept1", "Concept2", "Concept3"]
 }
 
 Guidelines:
 - suggestedLength: "short" (100-200 words), "medium" (200-400 words), "long" (400-600 words)
 - narrativeRole examples: "introduces the problem", "visualizes the solution", "shows comparison", "demonstrates results"
+- For formulas: Select 2-3 key equations that are essential to understanding the method (not all formulas)
 - conceptsToExplain: List technical terms that need explanation for general readers
 
 Respond with ONLY the JSON object, no additional text.
@@ -199,6 +214,13 @@ Respond with ONLY the JSON object, no additional text.
                         narrativeRole = f.narrativeRole ?: "supports the narrative"
                     )
                 } ?: emptyList(),
+                formulaIntegrationPlan = parsed.formulaIntegrationPlan?.map { formula ->
+                    FormulaPlacement(
+                        formulaId = formula.formulaId ?: "",
+                        suggestedSection = formula.suggestedSection ?: 1,
+                        narrativeRole = formula.narrativeRole ?: "demonstrates the key relationship"
+                    )
+                } ?: emptyList(),
                 conceptsToExplain = parsed.conceptsToExplain ?: emptyList()
             )
         } catch (e: Exception) {
@@ -210,6 +232,7 @@ Respond with ONLY the JSON object, no additional text.
                 paperId = paperId,
                 narrativeOutline = getDefaultOutline(),
                 figureIntegrationPlan = emptyList(),
+                formulaIntegrationPlan = emptyList(),
                 conceptsToExplain = emptyList()
             )
         }
@@ -228,6 +251,7 @@ Respond with ONLY the JSON object, no additional text.
 private data class RecomposedContentJson(
     val narrativeOutline: List<NarrativeSectionJson>? = null,
     val figureIntegrationPlan: List<FigurePlacementJson>? = null,
+    val formulaIntegrationPlan: List<FormulaPlacementJson>? = null,
     val conceptsToExplain: List<String>? = null
 )
 
@@ -243,6 +267,13 @@ private data class NarrativeSectionJson(
 @Serializable
 private data class FigurePlacementJson(
     val figureId: String? = null,
+    val suggestedSection: Int? = null,
+    val narrativeRole: String? = null
+)
+
+@Serializable
+private data class FormulaPlacementJson(
+    val formulaId: String? = null,
     val suggestedSection: Int? = null,
     val narrativeRole: String? = null
 )

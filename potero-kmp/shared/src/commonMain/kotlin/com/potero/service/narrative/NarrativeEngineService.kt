@@ -19,7 +19,8 @@ class NarrativeEngineService(
     private val narrativeRepository: NarrativeRepository,
     private val cacheService: NarrativeCacheService,
     private val preprocessedPdfProvider: PreprocessedPdfProvider,
-    private val figureProvider: suspend (String) -> List<FigureInfo>
+    private val figureProvider: suspend (String) -> List<FigureInfo>,
+    private val formulaProvider: suspend (String) -> List<FormulaInfo>
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
 
@@ -48,6 +49,7 @@ class NarrativeEngineService(
             ?: throw IllegalArgumentException("Paper not found: $paperId")
 
         val figures = loadFigures(paperId)
+        val formulas = loadFormulas(paperId)
 
         // Get PDF text from preprocessed cache
         val pdfText = preprocessedPdfProvider.getFullText(paperId).getOrNull()
@@ -62,7 +64,7 @@ class NarrativeEngineService(
         ))
 
         val structural = cacheService.getOrComputeStructural(paperId) {
-            structuralProcessor.process(paper, pdfText, figures).getOrThrow()
+            structuralProcessor.process(paper, pdfText, figures, formulas).getOrThrow()
         }
 
         // 3. Stage 2: Content Recomposition (cacheable)
@@ -74,7 +76,7 @@ class NarrativeEngineService(
         ))
 
         val recomposed = cacheService.getOrComputeRecomposed(paperId) {
-            recompositionProcessor.process(structural, figures).getOrThrow()
+            recompositionProcessor.process(structural, figures, formulas).getOrThrow()
         }
 
         // 4. Stage 3: Concept Simplification
@@ -201,6 +203,15 @@ class NarrativeEngineService(
             figureProvider(paperId)
         } catch (e: Exception) {
             println("[NarrativeEngine] Failed to load figures: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private suspend fun loadFormulas(paperId: String): List<FormulaInfo> {
+        return try {
+            formulaProvider(paperId)
+        } catch (e: Exception) {
+            println("[NarrativeEngine] Failed to load formulas: ${e.message}")
             emptyList()
         }
     }

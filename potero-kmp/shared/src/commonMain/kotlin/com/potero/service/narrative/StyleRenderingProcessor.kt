@@ -33,13 +33,14 @@ class StyleRenderingProcessor(
         recomposed: RecomposedContent,
         concepts: List<ConceptExplanation>,
         figures: List<FigureInfo>,
+        formulas: List<FormulaInfo> = emptyList(),
         style: NarrativeStyle,
         language: NarrativeLanguage
     ): Result<Narrative> = runCatching {
         val narrativeId = UUID.randomUUID().toString()
 
         // Generate main content
-        val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, style, language)
+        val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, formulas, style, language)
         val startTime = System.currentTimeMillis()
         val contentResult = llmService.chat(contentPrompt)
         val endTime = System.currentTimeMillis()
@@ -87,6 +88,19 @@ class StyleRenderingProcessor(
             emptyList()
         }
 
+        // Generate formula explanations
+        val formulaExplanations = if (formulas.isNotEmpty() && recomposed.formulaIntegrationPlan.isNotEmpty()) {
+            generateFormulaExplanations(
+                formulas = formulas,
+                placements = recomposed.formulaIntegrationPlan,
+                style = style,
+                language = language,
+                narrativeId = narrativeId
+            )
+        } else {
+            emptyList()
+        }
+
         // Generate title and summary from the content
         val (title, summary) = generateTitleAndSummary(content, paper.title, style, language)
 
@@ -101,6 +115,7 @@ class StyleRenderingProcessor(
             content = content,
             summary = summary,
             figureExplanations = figureExplanations,
+            formulaExplanations = formulaExplanations,
             conceptExplanations = concepts.map { it.copy(narrativeId = narrativeId) },
             estimatedReadTime = estimateReadTime(content),
             createdAt = now,
@@ -108,6 +123,123 @@ class StyleRenderingProcessor(
         )
     }
 
+    private fun buildContentPrompt(
+        paper: Paper,
+        structural: StructuralUnderstanding,
+        recomposed: RecomposedContent,
+        concepts: List<ConceptExplanation>,
+        figures: List<FigureInfo>,
+        formulas: List<FormulaInfo>,
+        style: NarrativeStyle,
+        language: NarrativeLanguage
+    ): String {
+        val styleGuidelines = getStyleGuidelines(style)
+        val stylePersona = getStylePersona(style)
+        val languageInstruction = getLanguageInstruction(language)
+
+        // Build figure integration section
+        val figureSection = if (figures.isNotEmpty()) {
+            val figureList = figures.mapIndexed { index, fig ->
+                val placement = recomposed.figureIntegrationPlan.find { it.figureId == fig.id }
+                """
+- **${fig.label ?: "Figure ${index + 1}"}**: ${fig.caption ?: "No caption"}
+  - Best placed: ${placement?.suggestedSection ?: "Where relevant"}
+  - Role: ${placement?.narrativeRole ?: "Supports the main argument"}
+""".trim()
+            }.joinToString("\n")
+            """
+## Available Figures (MUST reference these in your narrative)
+$figureList
+
+IMPORTANT: You MUST integrate ALL figures naturally into your narrative.
+For each figure, write "[See ${if (language == NarrativeLanguage.KOREAN) "Figure" else "Figure"} X: brief description]" at appropriate points.
+Explain what each figure shows and why it matters to readers.
+"""
+        } else {
+            ""
+        }
+
+        // Build formula integration section
+        val formulaSection = if (formulas.isNotEmpty() && recomposed.formulaIntegrationPlan.isNotEmpty()) {
+            val formulaList = recomposed.formulaIntegrationPlan.mapNotNull { placement ->
+                val formula = formulas.find { it.id == placement.formulaId }
+                formula?.let {
+                    """
+- **${it.label ?: "Key Equation"}**: ${it.latex?.take(100) ?: "LaTeX not available"}
+  - Best placed: Section ${placement.suggestedSection}
+  - Role: ${placement.narrativeRole}
+""".trim()
+                }
+            }.joinToString("\n")
+            """
+## Key Formulas (Include in narrative)
+$formulaList
+
+For formulas: Use LaTeX syntax wrapped in ${"$$"}...${"$$"} for display mode or ${"$"}...${"$"} for inline.
+Example: ${"$$"}E = mc^2${"$$"}
+Provide context before and explanation after each formula.
+"""
+        } else {
+            ""
+        }
+
+        return """
+$languageInstruction
+
+You are a $stylePersona. Write a narrative about this academic paper.
+
+## Paper Information
+- Title: ${paper.title}
+- Authors: ${paper.formattedAuthors}
+- Year: ${paper.year ?: "Unknown"}
+- Venue: ${paper.conference ?: "Unknown"}
+
+## Paper Understanding
+- Main Objective: ${structural.mainObjective}
+- Research Question: ${structural.researchQuestion}
+- Methodology: ${structural.methodology}
+- Key Findings: ${structural.keyFindings.joinToString("; ")}
+- Contributions: ${structural.contributions.joinToString("; ")}
+
+## Narrative Outline to Follow
+${recomposed.narrativeOutline.map { section ->
+    """
+### Section ${section.order}: ${section.heading}
+- Purpose: ${section.purposeInNarrative}
+- Source: ${section.sourceFromPaper}
+- Length: ${section.suggestedLength}
+""".trim()
+}.joinToString("\n\n")}
+
+$figureSection
+
+$formulaSection
+
+## Concept Definitions to Include
+${if (concepts.isEmpty()) "No specific concepts to explain" else concepts.map {
+    "${it.term}: ${it.definition}${it.analogy?.let { a -> " ($a)" } ?: ""}"
+}.joinToString("\n")}
+
+## Style Guidelines
+$styleGuidelines
+
+## Output Format
+Write in Markdown format with:
+- A compelling opening hook
+- Clear section headings (##)
+- Inline explanations for technical terms when first mentioned
+${if (figures.isNotEmpty()) "- **CRITICAL**: Reference ALL ${figures.size} figures at appropriate points using [See Figure X: description] format" else ""}
+${if (recomposed.formulaIntegrationPlan.isNotEmpty()) "- **CRITICAL**: Include ALL ${recomposed.formulaIntegrationPlan.size} key formulas with explanations" else ""}
+- A memorable conclusion
+
+${getLanguageReminder(language)}
+
+Begin writing the narrative now:
+""".trimIndent()
+    }
+
+    // Keep the old signature for backward compatibility during migration
+    @Deprecated("Use the version with formulas parameter")
     private fun buildContentPrompt(
         paper: Paper,
         structural: StructuralUnderstanding,
@@ -351,6 +483,112 @@ Respond with ONLY the JSON object.
         }
     }
 
+    private suspend fun generateFormulaExplanations(
+        formulas: List<FormulaInfo>,
+        placements: List<FormulaPlacement>,
+        style: NarrativeStyle,
+        language: NarrativeLanguage,
+        narrativeId: String
+    ): List<FormulaExplanation> {
+        val prompt = buildFormulaPrompt(formulas, placements, style, language)
+
+        val result = llmService.chat(prompt)
+        val response = result.getOrNull() ?: return emptyList()
+
+        return parseFormulaExplanations(response, formulas, narrativeId)
+    }
+
+    private fun buildFormulaPrompt(
+        formulas: List<FormulaInfo>,
+        placements: List<FormulaPlacement>,
+        style: NarrativeStyle,
+        language: NarrativeLanguage
+    ): String {
+        val languageNote = if (language == NarrativeLanguage.KOREAN)
+            "Write all explanations in Korean (한국어)."
+        else
+            "Write all explanations in English."
+
+        return """
+$languageNote
+
+Explain these formulas for a ${getStylePersona(style)}:
+
+## Formulas
+${formulas.mapIndexed { i, f ->
+    val placement = placements.find { it.formulaId == f.id }
+    """
+Formula ${i + 1} (id: ${f.id}):
+- Label: ${f.label ?: "Equation ${i + 1}"}
+- LaTeX: ${f.latex ?: "LaTeX not available"}
+- Role in Narrative: ${placement?.narrativeRole ?: "Shows key mathematical relationship"}
+""".trim()
+}.joinToString("\n\n")}
+
+## Your Task
+For each formula, provide a ${style.name.lowercase()}-style explanation that:
+1. Explains what the formula represents in plain language
+2. Describes what each variable/term means
+3. Explains why this formula is important for the research
+
+Respond in JSON:
+{
+    "formulas": [
+        {
+            "formulaId": "formula_id",
+            "explanation": "2-3 sentence plain-language explanation of what the formula means",
+            "relevance": "Why this formula is important for understanding the research"
+        }
+    ]
+}
+
+Respond with ONLY the JSON object.
+""".trimIndent()
+    }
+
+    private fun parseFormulaExplanations(
+        response: String,
+        formulas: List<FormulaInfo>,
+        narrativeId: String
+    ): List<FormulaExplanation> {
+        return try {
+            var jsonText = response
+                .trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+            jsonText = jsonText.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "").trim()
+
+            val jsonStart = jsonText.indexOf('{')
+            val jsonEnd = jsonText.lastIndexOf('}')
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                jsonText = jsonText.substring(jsonStart, jsonEnd + 1)
+            }
+
+            val parsed = json.decodeFromString<FormulasResponseJson>(jsonText)
+            val now = Clock.System.now()
+
+            parsed.formulas?.mapNotNull { f ->
+                val formulaInfo = formulas.find { it.id == f.formulaId } ?: return@mapNotNull null
+                FormulaExplanation(
+                    id = UUID.randomUUID().toString(),
+                    narrativeId = narrativeId,
+                    formulaId = f.formulaId ?: "",
+                    label = formulaInfo.label ?: "Equation",
+                    latex = formulaInfo.latex,
+                    explanation = f.explanation ?: "Explanation not available",
+                    relevance = f.relevance,
+                    createdAt = now
+                )
+            } ?: emptyList()
+        } catch (e: Exception) {
+            println("[StyleRendering] Failed to parse formula explanations: ${e.message}")
+            emptyList()
+        }
+    }
+
     private suspend fun generateTitleAndSummary(
         content: String,
         originalTitle: String,
@@ -460,6 +698,18 @@ private data class FiguresResponseJson(
 @Serializable
 private data class FigureJson(
     val figureId: String? = null,
+    val explanation: String? = null,
+    val relevance: String? = null
+)
+
+@Serializable
+private data class FormulasResponseJson(
+    val formulas: List<FormulaJson>? = null
+)
+
+@Serializable
+private data class FormulaJson(
+    val formulaId: String? = null,
     val explanation: String? = null,
     val relevance: String? = null
 )

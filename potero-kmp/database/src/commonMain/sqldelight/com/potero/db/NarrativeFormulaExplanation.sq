@@ -1,0 +1,42 @@
+-- Formula explanations for narratives
+-- Stores LLM-generated explanations for formulas included in narratives
+CREATE TABLE IF NOT EXISTS NarrativeFormulaExplanation (
+    id TEXT NOT NULL PRIMARY KEY,
+    narrative_id TEXT NOT NULL,
+    formula_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    latex TEXT,
+    explanation TEXT NOT NULL,
+    relevance TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (narrative_id) REFERENCES Narrative(id) ON DELETE CASCADE,
+    FOREIGN KEY (formula_id) REFERENCES Formula(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_narrative_formula_narrative ON NarrativeFormulaExplanation(narrative_id);
+CREATE INDEX IF NOT EXISTS idx_narrative_formula_formula ON NarrativeFormulaExplanation(formula_id);
+
+-- Get all formula explanations for a narrative
+getByNarrativeId:
+SELECT * FROM NarrativeFormulaExplanation WHERE narrative_id = ?;
+
+-- Get a specific formula explanation
+getById:
+SELECT * FROM NarrativeFormulaExplanation WHERE id = ?;
+
+-- Insert a formula explanation
+insert:
+INSERT INTO NarrativeFormulaExplanation(id, narrative_id, formula_id, label, latex, explanation, relevance, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Delete formula explanations for a narrative
+deleteByNarrativeId:
+DELETE FROM NarrativeFormulaExplanation WHERE narrative_id = ?;
+
+-- Delete a specific formula explanation
+deleteById:
+DELETE FROM NarrativeFormulaExplanation WHERE id = ?;
+
+-- Count formula explanations for a narrative
+countByNarrativeId:
+SELECT COUNT(*) FROM NarrativeFormulaExplanation WHERE narrative_id = ?;

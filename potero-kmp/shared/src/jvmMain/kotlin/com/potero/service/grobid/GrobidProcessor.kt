@@ -42,6 +42,7 @@ data class GrobidProcessingStats(
 class GrobidProcessor(
     private val grobidEngine: GrobidEngine,
     private val grobidRepository: GrobidRepository,
+    private val formulaRepository: com.potero.domain.repository.FormulaRepository,
     private val llmReferenceParser: LLMReferenceParser,
     private val paperRepository: PaperRepository,
     private val pdfDownloadService: PdfDownloadService,
@@ -227,19 +228,22 @@ class GrobidProcessor(
             }
 
             // Step 5: GROBID succeeded - normal flow
-            log("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references")
+            log("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references, ${teiDocument.body.formulas.size} formulas")
 
             // Convert TEI models to domain models
             val citationSpans = convertCitationSpans(paperId, teiDocument.body.citationSpans)
             val references = convertReferences(paperId, teiDocument.references)
+            val formulas = convertFormulas(paperId, teiDocument.body.formulas)
 
             // Delete old GROBID data for this paper (if any)
             grobidRepository.deleteCitationSpansByPaperId(paperId).getOrThrow()
             grobidRepository.deleteReferencesByPaperId(paperId).getOrThrow()
+            formulaRepository.deleteByPaperId(paperId).getOrThrow()
 
             // Store in database
             grobidRepository.insertAllCitationSpans(citationSpans).getOrThrow()
             grobidRepository.insertAllReferences(references).getOrThrow()
+            formulaRepository.insertAll(formulas).getOrThrow()
 
             val processingTime = System.currentTimeMillis() - startTime
             log("[GrobidProcessor] GROBID processing completed in ${processingTime}ms")
@@ -286,6 +290,32 @@ class GrobidProcessor(
      *
      * Applies text normalization to clean up raw TEI content.
      */
+    /**
+     * Convert TEI formulas to database Formula objects.
+     */
+    private fun convertFormulas(
+        paperId: String,
+        teiFormulas: List<TEIFormula>
+    ): List<com.potero.db.Formula> {
+        val now = Clock.System.now()
+
+        return teiFormulas.map { teiFormula ->
+            // Extract page number from first bbox (default to page 1)
+            val pageNum = teiFormula.bboxes.firstOrNull()?.pageNum ?: 1
+
+            com.potero.db.Formula(
+                id = UUID.randomUUID().toString(),
+                paper_id = paperId,
+                page_num = pageNum.toLong(),
+                xml_id = teiFormula.xmlId,
+                label = teiFormula.label,
+                latex = teiFormula.latex,
+                confidence = 0.80,  // GROBID formula extraction confidence
+                created_at = now.toEpochMilliseconds()
+            )
+        }
+    }
+
     private fun convertReferences(
         paperId: String,
         teiRefs: List<TEIReference>

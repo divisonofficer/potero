@@ -35,6 +35,7 @@ data class Narrative(
     val content: String,
     val summary: String,
     val figureExplanations: List<FigureExplanation> = emptyList(),
+    val formulaExplanations: List<FormulaExplanation> = emptyList(),
     val conceptExplanations: List<ConceptExplanation> = emptyList(),
     val estimatedReadTime: Int = 5,
     val createdAt: Instant,
@@ -51,6 +52,21 @@ data class FigureExplanation(
     val figureId: String,
     val label: String,
     val originalCaption: String? = null,
+    val explanation: String,
+    val relevance: String? = null,
+    val createdAt: Instant
+)
+
+/**
+ * Formula explanation for narrative
+ */
+@Serializable
+data class FormulaExplanation(
+    val id: String,
+    val narrativeId: String,
+    val formulaId: String,
+    val label: String,
+    val latex: String? = null,
     val explanation: String,
     val relevance: String? = null,
     val createdAt: Instant
@@ -101,6 +117,7 @@ data class RecomposedContent(
     val paperId: String,
     val narrativeOutline: List<NarrativeSection> = emptyList(),
     val figureIntegrationPlan: List<FigurePlacement> = emptyList(),
+    val formulaIntegrationPlan: List<FormulaPlacement> = emptyList(),
     val conceptsToExplain: List<String> = emptyList()
 )
 
@@ -116,6 +133,13 @@ data class NarrativeSection(
 @Serializable
 data class FigurePlacement(
     val figureId: String,
+    val suggestedSection: Int,
+    val narrativeRole: String
+)
+
+@Serializable
+data class FormulaPlacement(
+    val formulaId: String,
     val suggestedSection: Int,
     val narrativeRole: String
 )

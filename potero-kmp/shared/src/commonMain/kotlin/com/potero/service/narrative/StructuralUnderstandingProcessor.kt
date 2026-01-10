@@ -28,9 +28,10 @@ class StructuralUnderstandingProcessor(
     suspend fun process(
         paper: Paper,
         pdfText: String?,
-        figures: List<FigureInfo>
+        figures: List<FigureInfo>,
+        formulas: List<FormulaInfo> = emptyList()
     ): Result<StructuralUnderstanding> = runCatching {
-        val prompt = buildStructuralPrompt(paper, pdfText, figures)
+        val prompt = buildStructuralPrompt(paper, pdfText, figures, formulas)
 
         val startTime = System.currentTimeMillis()
         val llmResult = llmService.chat(prompt)
@@ -71,7 +72,8 @@ class StructuralUnderstandingProcessor(
     private fun buildStructuralPrompt(
         paper: Paper,
         pdfText: String?,
-        figures: List<FigureInfo>
+        figures: List<FigureInfo>,
+        formulas: List<FormulaInfo>
     ): String = """
 You are an expert at understanding academic papers. Analyze the following paper and extract its structural understanding.
 
@@ -89,6 +91,11 @@ ${pdfText?.take(8000) ?: "Full text not available. Use abstract and title for an
 ${if (figures.isEmpty()) "No figures available" else figures.mapIndexed { i, f ->
     "- ${f.label ?: "Figure ${i + 1}"}: ${f.caption ?: "No caption"}"
 }.joinToString("\n")}
+
+## Formulas in Paper
+${if (formulas.isEmpty()) "No formulas extracted" else formulas.take(5).mapIndexed { i, f ->
+    "- ${f.label ?: "Formula ${i + 1}"}: ${f.latex?.take(100) ?: "LaTeX not available"}"
+}.joinToString("\n")}${if (formulas.size > 5) "\n... and ${formulas.size - 5} more formulas" else ""}
 
 ## Your Task
 Analyze this paper and respond in JSON format:
@@ -199,4 +206,14 @@ data class FigureInfo(
     val id: String,
     val label: String?,
     val caption: String?
+)
+
+/**
+ * Simple formula info for processor input
+ */
+data class FormulaInfo(
+    val id: String,
+    val label: String?,
+    val latex: String?,
+    val pageNum: Int
 )
