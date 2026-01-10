@@ -83,4 +83,10 @@ interface ComparisonTableRepository {
      * Insert or update a narrative summary
      */
     suspend fun insertNarrative(narrative: ComparisonNarrative): Result<ComparisonNarrative>
+
+    // Search operations
+    /**
+     * Search comparison tables by text (title, description, narrative content, key insights)
+     */
+    suspend fun searchByText(query: String, limit: Int = 10): Result<List<ComparisonTable>>
 }

@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { papers, fuzzySearchPapers, importFromSearchResult } from '$lib/stores/library';
-	import { openPaper, openNote, openAuthorProfile } from '$lib/stores/tabs';
+	import { openPaper, openNote, openAuthorProfile, openRelatedWork } from '$lib/stores/tabs';
 	import { notes } from '$lib/stores/notes';
 	import { api, type SearchResult } from '$lib/api/client';
-	import type { Paper, ResearchNote, AuthorProfile } from '$lib/types';
-	import { Search, X, ArrowRight, Globe, FileText, BookOpen, User } from 'lucide-svelte';
+	import type { Paper, ResearchNote, AuthorProfile, ComparisonTable } from '$lib/types';
+	import { Search, X, ArrowRight, Globe, FileText, BookOpen, User, Table } from 'lucide-svelte';
 
 	interface Props {
 		onClose: () => void;
@@ -22,6 +22,7 @@
 	let paperResults = $state<Paper[]>([]);
 	let noteResults = $state<ResearchNote[]>([]);
 	let authorResults = $state<string[]>([]);
+	let comparisonResults = $state<ComparisonTable[]>([]);
 
 	// Online search results
 	let onlineResults = $state<SearchResult[]>([]);
@@ -31,7 +32,7 @@
 	let inputEl: HTMLInputElement;
 	let onlineSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
-	// Search local content (papers, notes, authors)
+	// Search local content (papers, notes, authors, comparison tables)
 	$effect(() => {
 		if (searchQuery.length >= 2) {
 			// Search papers
@@ -57,10 +58,18 @@
 				});
 			});
 			authorResults = Array.from(allAuthors).slice(0, 3);
+
+			// Search comparison tables
+			api.searchComparisonTables(searchQuery, 3).then((result) => {
+				if (result.success && result.data) {
+					comparisonResults = result.data;
+				}
+			});
 		} else {
 			paperResults = [];
 			noteResults = [];
 			authorResults = [];
+			comparisonResults = [];
 			onlineResults = [];
 		}
 		selectedIndex = 0; // Reset selection when results change
@@ -106,7 +115,12 @@
 	// Get total number of results based on active tab
 	const totalResults = $derived(() => {
 		if (activeTab === 'local') {
-			return paperResults.length + noteResults.length + authorResults.length;
+			return (
+				paperResults.length +
+				noteResults.length +
+				authorResults.length +
+				comparisonResults.length
+			);
 		} else {
 			return onlineResults.length;
 		}
@@ -115,19 +129,40 @@
 	async function handleEnter() {
 		if (activeTab === 'local') {
 			// Local tab navigation
-			if (selectedIndex < paperResults.length) {
-				// Open paper
-				openPaper(paperResults[selectedIndex]);
+			let offset = 0;
+
+			// Papers
+			if (selectedIndex < offset + paperResults.length) {
+				openPaper(paperResults[selectedIndex - offset]);
 				onClose();
-			} else if (selectedIndex < paperResults.length + noteResults.length) {
-				// Open note
-				const noteIndex = selectedIndex - paperResults.length;
-				openNote(noteResults[noteIndex]);
+				return;
+			}
+			offset += paperResults.length;
+
+			// Notes
+			if (selectedIndex < offset + noteResults.length) {
+				openNote(noteResults[selectedIndex - offset]);
 				onClose();
-			} else if (selectedIndex < totalResults()) {
-				// Open author profile
-				const authorIndex = selectedIndex - paperResults.length - noteResults.length;
-				const authorName = authorResults[authorIndex];
+				return;
+			}
+			offset += noteResults.length;
+
+			// Comparison Tables
+			if (selectedIndex < offset + comparisonResults.length) {
+				const comparison = comparisonResults[selectedIndex - offset];
+				// Find the source paper and open related work tab
+				const sourcePaper = $papers.find((p) => p.id === comparison.sourcePaperId);
+				if (sourcePaper) {
+					openRelatedWork(sourcePaper);
+				}
+				onClose();
+				return;
+			}
+			offset += comparisonResults.length;
+
+			// Authors
+			if (selectedIndex < offset + authorResults.length) {
+				const authorName = authorResults[selectedIndex - offset];
 				const authorPapers = $papers.filter((p) => p.authors.includes(authorName));
 				const authorProfile: AuthorProfile = {
 					name: authorName,
@@ -142,6 +177,7 @@
 				};
 				openAuthorProfile(authorProfile);
 				onClose();
+				return;
 			}
 		} else {
 			// Online tab - import paper
@@ -314,6 +350,43 @@
 					{/each}
 				{/if}
 
+				<!-- Comparison Tables -->
+				{#if comparisonResults.length > 0}
+					<div
+						class="border-b bg-muted/30 px-4 py-2 text-xs font-semibold uppercase text-muted-foreground"
+					>
+						Comparison Tables
+					</div>
+					{#each comparisonResults as comparison, i}
+						<button
+							class="w-full text-left px-4 py-3 hover:bg-muted transition-colors
+								{selectedIndex === paperResults.length + noteResults.length + i ? 'bg-muted' : ''}"
+							onclick={() => {
+								const sourcePaper = $papers.find((p) => p.id === comparison.sourcePaperId);
+								if (sourcePaper) {
+									openRelatedWork(sourcePaper);
+								}
+								onClose();
+							}}
+						>
+							<div class="flex items-start gap-3">
+								<Table class="h-5 w-5 text-purple-500 shrink-0 mt-0.5" />
+								<div class="flex-1 min-w-0">
+									<div class="font-medium line-clamp-1">{comparison.title}</div>
+									{#if comparison.description}
+										<div class="text-sm text-muted-foreground line-clamp-1">
+											{comparison.description}
+										</div>
+									{/if}
+									<div class="text-xs text-muted-foreground mt-1">
+										{new Date(comparison.createdAt).toLocaleDateString()}
+									</div>
+								</div>
+							</div>
+						</button>
+					{/each}
+				{/if}
+
 				<!-- Authors -->
 				{#if authorResults.length > 0}
 					<div
@@ -324,7 +397,7 @@
 					{#each authorResults as author, i}
 						<button
 							class="w-full text-left px-4 py-3 hover:bg-muted transition-colors
-								{selectedIndex === paperResults.length + noteResults.length + i ? 'bg-muted' : ''}"
+								{selectedIndex === paperResults.length + noteResults.length + comparisonResults.length + i ? 'bg-muted' : ''}"
 							onclick={() => {
 								const authorPapers = $papers.filter((p) => p.authors.includes(author));
 								const authorProfile: AuthorProfile = {

@@ -856,6 +856,16 @@ class ApiClient {
 	): Promise<ApiResponse<{ deleted: boolean }>> {
 		return this.request('DELETE', `/papers/${paperId}/comparisons/${tableId}`);
 	}
+
+	/**
+	 * Search comparison tables by text (title, description, narrative content, key insights)
+	 */
+	async searchComparisonTables(
+		query: string,
+		limit: number = 10
+	): Promise<ApiResponse<ComparisonTable[]>> {
+		return this.request('GET', `/comparisons/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+	}
 }
 
 // Types

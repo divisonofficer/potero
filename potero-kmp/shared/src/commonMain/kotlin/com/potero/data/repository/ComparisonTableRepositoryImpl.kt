@@ -275,4 +275,14 @@ class ComparisonTableRepositoryImpl(
             updatedAt = Instant.fromEpochMilliseconds(updated_at)
         )
     }
+
+    override suspend fun searchByText(query: String, limit: Int): Result<List<ComparisonTable>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                database.comparisonTableQueries
+                    .searchByText(query, query, query, query, limit.toLong())
+                    .executeAsList()
+                    .map { it.toDomain(emptyList()) } // Empty columns list for search results
+            }
+        }
 }

@@ -177,6 +177,7 @@ fun GenerateComparisonTableRequest.toServiceRequest(): ComparisonTableRequest {
 fun Route.relatedWorkRoutes() {
     val relatedWorkService = ServiceLocator.relatedWorkService
     val comparisonService = ServiceLocator.comparisonService
+    val comparisonTableRepository = ServiceLocator.comparisonTableRepository
 
     route("/papers/{paperId}/related") {
 
@@ -377,6 +378,35 @@ fun Route.relatedWorkRoutes() {
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         ApiResponse<Map<String, Boolean>>(success = false, error = error.message)
+                    )
+                }
+            )
+        }
+    }
+
+    // Global comparison table search
+    route("/comparisons/search") {
+        // GET /api/comparisons/search?q=query&limit=10
+        // Search all comparison tables by text
+        get {
+            val query = call.request.queryParameters["q"]
+                ?: return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<List<ComparisonTableDto>>(success = false, error = "Missing query parameter 'q'")
+                )
+
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 10
+
+            comparisonTableRepository.searchByText(query, limit).fold(
+                onSuccess = { tables ->
+                    call.respond(
+                        ApiResponse(data = tables.map { it.toDto() })
+                    )
+                },
+                onFailure = { error ->
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<List<ComparisonTableDto>>(success = false, error = error.message)
                     )
                 }
             )

@@ -101,3 +101,23 @@ DELETE FROM ComparisonTable WHERE id = ?;
 
 deleteTablesBySourcePaper:
 DELETE FROM ComparisonTable WHERE source_paper_id = ?;
+
+-- Search queries
+searchByText:
+SELECT DISTINCT
+    ct.id,
+    ct.source_paper_id,
+    ct.title,
+    ct.description,
+    ct.generation_method,
+    ct.created_at,
+    ct.updated_at
+FROM ComparisonTable ct
+LEFT JOIN ComparisonNarrative cn ON ct.id = cn.table_id
+WHERE
+    ct.title LIKE '%' || ? || '%'
+    OR ct.description LIKE '%' || ? || '%'
+    OR cn.content LIKE '%' || ? || '%'
+    OR cn.key_insights LIKE '%' || ? || '%'
+ORDER BY ct.updated_at DESC
+LIMIT ?;
