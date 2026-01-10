@@ -5,6 +5,7 @@ import com.potero.domain.repository.NarrativeRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.service.llm.LLMService
 import com.potero.service.llm.LLMLogger
+import com.potero.service.pdf.PreprocessedPdfProvider
 import kotlinx.serialization.json.Json
 
 /**
@@ -17,7 +18,7 @@ class NarrativeEngineService(
     private val paperRepository: PaperRepository,
     private val narrativeRepository: NarrativeRepository,
     private val cacheService: NarrativeCacheService,
-    private val pdfTextProvider: suspend (String?) -> String?,
+    private val preprocessedPdfProvider: PreprocessedPdfProvider,
     private val figureProvider: suspend (String) -> List<FigureInfo>
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
@@ -47,7 +48,10 @@ class NarrativeEngineService(
             ?: throw IllegalArgumentException("Paper not found: $paperId")
 
         val figures = loadFigures(paperId)
-        val pdfText = pdfTextProvider(paper.pdfPath)
+
+        // Get PDF text from preprocessed cache
+        val pdfText = preprocessedPdfProvider.getFullText(paperId).getOrNull()
+            ?: throw IllegalStateException("PDF text not available for paper $paperId. Preprocessing may be required.")
 
         // 2. Stage 1: Structural Understanding (cacheable)
         progressCallback(NarrativeGenerationProgress(

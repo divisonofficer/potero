@@ -16,6 +16,7 @@ import io.ktor.http.content.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -96,6 +97,16 @@ data class ReanalyzeJobResponse(
 )
 
 /**
+ * Response for async re-extract job submission
+ */
+@Serializable
+data class ReExtractJobResponse(
+    val jobId: String,
+    val paperId: String,
+    val message: String
+)
+
+/**
  * Result data stored in job after re-analysis completes
  */
 @Serializable
@@ -120,6 +131,7 @@ fun Route.uploadRoutes() {
     val doiResolver = ServiceLocator.doiResolver
     val arxivResolver = ServiceLocator.arxivResolver
     val semanticScholarResolver = ServiceLocator.semanticScholarResolver
+    val pdfPreprocessingService = ServiceLocator.pdfPreprocessingService
 
     // GET /api/pdf/file - Serve PDF file by path
     route("/pdf") {
@@ -359,6 +371,21 @@ fun Route.uploadRoutes() {
             val result = paperRepository.insert(paper)
             result.fold(
                 onSuccess = { insertedPaper ->
+                    // Trigger PDF preprocessing in background
+                    call.application.launch {
+                        try {
+                            pdfPreprocessingService.preprocessPaper(
+                                paperId = insertedPaper.id,
+                                pdfPath = targetFile.absolutePath,
+                                forceReprocess = false
+                            ).onFailure { e ->
+                                println("[Upload] Preprocessing failed for ${insertedPaper.id}: ${e.message}")
+                            }
+                        } catch (e: Exception) {
+                            println("[Upload] Preprocessing exception for ${insertedPaper.id}: ${e.message}")
+                        }
+                    }
+
                     call.respond(
                         HttpStatusCode.Created,
                         ApiResponse(
@@ -707,29 +734,42 @@ fun Route.uploadRoutes() {
 
                 var citationsCount = 0
                 try {
-                    // Run GROBID processing
+                    // Ensure preprocessing is complete (text extraction + OCR) before GROBID
+                    val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
+                    if (!preprocessedPdfProvider.isPreprocessed(paperId)) {
+                        println("[Re-analysis] Triggering preprocessing for $paperId")
+                        val preprocessingService = ServiceLocator.pdfPreprocessingService
+                        preprocessingService.preprocessPaper(paperId, pdfFile.absolutePath, forceReprocess = false)
+                    } else {
+                        println("[Re-analysis] Preprocessing already completed, reusing cached text extraction")
+                    }
+
+                    // Run GROBID processing (it will use preprocessed text internally)
                     val grobidProcessor = ServiceLocator.grobidProcessor
                     val grobidResult = grobidProcessor.process(paperId, pdfFile.absolutePath)
 
                     if (grobidResult.isSuccess) {
                         val stats = grobidResult.getOrNull()
                         println("[Re-analysis] GROBID processing completed: ${stats?.citationSpansExtracted} citations, ${stats?.referencesExtracted} references")
+                    } else {
+                        println("[Re-analysis] GROBID processing failed: ${grobidResult.exceptionOrNull()?.message}")
+                    }
 
-                        // Extract citations from PDF and link to references
-                        ctx.updateProgress(90, "Extracting and linking citations...")
+                    // Extract citations from PDF and link to references
+                    ctx.updateProgress(90, "Extracting and linking citations...")
 
-                        val citationRepository = ServiceLocator.citationRepository
-                        val grobidRepository = ServiceLocator.grobidRepository
-                        val referenceRepository = ServiceLocator.referenceRepository
+                    val citationRepository = ServiceLocator.citationRepository
+                    val grobidRepository = ServiceLocator.grobidRepository
+                    val referenceRepository = ServiceLocator.referenceRepository
 
-                        // Get GROBID data
-                        val grobidCitations = grobidRepository.getCitationSpansByPaperId(paperId).getOrDefault(emptyList())
-                        val grobidReferences = grobidRepository.getReferencesByPaperId(paperId).getOrDefault(emptyList())
+                    // Get GROBID data
+                    val grobidCitations = grobidRepository.getCitationSpansByPaperId(paperId).getOrDefault(emptyList())
+                    val grobidReferences = grobidRepository.getReferencesByPaperId(paperId).getOrDefault(emptyList())
 
-                        // Get references for linking
-                        val references = referenceRepository.getByPaperId(paperId).getOrDefault(emptyList())
+                    // Get references for linking
+                    val references = referenceRepository.getByPaperId(paperId).getOrDefault(emptyList())
 
-                        if (references.isNotEmpty()) {
+                    if (references.isNotEmpty()) {
                             // Extract citations from PDF
                             val extractor = com.potero.service.pdf.CitationExtractor(pdfFile.absolutePath)
                             val extractionResult = extractor.extract()
@@ -802,9 +842,6 @@ fun Route.uploadRoutes() {
                             citationsCount = citationSpans.size
                             println("[Re-analysis] Extracted ${citationSpans.size} citations with ${citationLinks.size} links")
                         }
-                    } else {
-                        println("[Re-analysis] GROBID processing failed: ${grobidResult.exceptionOrNull()?.message}")
-                    }
                 } catch (e: Exception) {
                     println("[Re-analysis] Citation extraction failed: ${e.message}")
                     e.printStackTrace()
@@ -824,9 +861,12 @@ fun Route.uploadRoutes() {
                     // Get updated paper (may have new metadata from external APIs)
                     val updatedPaper = paperRepository.getById(paperId).getOrNull() ?: currentPaper
 
-                    // Extract full text for better analysis
+                    // Extract text for better analysis (using preprocessed cache)
+                    val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
                     val fullText = try {
-                        analyzer.extractFirstPagesText(maxPages = 3)
+                        preprocessedPdfProvider.getFirstPages(paperId, maxPages = 3).getOrElse {
+                            analyzer.extractFirstPagesText(maxPages = 3)
+                        }
                     } catch (e: Exception) {
                         null
                     }
@@ -1005,6 +1045,101 @@ fun Route.uploadRoutes() {
             )
         }
 
+        // POST /api/upload/re-extract/{paperId} - Force re-extraction of PDF preprocessing data
+        post("/re-extract/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            // Check if paper exists
+            val existingPaper = paperRepository.getById(paperId).getOrNull()
+            if (existingPaper == null) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<ReExtractJobResponse>(
+                        success = false,
+                        error = "Paper not found: $paperId"
+                    )
+                )
+                return@post
+            }
+
+            // Check if paper has a PDF
+            val pdfPath = existingPaper.pdfPath
+            if (pdfPath.isNullOrBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<ReExtractJobResponse>(
+                        success = false,
+                        error = "Paper does not have a PDF file"
+                    )
+                )
+                return@post
+            }
+
+            val pdfFile = java.io.File(pdfPath)
+            if (!pdfFile.exists()) {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<ReExtractJobResponse>(
+                        success = false,
+                        error = "PDF file not found at path: $pdfPath"
+                    )
+                )
+                return@post
+            }
+
+            // Check if there's already an active re-extract job for this paper
+            val jobQueue = GlobalJobQueue.instance
+            if (jobQueue.hasActiveJobForPaper(paperId, JobType.PDF_ANALYSIS)) {
+                call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiResponse<ReExtractJobResponse>(
+                        success = false,
+                        error = "A re-extraction job is already running for this paper"
+                    )
+                )
+                return@post
+            }
+
+            // Submit async job
+            val job = jobQueue.submitJob(
+                type = JobType.PDF_ANALYSIS,
+                title = "Re-extracting: ${existingPaper.title.take(50)}...",
+                description = "Force re-extraction of PDF text and preprocessing data",
+                paperId = paperId
+            ) { ctx ->
+                ctx.updateProgress(10, "Starting PDF re-extraction...")
+
+                // Force preprocessing with forceReprocess=true
+                val preprocessingService = ServiceLocator.pdfPreprocessingService
+                preprocessingService.preprocessPaper(
+                    paperId = paperId,
+                    pdfPath = pdfFile.absolutePath,
+                    forceReprocess = true
+                ).onSuccess {
+                    ctx.updateProgress(100, "PDF re-extraction completed")
+                    println("[Re-extract] Successfully re-extracted PDF for $paperId")
+                }.onFailure { error ->
+                    ctx.updateProgress(0, "Re-extraction failed: ${error.message}")
+                    throw error
+                }
+
+                // Return simple success result
+                kotlinx.serialization.json.Json.encodeToString("{\"status\": \"completed\", \"paperId\": \"$paperId\"}")
+            }
+
+            call.respond(
+                HttpStatusCode.Accepted,
+                ApiResponse(
+                    data = ReExtractJobResponse(
+                        jobId = job.id,
+                        paperId = paperId,
+                        message = "Re-extraction job submitted"
+                    )
+                )
+            )
+        }
+
         // POST /api/upload/pdf/{paperId} - Upload PDF for existing paper
         post("/pdf/{paperId}") {
             val paperId = call.parameters["paperId"]
@@ -1146,9 +1281,15 @@ fun Route.uploadRoutes() {
             }
 
             try {
-                // Extract text from PDF for LLM analysis
-                val analyzer = PdfAnalyzer(pdfPath)
-                val pdfText = analyzer.extractFirstPagesText(maxPages = 3)
+                // Extract text from PDF for LLM analysis (using preprocessed cache)
+                val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
+                val pdfText = preprocessedPdfProvider.getFirstPages(paperId, maxPages = 3)
+                    .getOrElse {
+                        // Fallback to direct extraction if not preprocessed
+                        println("[UploadRoutes] Preprocessing not available for $paperId, using direct extraction")
+                        val analyzer = PdfAnalyzer(pdfPath)
+                        analyzer.extractFirstPagesText(maxPages = 3)
+                    }
 
                 // Analyze with LLM
                 val analysisResult = pdfLLMAnalysisService.analyzePdf(
@@ -1698,8 +1839,12 @@ fun Route.uploadRoutes() {
                                 val tagRepository = ServiceLocator.tagRepository
                                 val updatedPaper = paperRepository.getById(paper.id).getOrNull() ?: paper
 
+                                // Extract text using preprocessed cache
+                                val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
                                 val fullText = try {
-                                    analyzer.extractFirstPagesText(maxPages = 3)
+                                    preprocessedPdfProvider.getFirstPages(paper.id, maxPages = 3).getOrElse {
+                                        analyzer.extractFirstPagesText(maxPages = 3)
+                                    }
                                 } catch (e: Exception) { null }
 
                                 val existingTags = tagRepository.getAll().getOrDefault(emptyList()).map { it.name }

@@ -453,6 +453,24 @@ export async function reanalyzePaper(paperId: string): Promise<string | null> {
 }
 
 /**
+ * Re-extract PDF preprocessing data (force OCR and text extraction)
+ */
+export async function reextractPaper(paperId: string): Promise<string | null> {
+  error.set(null);
+
+  const result = await api.reextractPaper(paperId);
+
+  if (result.success && result.data) {
+    // Trigger job panel refresh to show the new job
+    triggerJobRefresh();
+    return result.data.jobId;
+  } else {
+    error.set(result.error?.message ?? "Failed to start re-extraction");
+    return null;
+  }
+}
+
+/**
  * Auto-tag a paper using LLM analysis
  */
 export async function autoTagPaper(

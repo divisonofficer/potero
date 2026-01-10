@@ -416,6 +416,24 @@ class ApiClient {
 		}
 	}
 
+	// Re-extract PDF preprocessing data (force OCR and text extraction)
+	async reextractPaper(paperId: string): Promise<ApiResponse<ReextractJobResponse>> {
+		try {
+			const response = await fetch(`${this.directUploadUrl}/upload/re-extract/${paperId}`, {
+				method: 'POST'
+			});
+			return (await response.json()) as ApiResponse<ReextractJobResponse>;
+		} catch (error) {
+			return {
+				success: false,
+				error: {
+					code: 'REEXTRACT_ERROR',
+					message: error instanceof Error ? error.message : 'Failed to re-extract PDF'
+				}
+			};
+		}
+	}
+
 	// Analyze paper with LLM (extract title, abstract, Korean translation, thumbnail)
 	async analyzePaperWithLLM(paperId: string): Promise<ApiResponse<LLMAnalysisResponse>> {
 		try {
@@ -949,6 +967,15 @@ export interface AutoTagJobResponse {
  * Response from async re-analyze job submission
  */
 export interface ReanalyzeJobResponse {
+	jobId: string;
+	paperId: string;
+	message: string;
+}
+
+/**
+ * Response for reextract job submission
+ */
+export interface ReextractJobResponse {
 	jobId: string;
 	paperId: string;
 	message: string;

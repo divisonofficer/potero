@@ -1,0 +1,82 @@
+-- PDF Equation (LaTeX OCR) Table
+CREATE TABLE PdfEquation (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    equation_index INTEGER NOT NULL,  -- Index within page
+    latex_code TEXT NOT NULL,
+    original_text TEXT,  -- Raw text from GROBID (if available)
+    confidence REAL,  -- OCR confidence score (0-1)
+    is_inline INTEGER NOT NULL DEFAULT 0,  -- 0=display, 1=inline equation
+    bounding_box TEXT,  -- JSON: {x, y, width, height}
+    mathpix_request_id TEXT,  -- For debugging/tracking
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    UNIQUE(paper_id, page_num, equation_index)
+);
+
+CREATE INDEX equation_paper_id_idx ON PdfEquation(paper_id);
+CREATE INDEX equation_paper_page_idx ON PdfEquation(paper_id, page_num);
+
+-- Queries
+getEquation:
+SELECT * FROM PdfEquation WHERE id = ?;
+
+getEquationsByPaper:
+SELECT * FROM PdfEquation WHERE paper_id = ? ORDER BY page_num, equation_index;
+
+getEquationsByPage:
+SELECT * FROM PdfEquation WHERE paper_id = ? AND page_num = ? ORDER BY equation_index;
+
+getPageRange:
+SELECT * FROM PdfEquation
+WHERE paper_id = ? AND page_num >= ? AND page_num <= ?
+ORDER BY page_num, equation_index;
+
+insertEquation:
+INSERT INTO PdfEquation(
+    id, paper_id, page_num, equation_index, latex_code, original_text,
+    confidence, is_inline, bounding_box, mathpix_request_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertOrReplaceEquation:
+INSERT OR REPLACE INTO PdfEquation(
+    id, paper_id, page_num, equation_index, latex_code, original_text,
+    confidence, is_inline, bounding_box, mathpix_request_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateEquation:
+UPDATE PdfEquation SET
+    latex_code = ?,
+    original_text = ?,
+    confidence = ?,
+    is_inline = ?,
+    bounding_box = ?,
+    mathpix_request_id = ?
+WHERE id = ?;
+
+deleteEquation:
+DELETE FROM PdfEquation WHERE id = ?;
+
+deleteEquationsByPaper:
+DELETE FROM PdfEquation WHERE paper_id = ?;
+
+deleteEquationsByPage:
+DELETE FROM PdfEquation WHERE paper_id = ? AND page_num = ?;
+
+countEquations:
+SELECT COUNT(*) FROM PdfEquation WHERE paper_id = ?;
+
+countEquationsByPage:
+SELECT COUNT(*) FROM PdfEquation WHERE paper_id = ? AND page_num = ?;
+
+getAverageConfidence:
+SELECT AVG(confidence) AS avgConfidence FROM PdfEquation WHERE paper_id = ?;
+
+getEquationTypes:
+SELECT
+    CASE WHEN is_inline = 1 THEN 'inline' ELSE 'display' END AS equationType,
+    COUNT(*) AS total
+FROM PdfEquation
+WHERE paper_id = ?
+GROUP BY is_inline;

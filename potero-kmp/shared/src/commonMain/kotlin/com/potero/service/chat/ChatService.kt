@@ -3,9 +3,12 @@ package com.potero.service.chat
 import com.potero.domain.model.Paper
 import com.potero.domain.repository.PaperRepository
 import com.potero.service.chat.tools.ToolExecutionContext
+import com.potero.service.chat.tools.ToolExecutionDto
 import com.potero.service.llm.LLMService
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.Serializable
 
 /**
  * Chat service with tool calling support.
@@ -184,108 +187,111 @@ class ChatService(
         paperId: String?,
         conversationHistory: List<ChatMessageDto>
     ): Flow<ChatStreamEvent> = flow {
-        try {
-            emit(ChatStreamEvent.Start)
+        emit(ChatStreamEvent.Start)
 
-            val context = ToolExecutionContext(
-                paperId = paperId,
-                sessionId = sessionId
+        val context = ToolExecutionContext(
+            paperId = paperId,
+            sessionId = sessionId
+        )
+
+        // Build initial prompt with system message + history + user message
+        val paper = paperId?.let { paperRepository.getById(it).getOrNull() }
+        val initialPrompt = buildPromptWithTools(message, paper, conversationHistory)
+
+        // Multi-turn tool calling loop
+        var iteration = 0
+        var currentPrompt = initialPrompt
+        val allToolExecutions = mutableListOf<ToolExecutionResult>()
+        var finalResponse = ""
+
+        while (iteration < MAX_ITERATIONS) {
+            // Call LLM
+            val llmResponse = llmService.chat(currentPrompt).getOrThrow()
+
+            // Stream the LLM response incrementally
+            emit(ChatStreamEvent.Delta(llmResponse))
+
+            // Parse tool calls
+            val parseResult = toolParser.parse(llmResponse)
+
+            if (!parseResult.hasToolCalls) {
+                // No more tools to call, return final response
+                finalResponse = parseResult.text
+                break
+            }
+
+            // Check if all tool calls are invalid
+            if (parseResult.invalidToolCalls.isNotEmpty() && parseResult.validToolCalls.isEmpty()) {
+                val errors = parseResult.invalidToolCalls.joinToString(", ") { it.error ?: "Unknown error" }
+                finalResponse = parseResult.text + "\n\n[Note: I tried to use tools but encountered errors: $errors]"
+                break
+            }
+
+            // Execute valid tool calls
+            for (toolCall in parseResult.validToolCalls) {
+                emit(ChatStreamEvent.ToolCall(toolCall.name))
+
+                val result = toolExecutor.execute(toolCall, context)
+                allToolExecutions.add(result)
+
+                emit(ChatStreamEvent.ToolResult(
+                    toolName = result.toolName,
+                    success = result.success,
+                    error = result.error
+                ))
+            }
+
+            // Build continuation prompt with tool results
+            currentPrompt = ToolCallingPrompts.buildToolResultsPrompt(
+                originalMessage = message,
+                llmResponse = llmResponse,
+                toolResults = allToolExecutions.takeLast(parseResult.validToolCalls.size)
             )
 
-            // Build initial prompt with system message + history + user message
-            val paper = paperId?.let { paperRepository.getById(it).getOrNull() }
-            val initialPrompt = buildPromptWithTools(message, paper, conversationHistory)
-
-            // Multi-turn tool calling loop
-            var iteration = 0
-            var currentPrompt = initialPrompt
-            val allToolExecutions = mutableListOf<ToolExecutionResult>()
-            var finalResponse = ""
-
-            while (iteration < MAX_ITERATIONS) {
-                // Call LLM
-                val llmResponse = llmService.chat(currentPrompt).getOrThrow()
-
-                // Stream the LLM response incrementally
-                emit(ChatStreamEvent.Delta(llmResponse))
-
-                // Parse tool calls
-                val parseResult = toolParser.parse(llmResponse)
-
-                if (!parseResult.hasToolCalls) {
-                    // No more tools to call, return final response
-                    finalResponse = parseResult.text
-                    break
-                }
-
-                // Check if all tool calls are invalid
-                if (parseResult.invalidToolCalls.isNotEmpty() && parseResult.validToolCalls.isEmpty()) {
-                    val errors = parseResult.invalidToolCalls.joinToString(", ") { it.error ?: "Unknown error" }
-                    finalResponse = parseResult.text + "\n\n[Note: I tried to use tools but encountered errors: $errors]"
-                    break
-                }
-
-                // Execute valid tool calls
-                for (toolCall in parseResult.validToolCalls) {
-                    emit(ChatStreamEvent.ToolCall(toolCall.name))
-
-                    val result = toolExecutor.execute(toolCall, context)
-                    allToolExecutions.add(result)
-
-                    emit(ChatStreamEvent.ToolResult(
-                        toolName = result.toolName,
-                        success = result.success,
-                        error = result.error
-                    ))
-                }
-
-                // Build continuation prompt with tool results
-                currentPrompt = ToolCallingPrompts.buildToolResultsPrompt(
-                    originalMessage = message,
-                    llmResponse = llmResponse,
-                    toolResults = allToolExecutions.takeLast(parseResult.validToolCalls.size)
-                )
-
-                iteration++
-            }
-
-            // Check if max iterations reached
-            if (iteration >= MAX_ITERATIONS) {
-                finalResponse += "\n\n[Note: I executed multiple tool calls but need to stop here. Please rephrase your question if you need more information.]"
-            }
-
-            emit(ChatStreamEvent.Done(
-                content = finalResponse,
-                toolExecutions = allToolExecutions
-            ))
-        } catch (e: Exception) {
-            emit(ChatStreamEvent.Error(e.message ?: "Unknown error"))
+            iteration++
         }
+
+        // Check if max iterations reached
+        if (iteration >= MAX_ITERATIONS) {
+            finalResponse += "\n\n[Note: I executed multiple tool calls but need to stop here. Please rephrase your question if you need more information.]"
+        }
+
+        emit(ChatStreamEvent.Done(
+            content = finalResponse,
+            toolExecutions = allToolExecutions.map { it.toDto() }
+        ))
+    }.catch { e ->
+        emit(ChatStreamEvent.Error(e.message ?: "Unknown error"))
     }
 }
 
 /**
  * Events emitted during chat streaming.
  */
+@Serializable
 sealed class ChatStreamEvent {
     /**
      * Processing started.
      */
+    @Serializable
     data object Start : ChatStreamEvent()
 
     /**
      * Incremental content update.
      */
+    @Serializable
     data class Delta(val content: String) : ChatStreamEvent()
 
     /**
      * Tool execution started.
      */
+    @Serializable
     data class ToolCall(val toolName: String) : ChatStreamEvent()
 
     /**
      * Tool execution completed.
      */
+    @Serializable
     data class ToolResult(
         val toolName: String,
         val success: Boolean,
@@ -295,14 +301,16 @@ sealed class ChatStreamEvent {
     /**
      * Final response with all tool executions.
      */
+    @Serializable
     data class Done(
         val content: String,
-        val toolExecutions: List<ToolExecutionResult>
+        val toolExecutions: List<ToolExecutionDto>
     ) : ChatStreamEvent()
 
     /**
      * Error occurred.
      */
+    @Serializable
     data class Error(val message: String) : ChatStreamEvent()
 }
 

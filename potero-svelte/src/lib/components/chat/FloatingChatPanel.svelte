@@ -143,7 +143,7 @@
 			const response = await api.getChatHistory(newSessionId);
 			if (response.success && response.data) {
 				messages = response.data.map((msg) => ({
-					id: msg.id,
+					id: msg.id || generateUUID(),
 					role: msg.role as 'user' | 'assistant',
 					content: msg.content
 				}));
@@ -588,7 +588,7 @@
 										/>
 									</svg>
 								{:else}
-									<MessageSquare class="h-4 w-4 text-gray-600 dark:text-gray-400" />
+									<img src="/icon_character.png" alt="Assistant" class="h-full w-full rounded-full object-cover" />
 								{/if}
 							</div>
 

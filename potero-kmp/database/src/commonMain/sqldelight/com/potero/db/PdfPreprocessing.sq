@@ -1,0 +1,184 @@
+-- PDF Preprocessing Status Table
+CREATE TABLE PdfPreprocessingStatus (
+    paper_id TEXT NOT NULL PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL,  -- 'pending', 'processing', 'completed', 'failed'
+    started_at INTEGER,
+    completed_at INTEGER,
+    total_pages INTEGER NOT NULL DEFAULT 0,
+    extraction_method TEXT,  -- 'pdfbox', 'pdftotext', 'ocr', 'hybrid'
+    quality_score REAL,
+    grobid_status TEXT,  -- 'success', 'failed', 'skipped'
+    ocr_status TEXT,  -- 'success', 'failed', 'skipped'
+    latex_ocr_status TEXT,  -- 'success', 'partial', 'failed', 'skipped'
+    error_message TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+CREATE INDEX preprocessing_status_idx ON PdfPreprocessingStatus(status);
+CREATE INDEX preprocessing_paper_id_idx ON PdfPreprocessingStatus(paper_id);
+
+-- PDF Page Text Cache Table
+CREATE TABLE PdfPageText (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    text_content TEXT NOT NULL,
+    extraction_method TEXT NOT NULL,  -- 'pdfbox', 'pdftotext', 'ocr'
+    is_garbled INTEGER NOT NULL DEFAULT 0,
+    quality_score REAL NOT NULL DEFAULT 1.0,
+    ocr_confidence REAL,
+    word_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    UNIQUE(paper_id, page_num)
+);
+
+CREATE INDEX page_text_paper_id_idx ON PdfPageText(paper_id);
+CREATE INDEX page_text_paper_page_idx ON PdfPageText(paper_id, page_num);
+
+-- PdfPreprocessingStatus Queries
+getStatus:
+SELECT * FROM PdfPreprocessingStatus WHERE paper_id = ?;
+
+insertStatus:
+INSERT INTO PdfPreprocessingStatus(
+    paper_id, version, status, started_at, completed_at, total_pages,
+    extraction_method, quality_score, grobid_status, ocr_status, latex_ocr_status,
+    error_message, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateStatus:
+UPDATE PdfPreprocessingStatus SET
+    version = ?,
+    status = ?,
+    started_at = ?,
+    completed_at = ?,
+    total_pages = ?,
+    extraction_method = ?,
+    quality_score = ?,
+    grobid_status = ?,
+    ocr_status = ?,
+    latex_ocr_status = ?,
+    error_message = ?,
+    updated_at = ?
+WHERE paper_id = ?;
+
+markProcessing:
+UPDATE PdfPreprocessingStatus SET
+    status = 'processing',
+    started_at = ?,
+    updated_at = ?
+WHERE paper_id = ?;
+
+markCompleted:
+UPDATE PdfPreprocessingStatus SET
+    status = 'completed',
+    completed_at = ?,
+    total_pages = ?,
+    extraction_method = ?,
+    quality_score = ?,
+    grobid_status = ?,
+    ocr_status = ?,
+    latex_ocr_status = ?,
+    updated_at = ?
+WHERE paper_id = ?;
+
+markFailed:
+UPDATE PdfPreprocessingStatus SET
+    status = 'failed',
+    completed_at = ?,
+    error_message = ?,
+    updated_at = ?
+WHERE paper_id = ?;
+
+deleteStatus:
+DELETE FROM PdfPreprocessingStatus WHERE paper_id = ?;
+
+getAllPending:
+SELECT * FROM PdfPreprocessingStatus WHERE status = 'pending';
+
+getAllProcessing:
+SELECT * FROM PdfPreprocessingStatus WHERE status = 'processing';
+
+getAllCompleted:
+SELECT * FROM PdfPreprocessingStatus WHERE status = 'completed';
+
+countByStatus:
+SELECT status, COUNT(*) AS total FROM PdfPreprocessingStatus GROUP BY status;
+
+-- PdfPageText Queries
+getPageText:
+SELECT * FROM PdfPageText WHERE paper_id = ? AND page_num = ?;
+
+getAllPageTexts:
+SELECT * FROM PdfPageText WHERE paper_id = ? ORDER BY page_num;
+
+getPageRange:
+SELECT * FROM PdfPageText
+WHERE paper_id = ? AND page_num >= ? AND page_num <= ?
+ORDER BY page_num;
+
+getFullText:
+SELECT GROUP_CONCAT(text_content, '\n\n') AS fulltext
+FROM PdfPageText
+WHERE paper_id = ?
+ORDER BY page_num;
+
+getFirstPages:
+SELECT GROUP_CONCAT(text_content, '\n\n') AS fulltext
+FROM (
+    SELECT text_content
+    FROM PdfPageText
+    WHERE paper_id = ?
+    ORDER BY page_num
+    LIMIT ?
+);
+
+insertPageText:
+INSERT INTO PdfPageText(
+    id, paper_id, page_num, text_content, extraction_method,
+    is_garbled, quality_score, ocr_confidence, word_count, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertOrReplacePageText:
+INSERT OR REPLACE INTO PdfPageText(
+    id, paper_id, page_num, text_content, extraction_method,
+    is_garbled, quality_score, ocr_confidence, word_count, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updatePageText:
+UPDATE PdfPageText SET
+    text_content = ?,
+    extraction_method = ?,
+    is_garbled = ?,
+    quality_score = ?,
+    ocr_confidence = ?,
+    word_count = ?
+WHERE id = ?;
+
+deletePageText:
+DELETE FROM PdfPageText WHERE id = ?;
+
+deleteAllPageTexts:
+DELETE FROM PdfPageText WHERE paper_id = ?;
+
+countPageTexts:
+SELECT COUNT(*) FROM PdfPageText WHERE paper_id = ?;
+
+getExtractionMethodStats:
+SELECT extraction_method, COUNT(*) AS total
+FROM PdfPageText
+WHERE paper_id = ?
+GROUP BY extraction_method;
+
+getAverageQualityScore:
+SELECT AVG(quality_score) AS avgQuality
+FROM PdfPageText
+WHERE paper_id = ?;
+
+-- Cleanup Queries
+deleteAllPreprocessingData:
+DELETE FROM PdfPreprocessingStatus WHERE paper_id = ?;

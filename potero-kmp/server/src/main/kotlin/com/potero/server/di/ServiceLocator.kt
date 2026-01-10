@@ -4,6 +4,7 @@ import com.potero.data.repository.CitationRepositoryImpl
 import com.potero.data.repository.GrobidRepositoryImpl
 import com.potero.data.repository.NarrativeRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
+import com.potero.data.repository.PdfPreprocessingRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.ResearchNoteRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
@@ -13,6 +14,7 @@ import com.potero.domain.repository.CitationRepository
 import com.potero.domain.repository.GrobidRepository
 import com.potero.domain.repository.NarrativeRepository
 import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.PdfPreprocessingRepository
 import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.ResearchNoteRepository
 import com.potero.domain.repository.SettingsKeys
@@ -28,6 +30,9 @@ import com.potero.service.llm.PdfLLMAnalysisService
 import com.potero.service.llm.PostechLLMService
 import com.potero.service.llm.ComprehensivePaperAnalysisService
 import com.potero.service.pdf.PdfThumbnailExtractor
+import com.potero.service.pdf.PreprocessedPdfProvider
+import com.potero.service.pdf.PreprocessedPdfProviderImpl
+import com.potero.service.pdf.preprocessing.PdfPreprocessingService
 import com.potero.service.metadata.ArxivResolver
 import com.potero.service.metadata.DOIResolver
 import com.potero.service.metadata.GoogleScholarScraper
@@ -104,6 +109,10 @@ object ServiceLocator {
 
     val researchNoteRepository: ResearchNoteRepository by lazy {
         ResearchNoteRepositoryImpl(database)
+    }
+
+    val pdfPreprocessingRepository: PdfPreprocessingRepository by lazy {
+        PdfPreprocessingRepositoryImpl(database)
     }
 
     val doiResolver: MetadataResolver by lazy {
@@ -286,6 +295,25 @@ object ServiceLocator {
         )
     }
 
+    val pdfPreprocessingService: PdfPreprocessingService by lazy {
+        PdfPreprocessingService(
+            preprocessingRepository = pdfPreprocessingRepository,
+            grobidProcessor = grobidProcessor,
+            pdfOcrService = pdfOcrService,
+            pdfDownloadService = pdfDownloadService,
+            paperRepository = paperRepository,
+            settingsRepository = settingsRepository
+        )
+    }
+
+    val preprocessedPdfProvider: PreprocessedPdfProvider by lazy {
+        PreprocessedPdfProviderImpl(
+            preprocessingRepository = pdfPreprocessingRepository,
+            grobidRepository = grobidRepository,
+            preprocessingService = pdfPreprocessingService
+        )
+    }
+
     val unpaywallResolver: UnpaywallResolver by lazy {
         UnpaywallResolver(
             httpClient = httpClient,
@@ -328,17 +356,7 @@ object ServiceLocator {
             paperRepository = paperRepository,
             narrativeRepository = narrativeRepository,
             cacheService = narrativeCacheService,
-            pdfTextProvider = { pdfPath ->
-                // Extract text from PDF for narrative generation
-                pdfPath?.let { path ->
-                    try {
-                        PdfAnalyzer(path).extractFullText()
-                    } catch (e: Exception) {
-                        println("[ServiceLocator] Failed to extract PDF text: ${e.message}")
-                        null
-                    }
-                }
-            },
+            preprocessedPdfProvider = preprocessedPdfProvider,
             figureProvider = { paperId ->
                 // Load figures from database
                 try {

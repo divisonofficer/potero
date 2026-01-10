@@ -17,6 +17,7 @@
 		clearPendingUploadAnalysis,
 		loadPapers,
 		reanalyzePaper,
+		reextractPaper,
 		deletePaper,
 		onlineSearchResults,
 		isSearchingOnline,
@@ -70,6 +71,9 @@
 
 	// Settings tab state
 	let settingsActiveTab = $state<'llm' | 'search' | 'system'>('llm');
+
+	// Analyze dropdown state (per tab)
+	let analyzeDropdownOpen = $state<Record<string, boolean>>({});
 
 	// Author modal state
 	let selectedAuthorName = $state<string | null>(null);
@@ -1193,26 +1197,80 @@
 							{/if}
 						</div>
 						<div class="flex items-center gap-1 shrink-0">
-							<!-- Unified Analyze button (metadata + references + auto-tag) -->
-							<button
-								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-								onclick={async () => {
-									if (!tab.paper?.id) return;
-									const jobId = await reanalyzePaper(tab.paper.id);
-									if (jobId) {
-										toast.info('Analysis started (metadata, references, tags). Check progress in the task panel.');
-									} else {
-										toast.error('Failed to start analysis');
-									}
-								}}
-								title="Analyze PDF: update metadata, extract references, auto-generate tags"
-							>
-								<svg class="h-4 w-4 inline mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<path d="M1 4v6h6M23 20v-6h-6" />
-									<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-								</svg>
-								Analyze
-							</button>
+							<!-- 작업 Dropdown Menu -->
+							<div class="relative">
+								<button
+									class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
+									onclick={() => {
+										analyzeDropdownOpen[tab.id] = !analyzeDropdownOpen[tab.id];
+									}}
+									title="PDF 작업 옵션"
+								>
+									<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<path d="M1 4v6h6M23 20v-6h-6" />
+										<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+									</svg>
+									작업
+									<ChevronDown class="h-3 w-3" />
+								</button>
+
+								{#if analyzeDropdownOpen[tab.id]}
+									<div
+										class="absolute right-0 mt-1 w-48 rounded-md shadow-lg bg-background border z-50"
+										onclick={() => { analyzeDropdownOpen[tab.id] = false; }}
+									>
+										<div class="py-1">
+											<button
+												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
+												onclick={async (e) => {
+													e.stopPropagation();
+													if (!tab.paper?.id) return;
+													analyzeDropdownOpen[tab.id] = false;
+													const jobId = await reanalyzePaper(tab.paper.id);
+													if (jobId) {
+														toast.info('Analysis started (metadata, references, tags). Check progress in the task panel.');
+													} else {
+														toast.error('Failed to start analysis');
+													}
+												}}
+											>
+												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<path d="M1 4v6h6M23 20v-6h-6" />
+													<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+												</svg>
+												<div>
+													<div class="font-medium">Re-analyze</div>
+													<div class="text-muted-foreground">Update metadata & extract references</div>
+												</div>
+											</button>
+											<button
+												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
+												onclick={async (e) => {
+													e.stopPropagation();
+													if (!tab.paper?.id) return;
+													analyzeDropdownOpen[tab.id] = false;
+													const jobId = await reextractPaper(tab.paper.id);
+													if (jobId) {
+														toast.info('Re-extraction started (force OCR & text extraction). Check progress in the task panel.');
+													} else {
+														toast.error('Failed to start re-extraction');
+													}
+												}}
+											>
+												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+													<polyline points="7 10 12 15 17 10" />
+													<line x1="12" y1="15" x2="12" y2="3" />
+												</svg>
+												<div>
+													<div class="font-medium">Re-extract</div>
+													<div class="text-muted-foreground">Force re-run OCR & text extraction</div>
+												</div>
+											</button>
+										</div>
+									</div>
+								{/if}
+							</div>
 						</div>
 					</div>
 

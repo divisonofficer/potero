@@ -27,6 +27,13 @@ data class ChatRequest(
 )
 
 @Serializable
+data class ChatDoneResponse(
+    val messageId: String,
+    val content: String,
+    val toolExecutions: List<ToolExecutionDto>
+)
+
+@Serializable
 data class ChatFileAttachment(
     val id: String,
     val name: String,
@@ -180,14 +187,11 @@ fun Route.chatRoutes() {
                                 lastMessage = event.content.take(100)
                             )
 
-                            // Convert tool executions to DTOs
-                            val toolExecutionDtos = event.toolExecutions.map { it.toDto() }
-
                             send(
-                                data = Json.encodeToString(mapOf(
-                                    "messageId" to assistantMessageId,
-                                    "content" to event.content,
-                                    "toolExecutions" to toolExecutionDtos
+                                data = Json.encodeToString(ChatDoneResponse(
+                                    messageId = assistantMessageId,
+                                    content = event.content,
+                                    toolExecutions = event.toolExecutions
                                 )),
                                 event = "done"
                             )
