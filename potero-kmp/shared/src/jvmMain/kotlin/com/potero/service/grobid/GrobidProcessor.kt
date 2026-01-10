@@ -4,6 +4,7 @@ import com.potero.domain.model.GrobidCitationSpan
 import com.potero.domain.model.GrobidReference
 import com.potero.domain.repository.GrobidRepository
 import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.PdfPreprocessingRepository
 import com.potero.domain.repository.SettingsKeys
 import com.potero.domain.repository.SettingsRepository
 import com.potero.service.pdf.PdfAnalyzer
@@ -45,7 +46,8 @@ class GrobidProcessor(
     private val paperRepository: PaperRepository,
     private val pdfDownloadService: PdfDownloadService,
     private val settingsRepository: SettingsRepository,
-    private val pdfOcrService: com.potero.service.ocr.PdfOcrService
+    private val pdfOcrService: com.potero.service.ocr.PdfOcrService,
+    private val preprocessingRepository: PdfPreprocessingRepository
 ) {
 
     companion object {
@@ -137,8 +139,8 @@ class GrobidProcessor(
             } ?: run {
                 // GROBID failed and arXiv retry also failed → Try OCR → LLM Fallback
 
-                // Step 1.7: Try OCR fallback before LLM
-                val ocrText = tryOcrFallback(currentPdfPath)
+                // Step 1.7: Try preprocessing cache first, then OCR fallback
+                val ocrText = tryOcrFallback(currentPdfPath, paperId)
 
                 // Step 2: LLM Fallback - Extract References text from PDF (or OCR result)
                 // IMPORTANT: Use currentPdfPath (which may be arXiv PDF if fallback succeeded)
@@ -368,8 +370,8 @@ class GrobidProcessor(
         }
         val printableRatio = printableChars.toDouble() / len
 
-        // STRICTER: >0.5% control chars OR <40% letters OR <65% printable = garbled
-        val isGarbled = controlRatio > 0.005 || letterRatio < 0.40 || printableRatio < 0.65
+        // Relaxed thresholds for OCR: >5% control chars OR <40% letters OR <65% printable = garbled
+        val isGarbled = controlRatio > 0.05 || letterRatio < 0.40 || printableRatio < 0.65
 
         log("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, letters=${String.format("%.2f%%", letterRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> ${if (isGarbled) "GARBLED ✗" else "OK ✓"}")
 
@@ -441,46 +443,88 @@ class GrobidProcessor(
      * @param pdfPath Path to PDF file
      * @return OCR extracted text if successful, null otherwise
      */
-    private suspend fun tryOcrFallback(pdfPath: String): String? {
+    private suspend fun tryOcrFallback(pdfPath: String, paperId: String): String? {
         return try {
+            log("[GrobidProcessor] ========================================")
             log("[GrobidProcessor] Attempting OCR fallback for: $pdfPath")
+            log("[GrobidProcessor] Paper ID: $paperId")
+
+            // CRITICAL: Check preprocessing cache first to avoid redundant OCR
+            log("[GrobidProcessor] [CACHE CHECK] Querying preprocessing cache...")
+            val preprocessingStatus = preprocessingRepository.getStatus(paperId).getOrNull()
+
+            if (preprocessingStatus != null) {
+                log("[GrobidProcessor] [CACHE CHECK] Status found: ${preprocessingStatus.status}")
+                log("[GrobidProcessor] [CACHE CHECK] Total pages: ${preprocessingStatus.totalPages}")
+                log("[GrobidProcessor] [CACHE CHECK] Extraction method: ${preprocessingStatus.extractionMethod}")
+                log("[GrobidProcessor] [CACHE CHECK] Quality score: ${preprocessingStatus.qualityScore}")
+
+                if (preprocessingStatus.status == com.potero.domain.model.PreprocessingStatus.COMPLETED) {
+                    log("[GrobidProcessor] [CACHE HIT] ✓ Preprocessing cache is COMPLETED")
+
+                    // Get cached full text from preprocessing
+                    log("[GrobidProcessor] [CACHE HIT] Retrieving cached text from database...")
+                    val cachedText = preprocessingRepository.getFullText(paperId).getOrNull()
+                    if (cachedText != null && cachedText.isNotBlank()) {
+                        log("[GrobidProcessor] [CACHE HIT] ✓✓✓ SUCCESS: Retrieved ${cachedText.length} chars from cache")
+                        log("[GrobidProcessor] [CACHE HIT] ✓✓✓ SKIPPING OCR - Using cached text")
+                        log("[GrobidProcessor] ========================================")
+                        return cachedText
+                    } else {
+                        log("[GrobidProcessor] [CACHE ERROR] ✗ Preprocessing marked as completed but no cached text found!")
+                        log("[GrobidProcessor] [CACHE ERROR] This should not happen - falling back to OCR")
+                    }
+                } else {
+                    log("[GrobidProcessor] [CACHE MISS] Preprocessing status is ${preprocessingStatus.status} (not COMPLETED)")
+                }
+            } else {
+                log("[GrobidProcessor] [CACHE MISS] No preprocessing cache found for paper $paperId")
+                log("[GrobidProcessor] [CACHE MISS] Will run full OCR extraction")
+            }
+
+            log("[GrobidProcessor] ========================================")
+            log("[GrobidProcessor] [OCR START] No cache available - running OCR...")
 
             // Check if OCR is enabled (default: disabled, requires Tesseract)
             val ocrEnabled = settingsRepository.get(SettingsKeys.OCR_ENABLED)
                 .getOrNull()?.equals("true", ignoreCase = true) ?: false
 
             if (!ocrEnabled) {
-                log("[GrobidProcessor] OCR is disabled in settings")
+                log("[GrobidProcessor] [OCR DISABLED] OCR is disabled in settings")
                 return null
             }
 
             // Check if Tesseract is available
             if (!pdfOcrService.isAvailable()) {
-                log("[GrobidProcessor] Tesseract is not installed or not available")
-                log("[GrobidProcessor] Install: sudo apt-get install tesseract-ocr tesseract-ocr-eng")
+                log("[GrobidProcessor] [OCR ERROR] Tesseract is not installed or not available")
+                log("[GrobidProcessor] [OCR ERROR] Install: sudo apt-get install tesseract-ocr tesseract-ocr-eng")
                 return null
             }
 
-            log("[GrobidProcessor] OCR is enabled and Tesseract is available, starting OCR...")
+            log("[GrobidProcessor] [OCR RUNNING] ✓ OCR is enabled, Tesseract is available")
+            log("[GrobidProcessor] [OCR RUNNING] Starting full PDF OCR extraction...")
 
             // OCR the PDF
             val ocrResult = pdfOcrService.ocrPdf(pdfPath)
 
             ocrResult.fold(
                 onSuccess = { text ->
-                    log("[GrobidProcessor] ✓ OCR succeeded: ${text.length} chars extracted")
+                    log("[GrobidProcessor] [OCR SUCCESS] ✓ OCR completed: ${text.length} chars extracted")
 
                     // Check if OCR result is also garbled (shouldn't happen, but check anyway)
                     if (isGarbled(text)) {
-                        log("[GrobidProcessor] ✗ OCR result is garbled (unexpected)")
+                        log("[GrobidProcessor] [OCR ERROR] ✗ OCR result is garbled (unexpected)")
+                        log("[GrobidProcessor] [OCR ERROR] This should not happen - OCR produced low quality text")
                         null
                     } else {
-                        log("[GrobidProcessor] ✓ OCR result looks clean")
+                        log("[GrobidProcessor] [OCR SUCCESS] ✓ OCR result quality check passed")
+                        log("[GrobidProcessor] ========================================")
                         text
                     }
                 },
                 onFailure = { error ->
-                    log("[GrobidProcessor] ✗ OCR failed: ${error.message}")
+                    log("[GrobidProcessor] [OCR FAILED] ✗ OCR failed: ${error.message}")
+                    log("[GrobidProcessor] ========================================")
                     null
                 }
             )

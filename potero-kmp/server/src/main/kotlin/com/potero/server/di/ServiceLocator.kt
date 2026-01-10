@@ -291,7 +291,8 @@ object ServiceLocator {
             paperRepository = paperRepository,
             pdfDownloadService = pdfDownloadService,
             settingsRepository = settingsRepository,
-            pdfOcrService = pdfOcrService
+            pdfOcrService = pdfOcrService,
+            preprocessingRepository = pdfPreprocessingRepository
         )
     }
 

@@ -209,3 +209,6 @@ export interface BacklinkInfo {
 	linkText: string;
 	createdAt: string;
 }
+
+// Export block types for Obsidian-style editor
+export type { Block, BlockType, BlockMetadata } from './block';

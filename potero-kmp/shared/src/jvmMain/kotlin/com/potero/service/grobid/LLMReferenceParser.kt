@@ -50,8 +50,9 @@ class LLMReferenceParser(
                 println("[LLMReferenceParser] Estimated reference count: $estimatedRefCount")
 
                 // Use chunked parsing if many references or text is very long
-                if (estimatedRefCount > 30 || referencesText.length > 25000) {
-                    println("[LLMReferenceParser] Using chunked parsing for better completion")
+                // Lower thresholds to prevent LLM truncation
+                if (estimatedRefCount > 15 || referencesText.length > 15000) {
+                    println("[LLMReferenceParser] Using chunked parsing for better completion (refs=$estimatedRefCount, len=${referencesText.length})")
                     return@runCatching parseInChunks(referencesText, paperId)
                 }
 
@@ -180,9 +181,19 @@ class LLMReferenceParser(
      * Looks for common reference patterns like [1], [2], (1), (2), etc.
      */
     private fun countReferences(text: String): Int {
-        // Pattern: Lines starting with [N] or (N) or N.
-        val pattern = Regex("""^\s*[\[\(]?\d+[\]\)]?\s*[A-Z]""", RegexOption.MULTILINE)
-        return pattern.findAll(text).count()
+        // Pattern: Lines with [N] or (N) where N is a number (1-999)
+        // More lenient - doesn't require capital letter after number
+        val pattern = Regex("""^\s*\[(\d{1,3})\]""", RegexOption.MULTILINE)
+        val matches = pattern.findAll(text).toList()
+
+        // Alternative pattern for (N) style
+        val parenPattern = Regex("""^\s*\((\d{1,3})\)""", RegexOption.MULTILINE)
+        val parenMatches = parenPattern.findAll(text).toList()
+
+        val totalCount = maxOf(matches.size, parenMatches.size)
+        println("[LLMReferenceParser] countReferences: [N] style: ${matches.size}, (N) style: ${parenMatches.size}, using: $totalCount")
+
+        return totalCount
     }
 
     /**
@@ -193,8 +204,9 @@ class LLMReferenceParser(
         val lines = text.lines()
         val chunks = mutableListOf<String>()
 
-        // Pattern to detect reference start: [N], (N), or N.
-        val refStartPattern = Regex("""^\s*[\[\(]?(\d+)[\]\)]?\s+[A-Z]""")
+        // Pattern to detect reference start: [N] or (N)
+        // More lenient - doesn't require capital letter after
+        val refStartPattern = Regex("""^\s*[\[\(](\d+)[\]\)]""")
 
         var currentChunk = mutableListOf<String>()
         var refCount = 0
@@ -256,14 +268,19 @@ The text may contain:
    → Use null for unknown fields (do NOT guess or invent)
    → Include complete raw text for each reference
 
-## COMPLETION REQUIREMENT
-**CRITICAL**: You MUST complete parsing ALL references before ending your response.
-- DO NOT stop after a few references
-- DO NOT truncate the JSON array
-- Ensure the JSON is valid and complete with closing brackets
+## COMPLETION REQUIREMENT - READ THIS CAREFULLY
+**ABSOLUTELY MANDATORY - NO EXCEPTIONS**:
+- You MUST parse EVERY SINGLE reference from start to finish
+- DO NOT stop after a few references and say "... more references"
+- DO NOT truncate the response - complete the entire JSON array
+- If there are 10 references, parse ALL 10. If 50, parse ALL 50.
+- The JSON must end with: }, ...last entry... ]}  (complete array with closing brackets)
+- **NEVER EVER** write explanatory text like "(continuing for all references)" or "(full array would continue...)"
 
 ## OUTPUT FORMAT
-Return ONLY valid JSON (no markdown, no explanations, no code blocks):
+Return ONLY valid JSON (no markdown, no explanations, no code blocks, NO COMMENTS):
+**ABSOLUTELY NO COMMENTS** - Do NOT include // comments or explanatory text in the JSON
+**VALID JSON ONLY** - Must be parseable by standard JSON parser
 
 {"references":[
   {
@@ -293,9 +310,11 @@ $referencesText
      * Handles markdown code blocks, HTML comments, and malformed JSON
      */
     private fun parseJsonResponse(response: String): LLMReferenceResponse {
-        // Clean up response: remove HTML comments and trim
+        // Clean up response: remove HTML comments, JS comments, and trim
         var cleanedResponse = response
             .replace(Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL), "") // Remove <!-- ... -->
+            .replace(Regex("""//.*"""), "") // Remove // single-line comments
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "") // Remove /* */ multi-line comments
             .trim()
 
         // Try to parse as-is first

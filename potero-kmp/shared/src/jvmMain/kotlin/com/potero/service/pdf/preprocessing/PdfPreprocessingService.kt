@@ -122,11 +122,13 @@ class PdfPreprocessingService(
                 // Stage 1: Text extraction with multi-layer fallback
                 val textResult = extractTextWithFallback(paperId, pdfPath)
 
-                // Stage 2: GROBID structured extraction
-                val grobidStatus = runGrobidExtraction(paperId, textResult.currentPdfPath)
-
-                // Stage 3: Save page texts to database
+                // Stage 2: Save page texts to database FIRST (so GROBID can use cache)
+                log("[Preprocessing] Saving ${textResult.pages.size} pages to cache before GROBID...")
                 savePageTexts(paperId, textResult.pages)
+                log("[Preprocessing] ✓ Cache saved - GROBID can now use cached text")
+
+                // Stage 3: GROBID structured extraction (will use cached text)
+                val grobidStatus = runGrobidExtraction(paperId, textResult.currentPdfPath)
 
                 // Stage 4: Mark completed
                 val completedAt = Clock.System.now()
@@ -451,7 +453,8 @@ class PdfPreprocessingService(
         }
         val printableRatio = printableChars.toDouble() / len
 
-        return controlRatio > 0.005 || letterRatio < 0.40 || printableRatio < 0.65
+        // Relaxed thresholds for OCR: >5% control chars OR <40% letters OR <65% printable = garbled
+        return controlRatio > 0.05 || letterRatio < 0.40 || printableRatio < 0.65
     }
 
     private fun calculateQualityScore(text: String): Double {

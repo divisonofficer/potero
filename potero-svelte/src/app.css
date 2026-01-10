@@ -1,6 +1,12 @@
 @import 'tailwindcss';
 @config '../tailwind.config.js';
 
+/* KaTeX CSS for LaTeX math rendering */
+@import 'katex/dist/katex.min.css';
+
+/* Prism CSS for syntax highlighting (tomorrow theme) */
+@import 'prismjs/themes/prism-tomorrow.css';
+
 :root {
 	--background: 0 0% 100%;
 	--foreground: 222.2 84% 4.9%;

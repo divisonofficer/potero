@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Bold, Italic, Code, Heading1, Heading2, Link as LinkIcon, X } from 'lucide-svelte';
+	import BlockEditor from './BlockEditor.svelte';
+	import { X } from 'lucide-svelte';
 
 	interface Props {
 		title?: string;
@@ -10,145 +11,143 @@
 		isLoading?: boolean;
 	}
 
-	let { title = '', content = '', onSave, onCancel, placeholder = 'Start writing...', isLoading = false }: Props = $props();
+	let {
+		title = '',
+		content = '',
+		onSave,
+		onCancel,
+		placeholder = 'Start writing...',
+		isLoading = false
+	}: Props = $props();
 
 	let editTitle = $state(title);
 	let editContent = $state(content);
-	let textarea: HTMLTextAreaElement;
+	let titleInput: HTMLInputElement;
 
-	function handleSave() {
-		if (!editTitle.trim()) {
-			alert('Please enter a title');
-			return;
+	// Title debounce timer
+	let titleSaveTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * Handle title changes with debounced auto-save
+	 */
+	function handleTitleChange(e: Event) {
+		const target = e.target as HTMLInputElement;
+		editTitle = target.value;
+
+		// Auto-save title after 1.5s
+		if (titleSaveTimeout) clearTimeout(titleSaveTimeout);
+		titleSaveTimeout = setTimeout(() => {
+			if (editTitle.trim()) {
+				onSave(editTitle, editContent);
+			}
+		}, 1500);
+	}
+
+	/**
+	 * Handle content changes from BlockEditor (already debounced)
+	 */
+	function handleContentSave(markdown: string) {
+		editContent = markdown;
+		if (editTitle.trim()) {
+			onSave(editTitle, editContent);
 		}
-		onSave(editTitle, editContent);
 	}
 
-	function insertMarkdown(prefix: string, suffix = '') {
-		if (!textarea) return;
-
-		const start = textarea.selectionStart;
-		const end = textarea.selectionEnd;
-		const selectedText = editContent.substring(start, end);
-		const newText =
-			editContent.substring(0, start) +
-			prefix +
-			selectedText +
-			suffix +
-			editContent.substring(end);
-
-		editContent = newText;
-		setTimeout(() => {
-			textarea.focus();
-			textarea.selectionStart = start + prefix.length;
-			textarea.selectionEnd = start + prefix.length + selectedText.length;
-		}, 0);
-	}
-
-	function insertWikiLink() {
-		const linkText = prompt('Enter note title or paper:id');
-		if (linkText) {
-			insertMarkdown(`[[${linkText}]]`, '');
+	/**
+	 * Manual save on Cmd/Ctrl+S
+	 */
+	function handleKeydown(e: KeyboardEvent) {
+		if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+			e.preventDefault();
+			if (editTitle.trim()) {
+				onSave(editTitle, editContent);
+			}
 		}
 	}
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="flex h-full flex-col bg-background">
-	<!-- Toolbar -->
+	<!-- Header with close button -->
 	<div class="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
-		<div class="flex items-center gap-1">
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={() => insertMarkdown('**', '**')}
-				title="Bold (Ctrl+B)"
-				type="button"
-			>
-				<Bold class="h-4 w-4" />
-			</button>
-
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={() => insertMarkdown('*', '*')}
-				title="Italic (Ctrl+I)"
-				type="button"
-			>
-				<Italic class="h-4 w-4" />
-			</button>
-
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={() => insertMarkdown('`', '`')}
-				title="Code"
-				type="button"
-			>
-				<Code class="h-4 w-4" />
-			</button>
-
-			<div class="mx-1 h-6 w-px bg-border"></div>
-
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={() => insertMarkdown('# ', '')}
-				title="Heading 1"
-				type="button"
-			>
-				<Heading1 class="h-4 w-4" />
-			</button>
-
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={() => insertMarkdown('## ', '')}
-				title="Heading 2"
-				type="button"
-			>
-				<Heading2 class="h-4 w-4" />
-			</button>
-
-			<div class="mx-1 h-6 w-px bg-border"></div>
-
-			<button
-				class="rounded p-2 hover:bg-muted"
-				onclick={insertWikiLink}
-				title="Insert Wiki Link [[...]]"
-				type="button"
-			>
-				<LinkIcon class="h-4 w-4" />
-			</button>
+		<div class="text-sm text-muted-foreground">
+			{#if isLoading}
+				<span class="flex items-center gap-2">
+					<svg
+						class="h-4 w-4 animate-spin"
+						xmlns="http://www.w3.org/2000/svg"
+						fill="none"
+						viewBox="0 0 24 24"
+					>
+						<circle
+							class="opacity-25"
+							cx="12"
+							cy="12"
+							r="10"
+							stroke="currentColor"
+							stroke-width="4"
+						></circle>
+						<path
+							class="opacity-75"
+							fill="currentColor"
+							d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+						></path>
+					</svg>
+					Loading template...
+				</span>
+			{:else}
+				<span class="italic">Click any block to edit • Auto-saves as you type</span>
+			{/if}
 		</div>
 
-		<div class="flex items-center gap-2">
-			<button
-				class="rounded-md px-4 py-1.5 text-sm hover:bg-muted"
-				onclick={onCancel}
-				type="button"
-			>
-				Cancel
-			</button>
-			<button
-				class="rounded-md bg-primary px-4 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
-				onclick={handleSave}
-				type="button"
-			>
-				Save
-			</button>
-		</div>
+		<button
+			class="rounded-md p-1.5 hover:bg-muted transition-colors"
+			onclick={onCancel}
+			type="button"
+			title="Close (Esc)"
+		>
+			<X class="h-4 w-4" />
+		</button>
 	</div>
 
-	<!-- Title input -->
+	<!-- Title input with auto-save -->
 	<div class="border-b px-4 py-3">
 		<input
+			bind:this={titleInput}
 			type="text"
-			placeholder="Note title..."
-			bind:value={editTitle}
+			placeholder="Untitled note..."
+			value={editTitle}
+			oninput={handleTitleChange}
 			class="w-full bg-transparent text-2xl font-bold outline-none placeholder:text-muted-foreground"
 		/>
 	</div>
 
-	<!-- Content editor -->
-	<textarea
-		bind:this={textarea}
-		bind:value={editContent}
-		{placeholder}
-		class="flex-1 resize-none bg-transparent px-4 py-3 font-mono text-sm outline-none placeholder:text-muted-foreground"
-	></textarea>
+	<!-- Block Editor with inline editing + auto-save -->
+	<div class="flex-1 overflow-auto px-4 py-3">
+		<BlockEditor initialContent={editContent} onSave={handleContentSave} autosave={true} />
+	</div>
+
+	<!-- Help text at bottom -->
+	<div
+		class="border-t bg-muted/20 px-4 py-2 text-xs text-muted-foreground flex items-center justify-between"
+	>
+		<div class="flex items-center gap-4">
+			<span><kbd class="kbd">Enter</kbd> to save block</span>
+			<span><kbd class="kbd">Shift+Enter</kbd> for new line</span>
+			<span><kbd class="kbd">[[</kbd> for wiki links</span>
+		</div>
+		<span class="italic">Cmd/Ctrl+S to save manually</span>
+	</div>
 </div>
+
+<style>
+	.kbd {
+		padding: 2px 6px;
+		background-color: hsl(var(--muted));
+		border: 1px solid hsl(var(--border));
+		border-radius: 4px;
+		font-family: monospace;
+		font-size: 0.85em;
+	}
+</style>

@@ -22,7 +22,21 @@ class PdfPreprocessingRepositoryImpl(
 
     override suspend fun getStatus(paperId: String): Result<PdfPreprocessingStatus?> = withContext(Dispatchers.IO) {
         runCatching {
-            statusQueries.getStatus(paperId).executeAsOneOrNull()?.toDomainModel()
+            // Get caller info from stack trace
+            val caller = Throwable().stackTrace.getOrNull(2)?.let {
+                "${it.className.substringAfterLast('.')}.${it.methodName}"
+            } ?: "Unknown"
+
+            println("[CACHE SERVICE] getStatus() called by: $caller for paper: $paperId")
+
+            val status = statusQueries.getStatus(paperId).executeAsOneOrNull()?.toDomainModel()
+            if (status != null) {
+                println("[CACHE SERVICE] ✓ Status found: ${status.status} (${status.totalPages} pages, method: ${status.extractionMethod})")
+            } else {
+                println("[CACHE SERVICE] ✗ No preprocessing status found for paper $paperId")
+            }
+
+            status
         }
     }
 
@@ -179,7 +193,25 @@ class PdfPreprocessingRepositoryImpl(
 
     override suspend fun getFullText(paperId: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            pageTextQueries.getFullText(paperId).executeAsOneOrNull() ?: ""
+            // Get caller info from stack trace
+            val caller = Throwable().stackTrace.getOrNull(2)?.let {
+                "${it.className.substringAfterLast('.')}.${it.methodName}"
+            } ?: "Unknown"
+
+            println("[CACHE SERVICE] ========================================")
+            println("[CACHE SERVICE] getFullText() called by: $caller")
+            println("[CACHE SERVICE] Paper ID: $paperId")
+
+            val result = pageTextQueries.getFullText(paperId).executeAsOneOrNull() ?: ""
+            if (result.isNotBlank()) {
+                println("[CACHE SERVICE] ✓ Cache HIT: Retrieved ${result.length} chars")
+                println("[CACHE SERVICE] ✓ Caller '$caller' will use cached text")
+            } else {
+                println("[CACHE SERVICE] ✗ Cache MISS: No text found")
+                println("[CACHE SERVICE] ✗ Caller '$caller' will need to extract text")
+            }
+            println("[CACHE SERVICE] ========================================")
+            result
         }
     }
 
@@ -209,6 +241,22 @@ class PdfPreprocessingRepositoryImpl(
 
     override suspend fun insertAllPageTexts(pages: List<PdfPageText>): Result<List<PdfPageText>> = withContext(Dispatchers.IO) {
         runCatching {
+            // Get caller info from stack trace
+            val caller = Throwable().stackTrace.getOrNull(2)?.let {
+                "${it.className.substringAfterLast('.')}.${it.methodName}"
+            } ?: "Unknown"
+
+            val paperId = pages.firstOrNull()?.paperId ?: "unknown"
+            val totalChars = pages.sumOf { it.textContent.length }
+            val extractionMethods = pages.map { it.extractionMethod }.distinct()
+
+            println("[CACHE SERVICE] ========================================")
+            println("[CACHE SERVICE] insertAllPageTexts() called by: $caller")
+            println("[CACHE SERVICE] Paper ID: $paperId")
+            println("[CACHE SERVICE] Saving ${pages.size} pages to cache")
+            println("[CACHE SERVICE] Total text size: $totalChars chars")
+            println("[CACHE SERVICE] Extraction methods: $extractionMethods")
+
             database.transaction {
                 pages.forEach { pageText ->
                     pageTextQueries.insertPageText(
@@ -225,6 +273,11 @@ class PdfPreprocessingRepositoryImpl(
                     )
                 }
             }
+
+            println("[CACHE SERVICE] ✓ Cache SAVED: ${pages.size} pages stored successfully")
+            println("[CACHE SERVICE] ✓ Future calls can now use cached text")
+            println("[CACHE SERVICE] ========================================")
+
             pages
         }
     }

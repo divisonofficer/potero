@@ -1,3 +1,5 @@
+import typography from '@tailwindcss/typography';
+
 /** @type {import('tailwindcss').Config} */
 export default {
 	content: ['./src/**/*.{html,js,svelte,ts}'],
@@ -42,8 +44,35 @@ export default {
 				lg: 'var(--radius)',
 				md: 'calc(var(--radius) - 2px)',
 				sm: 'calc(var(--radius) - 4px)'
+			},
+			typography: {
+				DEFAULT: {
+					css: {
+						// Custom styling for wiki links
+						'.wiki-link': {
+							'background-color': 'rgb(219 234 254)',
+							padding: '2px 6px',
+							'border-radius': '4px',
+							'text-decoration': 'none',
+							color: 'rgb(29 78 216)',
+							cursor: 'pointer',
+							'&:hover': {
+								'background-color': 'rgb(191 219 254)'
+							}
+						},
+						'.wiki-link.unresolved': {
+							'background-color': 'rgb(243 244 246)',
+							color: 'rgb(107 114 128)',
+							border: '1px dashed rgb(209 213 219)'
+						},
+						// LaTeX math styling
+						'.katex-display': {
+							margin: '1em 0'
+						}
+					}
+				}
 			}
 		}
 	},
-	plugins: []
+	plugins: [typography]
 };

@@ -75,6 +75,25 @@
 	// Analyze dropdown state (per tab)
 	let analyzeDropdownOpen = $state<Record<string, boolean>>({});
 
+	// Preprocessing status cache (per paper)
+	let preprocessingStatusCache = $state<Record<string, { hasCache: boolean; status: string | null }>>({});
+
+	// Fetch preprocessing status for a paper
+	async function fetchPreprocessingStatus(paperId: string) {
+		try {
+			const response = await fetch(`/api/upload/preprocessing-status/${paperId}`);
+			if (response.ok) {
+				const data = await response.json();
+				preprocessingStatusCache[paperId] = {
+					hasCache: data.data.hasCache,
+					status: data.data.status
+				};
+			}
+		} catch (error) {
+			console.error('Failed to fetch preprocessing status:', error);
+		}
+	}
+
 	// Author modal state
 	let selectedAuthorName = $state<string | null>(null);
 	let selectedAuthorPapers = $state<Paper[]>([]);
@@ -1203,6 +1222,10 @@
 									class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
 									onclick={() => {
 										analyzeDropdownOpen[tab.id] = !analyzeDropdownOpen[tab.id];
+										// Fetch preprocessing status when dropdown opens
+										if (!analyzeDropdownOpen[tab.id] && tab.paper?.id) {
+											fetchPreprocessingStatus(tab.paper.id);
+										}
 									}}
 									title="PDF 작업 옵션"
 								>
@@ -1262,10 +1285,22 @@
 													<polyline points="7 10 12 15 17 10" />
 													<line x1="12" y1="15" x2="12" y2="3" />
 												</svg>
-												<div>
+												<div class="flex-1">
 													<div class="font-medium">Re-extract</div>
 													<div class="text-muted-foreground">Force re-run OCR & text extraction</div>
 												</div>
+												<!-- Cache status indicator -->
+												{#if tab.paper?.id && preprocessingStatusCache[tab.paper.id]}
+													{@const status = preprocessingStatusCache[tab.paper.id]}
+													<div
+														class="w-2 h-2 rounded-full"
+														class:bg-green-500={status.hasCache && status.status === 'completed'}
+														class:bg-yellow-500={status.hasCache && status.status === 'processing'}
+														class:bg-red-500={status.hasCache && status.status === 'failed'}
+														class:bg-gray-400={!status.hasCache}
+														title={status.hasCache ? `Cached (${status.status})` : 'Not cached'}
+													></div>
+												{/if}
 											</button>
 										</div>
 									</div>

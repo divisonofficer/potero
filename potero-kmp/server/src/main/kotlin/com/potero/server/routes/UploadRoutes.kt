@@ -125,6 +125,19 @@ data class ReanalyzeResult(
     val autoTaggedTags: List<String> = emptyList()
 )
 
+/**
+ * Response for preprocessing status query
+ */
+@Serializable
+data class PreprocessingStatusResponse(
+    val paperId: String,
+    val hasCache: Boolean,
+    val status: String? = null,  // 'pending', 'processing', 'completed', 'failed'
+    val totalPages: Int? = null,
+    val extractionMethod: String? = null,  // 'pdfbox', 'pdftotext', 'ocr', 'hybrid'
+    val qualityScore: Double? = null
+)
+
 fun Route.uploadRoutes() {
     val paperRepository = ServiceLocator.paperRepository
     val settingsRepository = ServiceLocator.settingsRepository
@@ -737,9 +750,26 @@ fun Route.uploadRoutes() {
                     // Ensure preprocessing is complete (text extraction + OCR) before GROBID
                     val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
                     if (!preprocessedPdfProvider.isPreprocessed(paperId)) {
+                        println("[Re-analysis] ========================================")
                         println("[Re-analysis] Triggering preprocessing for $paperId")
                         val preprocessingService = ServiceLocator.pdfPreprocessingService
-                        preprocessingService.preprocessPaper(paperId, pdfFile.absolutePath, forceReprocess = false)
+
+                        // CRITICAL: Wait for preprocessing to complete before running GROBID
+                        val preprocessingResult = preprocessingService.preprocessPaper(
+                            paperId,
+                            pdfFile.absolutePath,
+                            forceReprocess = false
+                        )
+
+                        if (preprocessingResult.isSuccess) {
+                            val status = preprocessingResult.getOrNull()
+                            println("[Re-analysis] ✓ Preprocessing completed: ${status?.totalPages} pages, method: ${status?.extractionMethod}")
+                            println("[Re-analysis] ✓ Cache ready - GROBID will use cached text")
+                        } else {
+                            println("[Re-analysis] ✗ Preprocessing failed: ${preprocessingResult.exceptionOrNull()?.message}")
+                            println("[Re-analysis] Proceeding with GROBID anyway (will extract text itself)")
+                        }
+                        println("[Re-analysis] ========================================")
                     } else {
                         println("[Re-analysis] Preprocessing already completed, reusing cached text extraction")
                     }
@@ -1138,6 +1168,45 @@ fun Route.uploadRoutes() {
                     )
                 )
             )
+        }
+
+        // GET /api/upload/preprocessing-status/{paperId} - Get preprocessing cache status
+        get("/preprocessing-status/{paperId}") {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val pdfPreprocessingRepository = ServiceLocator.pdfPreprocessingRepository
+            val preprocessingStatus = pdfPreprocessingRepository.getStatus(paperId).getOrNull()
+
+            if (preprocessingStatus == null) {
+                call.respond(
+                    HttpStatusCode.OK,
+                    ApiResponse(
+                        data = PreprocessingStatusResponse(
+                            paperId = paperId,
+                            hasCache = false,
+                            status = null,
+                            totalPages = null,
+                            extractionMethod = null,
+                            qualityScore = null
+                        )
+                    )
+                )
+            } else {
+                call.respond(
+                    HttpStatusCode.OK,
+                    ApiResponse(
+                        data = PreprocessingStatusResponse(
+                            paperId = paperId,
+                            hasCache = true,
+                            status = preprocessingStatus.status.name.lowercase(),
+                            totalPages = preprocessingStatus.totalPages,
+                            extractionMethod = preprocessingStatus.extractionMethod?.name?.lowercase(),
+                            qualityScore = preprocessingStatus.qualityScore
+                        )
+                    )
+                )
+            }
         }
 
         // POST /api/upload/pdf/{paperId} - Upload PDF for existing paper
