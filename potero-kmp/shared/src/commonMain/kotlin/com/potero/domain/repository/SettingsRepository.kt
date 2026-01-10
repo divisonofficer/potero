@@ -46,6 +46,7 @@ object SettingsKeys {
     const val SSO_SITE_NAME = "sso.siteName"
 
     // Academic API Enable/Disable flags
+    const val SEMANTIC_SCHOLAR_ENABLED = "api.semanticscholar.enabled"
     const val OPENALEX_ENABLED = "api.openalex.enabled"
     const val PUBMED_ENABLED = "api.pubmed.enabled"
     const val DBLP_ENABLED = "api.dblp.enabled"

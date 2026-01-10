@@ -36,6 +36,7 @@ import com.potero.service.metadata.SemanticScholarResolver
 import com.potero.service.metadata.OpenAlexResolver
 import com.potero.service.metadata.PubMedResolver
 import com.potero.service.metadata.DBLPResolver
+import com.potero.service.search.APIStatusProvider
 import com.potero.service.search.SearchCacheService
 import com.potero.service.search.UnifiedSearchService
 import com.potero.service.tag.TagService
@@ -201,9 +202,17 @@ object ServiceLocator {
         SearchCacheService()
     }
 
+    val apiStatusProvider: APIStatusProvider by lazy {
+        APIStatusProvider(settingsRepository)
+    }
+
     val unifiedSearchService: UnifiedSearchService by lazy {
         UnifiedSearchService(
             semanticScholarResolver = semanticScholarResolver,
+            openAlexResolver = openAlexResolver,
+            pubMedResolver = pubMedResolver,
+            dblpResolver = dblpResolver,
+            apiStatusProvider = apiStatusProvider,
             googleScholarScraper = googleScholarScraper,
             cacheService = searchCacheService
         )

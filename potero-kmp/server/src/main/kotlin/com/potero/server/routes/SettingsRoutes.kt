@@ -294,6 +294,17 @@ private suspend fun getAPIConfigurations(settingsRepository: SettingsRepository)
 
     return listOf(
         APIConfigDto(
+            id = "semanticscholar",
+            name = "Semantic Scholar",
+            enabled = settings[SettingsKeys.SEMANTIC_SCHOLAR_ENABLED] == "true",
+            requiresKey = false,
+            hasKey = settings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY] != null,
+            keyMasked = settings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let { maskAPIKey(it) },
+            description = "Fast, comprehensive scholarly database. Free, no API key required. API key increases rate limit to 1 req/s.",
+            keyRegistrationUrl = "https://www.semanticscholar.org/product/api",
+            category = "general"
+        ),
+        APIConfigDto(
             id = "openalex",
             name = "OpenAlex",
             enabled = settings[SettingsKeys.OPENALEX_ENABLED] == "true",

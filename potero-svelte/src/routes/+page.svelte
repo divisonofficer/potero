@@ -1612,44 +1612,6 @@
 					<!-- Academic Search APIs -->
 					<SettingsPanel />
 
-					<!-- Semantic Scholar API -->
-					<section class="mb-8 mt-8">
-						<h2 class="mb-4 text-lg font-semibold">Semantic Scholar API</h2>
-						<div class="space-y-4 rounded-lg border bg-card p-4">
-							<div>
-								<label for="semantic-scholar-api-key" class="mb-2 block text-sm font-medium">API Key (Optional)</label>
-								<input
-									id="semantic-scholar-api-key"
-									type="password"
-									placeholder={settings.semanticScholarApiKey ? 'API key is set (enter new to change)' : 'Enter your Semantic Scholar API key'}
-									bind:value={newSemanticScholarApiKey}
-									class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-								/>
-								{#if settings.semanticScholarApiKey}
-									<p class="mt-1 text-xs text-muted-foreground">
-										Current key: {settings.semanticScholarApiKey}
-									</p>
-								{:else}
-									<p class="mt-1 text-xs text-muted-foreground">
-										Without an API key, rate limits are stricter (100 req/5 min). Get a free key from
-										<a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener" class="text-primary hover:underline">
-											Semantic Scholar API
-										</a>
-										for higher limits.
-									</p>
-								{/if}
-							</div>
-
-							<button
-								class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-								disabled={isSavingSettings}
-								onclick={saveSettings}
-							>
-								{isSavingSettings ? 'Saving...' : 'Save Settings'}
-							</button>
-						</div>
-					</section>
-
 					<!-- PDF Download Options -->
 			<section class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold">PDF Download Options</h2>

@@ -268,10 +268,10 @@
 
 						<p class="api-description">{apiConfig.description}</p>
 
-						{#if apiConfig.requiresKey && apiConfig.enabled}
+						{#if (apiConfig.requiresKey || apiConfig.keyRegistrationUrl) && apiConfig.enabled}
 							<div class="api-key-input">
 								<label>
-									API Key:
+									API Key{#if !apiConfig.requiresKey} (Optional){/if}:
 									<input
 										type="password"
 										placeholder={apiConfig.hasKey ? 'Key configured' : 'Enter API key'}
