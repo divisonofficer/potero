@@ -23,6 +23,7 @@
 	// Citation modal state
 	let showCitationModal = $state(false);
 	let citationQuery = $state('');
+	let citationLinkedRefs = $state<import('$lib/api/client').LinkedReference[] | undefined>(undefined);
 
 	// Outline panel state
 	let showOutlinePanel = $state(false);
@@ -390,6 +391,7 @@
 
 			// Load backend citation spans (if available)
 			loadCitationSpans();
+			loadGrobidReferences();
 
 			// Build figure/table index in background for navigation
 			buildFigureIndex();
@@ -726,10 +728,10 @@
 			if (result.success && result.data && result.data.length > 0) {
 				citationSpans = result.data;
 				citationsSource = 'backend';
-				console.log(`[PDF] Loaded ${citationSpans.length} citation spans from backend (overlays disabled - using text layer)`);
+				console.log(`[PDF] Loaded ${citationSpans.length} citation spans from backend - rendering overlays`);
 
-				// NOTE: Citation overlays disabled - using text layer annotation instead
-				// renderCitationOverlaysOnAllPages();
+				// Render citation overlays with clickable buttons
+				renderCitationOverlaysOnAllPages();
 				return;
 			}
 
@@ -740,10 +742,10 @@
 			if (extractResult.success && extractResult.data) {
 				citationSpans = extractResult.data.spans;
 				citationsSource = 'backend';
-				console.log(`[PDF] Extracted ${citationSpans.length} citation spans (${extractResult.data.stats.annotationSpans} from annotations, ${extractResult.data.stats.patternSpans} from patterns) - overlays disabled`);
+				console.log(`[PDF] Extracted ${citationSpans.length} citation spans (${extractResult.data.stats.annotationSpans} from annotations, ${extractResult.data.stats.patternSpans} from patterns) - rendering overlays`);
 
-				// NOTE: Citation overlays disabled - using text layer annotation instead
-				// renderCitationOverlaysOnAllPages();
+				// Render citation overlays with clickable buttons
+				renderCitationOverlaysOnAllPages();
 			} else {
 				console.warn('[PDF] Citation extraction failed, using pattern-based detection');
 				citationsSource = 'pattern';
@@ -761,7 +763,10 @@
 	 * These have enhanced metadata (authors, title, venue, year, DOI, etc.)
 	 */
 	async function loadGrobidReferences() {
+		console.log('[PDF] loadGrobidReferences() called, paperId:', paperId);
+
 		if (!paperId) {
+			console.log('[PDF] No paperId, skipping GROBID references');
 			return;
 		}
 
@@ -769,11 +774,15 @@
 		grobidReferences = [];
 
 		try {
+			console.log('[PDF] Fetching GROBID references from API...');
 			const result = await api.getGrobidReferences(paperId);
+			console.log('[PDF] GROBID references API result:', result);
 
 			if (result.success && result.data) {
 				grobidReferences = result.data;
-				console.log(`[PDF] Loaded ${grobidReferences.length} GROBID references`);
+				console.log(`[PDF] ✓ Loaded ${grobidReferences.length} GROBID references`);
+			} else {
+				console.log('[PDF] ✗ No GROBID references found or API error');
 			}
 		} catch (e) {
 			console.warn('[PDF] Failed to load GROBID references:', e);
@@ -849,14 +858,23 @@
 		// Create overlay for each citation span
 		let validOverlays = 0;
 		for (const span of pageSpans) {
-			// Convert PDF coordinates (origin bottom-left) to display coordinates (origin top-left)
-			const displayX1 = span.bbox.x1 * scaleX;
-			const displayY1 = (pdfHeight - span.bbox.y2) * scaleY; // Flip Y
-			const displayX2 = span.bbox.x2 * scaleX;
-			const displayY2 = (pdfHeight - span.bbox.y1) * scaleY; // Flip Y
+			// Backend bbox is already in top-left origin, no Y-flip needed
+			let displayX1 = span.bbox.x1 * scaleX;
+			let displayY1 = span.bbox.y1 * scaleY;
+			let displayX2 = span.bbox.x2 * scaleX;
+			let displayY2 = span.bbox.y2 * scaleY;
 
 			const width = displayX2 - displayX1;
-			const height = displayY2 - displayY1;
+			const rawHeight = displayY2 - displayY1;
+
+			// Expand height if too small (PDF bboxes sometimes only cover baseline)
+			let height = rawHeight;
+			if (rawHeight < 15) {
+				// Expand upward to cover full text height
+				const expandAmount = rawHeight;
+				displayY1 -= expandAmount;
+				height = rawHeight * 2;
+			}
 
 			// Validate overlay dimensions (skip invalid/tiny boxes)
 			if (width < 5 || height < 5 || width > canvasWidth || height > canvasHeight) {
@@ -927,15 +945,46 @@
 	 * Handle click on citation overlay - look up linked references or show modal
 	 */
 	function handleCitationOverlayClick(span: CitationSpan) {
+		console.log('[PDF] Citation clicked:', span);
+
+		// If we have linkedReferences from backend, use them (includes full metadata)
+		if (span.linkedReferences && span.linkedReferences.length > 0) {
+			const firstRef = span.linkedReferences[0];
+			const query = firstRef.searchQuery || firstRef.title || firstRef.authors || '';
+			console.log('[PDF] Found linked references:', span.linkedReferences.length, 'first query:', query);
+			if (query && query.length >= 5) {
+				citationQuery = query;
+				citationLinkedRefs = span.linkedReferences;
+				showCitationModal = true;
+				return;
+			}
+		}
+
 		// If we have linked references, use them for lookup
 		if (span.linkedRefIds.length > 0) {
 			const refId = span.linkedRefIds[0];
-			const linkedRef = parsedReferences.find(r => r.id === refId);
 
-			if (linkedRef) {
-				const query = linkedRef.title || linkedRef.authors || linkedRef.rawText;
+			// Try GROBID references first (by xmlId)
+			const grobidRef = grobidReferences.find(r => r.xmlId === refId || r.id === refId);
+			if (grobidRef) {
+				const query = grobidRef.title || grobidRef.authors || refId;
+				console.log('[PDF] Found GROBID reference:', grobidRef, 'query:', query);
 				if (query && query.length >= 5) {
 					citationQuery = query;
+					citationLinkedRefs = undefined;
+					showCitationModal = true;
+					return;
+				}
+			}
+
+			// Fallback to legacy parsed references
+			const linkedRef = parsedReferences.find(r => r.id === refId);
+			if (linkedRef) {
+				const query = linkedRef.title || linkedRef.authors || linkedRef.rawText;
+				console.log('[PDF] Found legacy reference:', linkedRef, 'query:', query);
+				if (query && query.length >= 5) {
+					citationQuery = query;
+					citationLinkedRefs = undefined;
 					showCitationModal = true;
 					return;
 				}
@@ -3013,13 +3062,16 @@
 {#if showCitationModal}
 	<CitationModal
 		query={citationQuery}
+		linkedReferences={citationLinkedRefs}
 		onClose={() => {
 			showCitationModal = false;
 			citationQuery = '';
+			citationLinkedRefs = undefined;
 		}}
 		onOpenPaper={(paperId) => {
 			showCitationModal = false;
 			citationQuery = '';
+			citationLinkedRefs = undefined;
 			onOpenPaper?.(paperId);
 		}}
 	/>
@@ -3033,7 +3085,22 @@
 		tables={outlineTables}
 		equations={outlineEquations}
 		references={outlineReferences}
+		citations={citationSpans}
+		grobidReferences={grobidReferences}
 		onClose={() => showOutlinePanel = false}
 		onItemClick={handleOutlineItemClick}
+		onCitationClick={(citation) => {
+			console.log('Citation clicked:', citation);
+			// TODO: Show linked references or scroll to citation location
+		}}
+		onReferenceClick={(reference) => {
+			console.log('[PDF] Reference clicked:', reference);
+			const query = reference.title || reference.authors || '';
+			if (query && query.length >= 5) {
+				citationQuery = query;
+				citationLinkedRefs = undefined;
+				showCitationModal = true;
+			}
+		}}
 	/>
 {/if}

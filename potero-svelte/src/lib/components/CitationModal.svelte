@@ -1,16 +1,18 @@
 <script lang="ts">
-	import { api, type SearchResult, type ImportFromUrlRequest } from '$lib/api/client';
+	import { api, type SearchResult, type ImportFromUrlRequest, type LinkedReference } from '$lib/api/client';
 	import type { Paper } from '$lib/types';
 	import { getErrorMessage } from '$lib/types';
+	import { triggerJobAutoExpand } from '$lib/stores/jobs';
 
 	interface Props {
 		query: string;
+		linkedReferences?: LinkedReference[];  // Multiple references to show in tabs
 		onClose: () => void;
 		onImport?: (result: SearchResult) => void;
 		onOpenPaper?: (paperId: string) => void;
 	}
 
-	let { query, onClose, onImport, onOpenPaper }: Props = $props();
+	let { query, linkedReferences, onClose, onImport, onOpenPaper }: Props = $props();
 
 	let results = $state<SearchResult[]>([]);
 	let isLoading = $state(true);
@@ -21,12 +23,27 @@
 	// Track which results are being imported
 	let importingResults = $state<Set<string>>(new Set());
 
+	// Tab state for multiple references
+	let activeTabIndex = $state(0);
+
+	// Compute which reference to search for
+	function getCurrentSearchQuery(): string {
+		if (linkedReferences && linkedReferences.length > 0 && activeTabIndex < linkedReferences.length) {
+			const activeRef = linkedReferences[activeTabIndex];
+			return activeRef.searchQuery || activeRef.title || activeRef.authors || '';
+		}
+		return query;
+	}
+
+	// Re-search when tab changes
 	$effect(() => {
+		activeTabIndex; // Track dependency
 		searchCitation();
 	});
 
 	async function searchCitation() {
-		if (!query || query.length < 3) {
+		const searchQuery = getCurrentSearchQuery();
+		if (!searchQuery || searchQuery.length < 3) {
 			isLoading = false;
 			error = 'Query too short';
 			return;
@@ -37,7 +54,7 @@
 		existingPapers = new Map();
 
 		try {
-			const response = await api.searchOnline(query, 'semantic');
+			const response = await api.searchOnline(searchQuery, 'semantic');
 			if (response.success && response.data) {
 				results = response.data;
 				// Check which papers already exist in library
@@ -109,6 +126,8 @@
 
 			const response = await api.importFromUrl(request);
 			if (response.success && response.data) {
+				// Trigger job panel to show analysis progress
+				triggerJobAutoExpand();
 				// Paper added successfully, open in viewer
 				onOpenPaper?.(response.data.paperId);
 				onClose();
@@ -145,22 +164,42 @@
 >
 	<div class="w-full max-w-2xl max-h-[80vh] overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-neutral-800 flex flex-col">
 		<!-- Header -->
-		<div class="flex items-center justify-between border-b px-6 py-4 dark:border-neutral-700">
-			<div>
-				<h2 class="text-lg font-semibold text-neutral-900 dark:text-white">Citation Lookup</h2>
-				<p class="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5 line-clamp-1">
-					Searching: "{query}"
-				</p>
+		<div class="border-b dark:border-neutral-700">
+			<div class="flex items-center justify-between px-6 py-4">
+				<div>
+					<h2 class="text-lg font-semibold text-neutral-900 dark:text-white">Citation Lookup</h2>
+					<p class="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5 line-clamp-1">
+						Searching: "{getCurrentSearchQuery()}"
+					</p>
+				</div>
+				<button
+					onclick={onClose}
+					class="rounded-lg p-2 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700"
+					title="Close"
+				>
+					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M18 6L6 18M6 6l12 12" />
+					</svg>
+				</button>
 			</div>
-			<button
-				onclick={onClose}
-				class="rounded-lg p-2 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700"
-				title="Close"
-			>
-				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="M18 6L6 18M6 6l12 12" />
-				</svg>
-			</button>
+
+			<!-- Tabs for multiple references -->
+			{#if linkedReferences && linkedReferences.length > 1}
+				<div class="flex overflow-x-auto px-6 gap-1 bg-neutral-50 dark:bg-neutral-900/50">
+					{#each linkedReferences as ref, index}
+						<button
+							onclick={() => activeTabIndex = index}
+							class="px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 {activeTabIndex === index ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'}"
+						>
+							{#if activeTabIndex === index}
+								[{ref.number}] {ref.title?.slice(0, 30) || ref.authors?.slice(0, 30) || 'Reference ' + (index + 1)}{(ref.title && ref.title.length > 30) || (ref.authors && ref.authors.length > 30) ? '...' : ''}
+							{:else}
+								[{ref.number}]
+							{/if}
+						</button>
+					{/each}
+				</div>
+			{/if}
 		</div>
 
 		<!-- Content -->

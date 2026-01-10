@@ -1178,6 +1178,23 @@ export interface CitationSpan {
 	destPage: number | null;
 	destY: number | null;
 	linkedRefIds: string[];
+	linkedReferences?: LinkedReference[];  // Full reference info from backend
+}
+
+/**
+ * Linked reference with full metadata (from backend linking)
+ */
+export interface LinkedReference {
+	id: string;
+	number: number;
+	authors: string | null;
+	title: string | null;
+	venue: string | null;
+	year: number | null;
+	doi: string | null;
+	searchQuery: string;
+	linkMethod: string;
+	linkConfidence: number;
 }
 
 /**

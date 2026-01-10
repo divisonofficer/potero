@@ -253,13 +253,18 @@
 >
 	<!-- Header -->
 	<div class="bg-gradient-to-r from-emerald-600 to-teal-600">
+		<!-- Title row (draggable) -->
 		<div
-			class="px-4 py-2 flex items-center justify-between cursor-grab active:cursor-grabbing"
+			class="px-4 py-2 flex items-center gap-2 cursor-grab active:cursor-grabbing"
 			onmousedown={handleMouseDown}
 		>
-			<div class="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
-				<FileText class="w-4 h-4 text-white shrink-0" />
-				<h3 class="font-semibold text-white truncate">{panelTitle}</h3>
+			<FileText class="w-4 h-4 text-white shrink-0" />
+			<h3 class="font-semibold text-white truncate flex-1 min-w-0">{panelTitle}</h3>
+		</div>
+
+		<!-- Controls row -->
+		<div class="px-4 pb-2 pt-0 flex items-center justify-between">
+			<div class="flex items-center gap-2">
 				{#if paperId}
 					<span class="text-xs text-white/70">Linked to paper</span>
 				{/if}

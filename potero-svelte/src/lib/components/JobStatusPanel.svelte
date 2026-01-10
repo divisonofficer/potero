@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { api } from '$lib/api/client';
-	import { jobRefreshTrigger } from '$lib/stores/jobs';
+	import { jobRefreshTrigger, jobAutoExpandTrigger } from '$lib/stores/jobs';
 	import { loadPapers } from '$lib/stores/library';
 	import { tabs, updateTabPaper } from '$lib/stores/tabs';
 	import { get } from 'svelte/store';
@@ -45,6 +45,7 @@
 
 	// Subscribe to refresh trigger - use unsubscribe pattern
 	let unsubscribeRefresh: (() => void) | null = null;
+	let unsubscribeAutoExpand: (() => void) | null = null;
 
 	$effect(() => {
 		// Subscribe to the store and fetch jobs when it changes
@@ -57,6 +58,22 @@
 		return () => {
 			if (unsubscribeRefresh) {
 				unsubscribeRefresh();
+			}
+		};
+	});
+
+	$effect(() => {
+		// Subscribe to auto-expand trigger
+		unsubscribeAutoExpand = jobAutoExpandTrigger.subscribe((value) => {
+			if (value > 0) {
+				console.log('[JobStatusPanel] Auto-expanding panel');
+				isExpanded = true;
+			}
+		});
+
+		return () => {
+			if (unsubscribeAutoExpand) {
+				unsubscribeAutoExpand();
 			}
 		};
 	});

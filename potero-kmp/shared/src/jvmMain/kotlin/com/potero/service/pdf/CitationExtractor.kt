@@ -285,12 +285,14 @@ class CitationExtractor(private val pdfPath: String) {
             override fun writeString(text: String?, textPositions: MutableList<TextPosition>?) {
                 if (text != null && textPositions != null) {
                     for (tp in textPositions) {
+                        // Use getX/getY instead of xDirAdj/yDirAdj for more accurate positioning
+                        // xDirAdj can be incorrect for rotated or complex layouts
                         positions.add(CharPosition(
                             char = tp.unicode ?: "",
-                            x = tp.xDirAdj.toDouble(),
-                            y = tp.yDirAdj.toDouble(),
-                            width = tp.widthDirAdj.toDouble(),
-                            height = tp.heightDir.toDouble()
+                            x = tp.x.toDouble(),
+                            y = tp.y.toDouble(),
+                            width = tp.width.toDouble(),
+                            height = tp.height.toDouble()
                         ))
                     }
                 }

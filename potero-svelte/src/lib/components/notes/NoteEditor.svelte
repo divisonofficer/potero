@@ -23,14 +23,26 @@
 	let editTitle = $state(title);
 	let editContent = $state(content);
 	let titleInput: HTMLInputElement;
+	let isInitialLoad = $state(true);
 
 	// Title debounce timer
 	let titleSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 
-	// Sync with props when they change (e.g., after loading template)
+	// Sync with props only on initial load or when loading new template
+	// Don't sync when saving (to prevent cursor reset)
 	$effect(() => {
-		editTitle = title;
-		editContent = content;
+		if (isLoading) {
+			// Loading new template - will update when loading completes
+			return;
+		}
+
+		if (isInitialLoad || (title !== editTitle && content !== editContent)) {
+			// Initial load or completely new content (e.g., template loaded)
+			editTitle = title;
+			editContent = content;
+			isInitialLoad = false;
+		}
+		// Otherwise, keep user's edits (don't override during save)
 	});
 
 	/**

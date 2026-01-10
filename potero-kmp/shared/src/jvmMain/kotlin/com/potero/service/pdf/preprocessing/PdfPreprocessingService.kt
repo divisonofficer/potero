@@ -123,6 +123,8 @@ class PdfPreprocessingService(
                 val textResult = extractTextWithFallback(paperId, pdfPath)
 
                 // Stage 2: Save page texts to database FIRST (so GROBID can use cache)
+                // Delete existing page texts if reprocessing
+                preprocessingRepository.deleteAllPageTexts(paperId).getOrNull()
                 log("[Preprocessing] Saving ${textResult.pages.size} pages to cache before GROBID...")
                 savePageTexts(paperId, textResult.pages)
                 log("[Preprocessing] ✓ Cache saved - GROBID can now use cached text")

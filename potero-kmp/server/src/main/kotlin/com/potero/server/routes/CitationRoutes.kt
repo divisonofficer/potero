@@ -127,6 +127,45 @@ fun CitationLink.toDto(): CitationLinkDto = CitationLinkDto(
 )
 
 /**
+ * Extract reference numbers from citation text.
+ *
+ * Handles various formats:
+ * - [1] -> [1]
+ * - [1,2,3] -> [1, 2, 3]
+ * - [1-5] -> [1, 2, 3, 4, 5]
+ * - [1, 3-5, 8] -> [1, 3, 4, 5, 8]
+ * - [14,15,30,32,37,47-49] -> [14, 15, 30, 32, 37, 47, 48, 49]
+ */
+private fun extractCitationNumbers(text: String): List<Int> {
+    val numbers = mutableListOf<Int>()
+    val cleaned = text.replace(Regex("""[\[\]()]"""), "")
+
+    // Split by comma
+    for (part in cleaned.split(",")) {
+        val trimmed = part.trim()
+
+        // Check for range (e.g., "1-5" or "1–5")
+        val rangeMatch = Regex("""(\d+)\s*[-–]\s*(\d+)""").find(trimmed)
+        if (rangeMatch != null) {
+            val start = rangeMatch.groupValues[1].toIntOrNull() ?: continue
+            val end = rangeMatch.groupValues[2].toIntOrNull() ?: continue
+            if (start <= end && end - start < 50) { // Sanity check
+                numbers.addAll(start..end)
+            }
+            continue
+        }
+
+        // Single number
+        val num = trimmed.toIntOrNull()
+        if (num != null && num in 1..9999) {
+            numbers.add(num)
+        }
+    }
+
+    return numbers.distinct()
+}
+
+/**
  * Routes for Citation operations
  */
 fun Route.citationRoutes() {
@@ -147,6 +186,11 @@ fun Route.citationRoutes() {
                     val allReferences = referenceRepository.getByPaperId(paperId)
                         .getOrDefault(emptyList())
                     val refMap = allReferences.associateBy { it.id }
+
+                    // Fetch GROBID references for fallback linking (when Reference table is empty)
+                    val grobidRepository = ServiceLocator.grobidRepository
+                    val grobidReferences = grobidRepository.getReferencesByPaperId(paperId)
+                        .getOrDefault(emptyList())
 
                     // Build DTOs with full reference info
                     val spansWithLinks = spans.map { span ->
@@ -170,9 +214,46 @@ fun Route.citationRoutes() {
                             }
                         }
 
+                        // Fallback: If no links found, try to match GROBID references by numeric pattern
+                        val finalLinkedRefs = if (linkedRefs.isEmpty() && grobidReferences.isNotEmpty()) {
+                            // Extract ALL numbers from citation text
+                            // Handles: [51], [3,6,12], [18-20], [14,15,30,32,37,47-49]
+                            val citationNums = extractCitationNumbers(span.rawText)
+
+                            if (citationNums.isNotEmpty()) {
+                                // Find GROBID reference for each citation number
+                                citationNums.mapNotNull { citationNum ->
+                                    // Try to find GROBID reference by xmlId pattern
+                                    // Common patterns: "b51", "#b51", "ref-51", "llm-ref-51", etc.
+                                    val matchedGrobid = grobidReferences.find { grobid ->
+                                        val xmlIdNum = Regex("""(\d+)""").find(grobid.xmlId)?.value?.toIntOrNull()
+                                        xmlIdNum == citationNum
+                                    }
+
+                                    matchedGrobid?.let { grobid ->
+                                        LinkedReferenceDto(
+                                            id = grobid.xmlId,  // Use xmlId as ID
+                                            number = citationNum,
+                                            authors = grobid.authors,
+                                            title = grobid.title,
+                                            venue = grobid.venue,
+                                            year = grobid.year,
+                                            doi = grobid.doi,
+                                            searchQuery = grobid.title ?: grobid.authors ?: "",
+                                            linkMethod = "grobid_numeric_fallback",
+                                            linkConfidence = 0.8
+                                        )
+                                    }
+                                }
+                            } else emptyList()
+                        } else linkedRefs
+
                         span.toDto(
-                            linkedRefIds = links.map { it.referenceId },
-                            linkedReferences = linkedRefs
+                            linkedRefIds = if (finalLinkedRefs.isNotEmpty())
+                                finalLinkedRefs.map { it.id }
+                            else
+                                links.map { it.referenceId },
+                            linkedReferences = finalLinkedRefs
                         )
                     }
                     call.respond(ApiResponse(data = spansWithLinks))

@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, Sigma, Image, X, FileText, AlignLeft, List } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, Sigma, Image, X, FileText, AlignLeft, List, Link } from 'lucide-svelte';
 	import { fly } from 'svelte/transition';
+	import type { CitationSpan, GrobidReference } from '$lib/api/client';
 
 	interface OutlineItem {
 		id: string;
@@ -17,8 +18,12 @@
 		tables?: OutlineItem[];
 		equations?: OutlineItem[];
 		references?: OutlineItem[];
+		citations?: CitationSpan[];
+		grobidReferences?: GrobidReference[];
 		onClose: () => void;
 		onItemClick: (item: OutlineItem) => void;
+		onCitationClick?: (citation: CitationSpan) => void;
+		onReferenceClick?: (reference: GrobidReference) => void;
 	}
 
 	let {
@@ -27,15 +32,34 @@
 		tables = [],
 		equations = [],
 		references = [],
+		citations = [],
+		grobidReferences = [],
 		onClose,
-		onItemClick
+		onItemClick,
+		onCitationClick,
+		onReferenceClick
 	}: Props = $props();
+
+	// Debug logging
+	$effect(() => {
+		console.log('[FloatingOutline] Props updated:', {
+			citations: citations.length,
+			grobidReferences: grobidReferences.length,
+			sections: sections.length,
+			figures: figures.length,
+			tables: tables.length,
+			equations: equations.length,
+			references: references.length
+		});
+	});
 
 	let showSections = $state(true);
 	let showFigures = $state(true);
 	let showTables = $state(true);
 	let showEquations = $state(true);
 	let showReferences = $state(true);
+	let showCitations = $state(false);
+	let showGrobidReferences = $state(false);
 </script>
 
 <div
@@ -260,7 +284,105 @@
 			</div>
 		{/if}
 
-		<!-- References -->
+		<!-- Citations -->
+		{#if citations.length > 0 && (grobidReferences.length + references.length) < 1}
+			<div>
+				<button
+					onclick={() => showCitations = !showCitations}
+					class="w-full flex items-center justify-between px-3 py-2 bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 rounded-lg transition-colors"
+				>
+					<div class="flex items-center gap-2">
+						<Link class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+						<span class="font-medium text-emerald-900 dark:text-emerald-100 text-sm">
+							Citations ({citations.length})
+						</span>
+					</div>
+					{#if showCitations}
+						<ChevronDown class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+					{:else}
+						<ChevronRight class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+					{/if}
+				</button>
+
+				{#if showCitations}
+					<div class="mt-2 space-y-1 ml-2">
+						{#each citations as citation}
+							<button
+								onclick={() => onCitationClick?.(citation)}
+								class="w-full text-left px-3 py-2 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors group"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<div class="flex-1 min-w-0">
+										<p class="text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+											{citation.rawText}
+										</p>
+										<p class="text-xs text-emerald-600 dark:text-emerald-400 mt-1">
+											{citation.linkedRefIds.length} reference{citation.linkedRefIds.length > 1 ? 's' : ''}
+										</p>
+									</div>
+									<span class="text-xs text-gray-400 flex-shrink-0">
+										p.{citation.pageNum}
+									</span>
+								</div>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
+		<!-- GROBID References -->
+		{#if grobidReferences.length > 0}
+			<div>
+				<button
+					onclick={() => showGrobidReferences = !showGrobidReferences}
+					class="w-full flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+				>
+					<div class="flex items-center gap-2">
+						<FileText class="w-4 h-4 text-gray-600 dark:text-gray-400" />
+						<span class="font-medium text-gray-900 dark:text-gray-100 text-sm">
+							References ({grobidReferences.length})
+						</span>
+					</div>
+					{#if showGrobidReferences}
+						<ChevronDown class="w-4 h-4 text-gray-600 dark:text-gray-400" />
+					{:else}
+						<ChevronRight class="w-4 h-4 text-gray-600 dark:text-gray-400" />
+					{/if}
+				</button>
+
+				{#if showGrobidReferences}
+					<div class="mt-2 space-y-1 ml-2">
+						{#each grobidReferences as ref}
+							<button
+								onclick={() => onReferenceClick?.(ref)}
+								class="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors group"
+							>
+								<div class="flex items-start justify-between gap-2">
+									<div class="flex-1 min-w-0">
+										<p class="text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors line-clamp-1">
+											[{ref.xmlId.replace(/^(llm-ref-|b|#b)/g, '')}]: {ref.title || ref.authors || 'Untitled'}
+										</p>
+										{#if ref.authors}
+											<p class="text-xs text-gray-500 dark:text-gray-400 mt-1 line-clamp-1">
+												{ref.authors}
+											</p>
+										{/if}
+										{#if ref.venue && ref.year}
+											<p class="text-xs text-gray-400 mt-1">
+												{ref.venue}, {ref.year}
+											</p>
+										{/if}
+									</div>
+								</div>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
+		<!-- References (Legacy) -->
 		{#if references.length > 0}
 			<div>
 				<button
@@ -270,7 +392,7 @@
 					<div class="flex items-center gap-2">
 						<FileText class="w-4 h-4 text-gray-600 dark:text-gray-400" />
 						<span class="font-medium text-gray-900 dark:text-gray-100 text-sm">
-							References ({references.length})
+							References (Legacy) ({references.length})
 						</span>
 					</div>
 					{#if showReferences}

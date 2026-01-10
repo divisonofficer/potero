@@ -7,7 +7,7 @@ import {
   type AutoTagResponse,
   type TagSuggestion,
 } from "$lib/api/client";
-import { triggerJobRefresh } from "$lib/stores/jobs";
+import { triggerJobRefresh, triggerJobAutoExpand } from "$lib/stores/jobs";
 
 // Core state
 export const papers = writable<Paper[]>([]);
@@ -228,6 +228,7 @@ export async function importByDoi(doi: string): Promise<Paper | null> {
   const result = await api.importByDoi(doi);
 
   if (result.success && result.data) {
+    triggerJobAutoExpand(); // Show job panel for analysis progress
     // Add to papers list
     papers.update((list) => [...list, result.data!]);
     isLoading.set(false);
@@ -249,6 +250,7 @@ export async function importByArxiv(arxivId: string): Promise<Paper | null> {
   const result = await api.importByArxiv(arxivId);
 
   if (result.success && result.data) {
+    triggerJobAutoExpand(); // Show job panel for analysis progress
     // Add to papers list
     papers.update((list) => [...list, result.data!]);
     isLoading.set(false);
@@ -369,6 +371,12 @@ export async function uploadPdfs(files: FileList | File[]): Promise<{
       if (result.success && result.data) {
         successCount++;
         uploadedPaperIds.push(result.data.paperId);
+
+        // Auto-expand job panel on first successful upload to show analysis progress
+        if (successCount === 1) {
+          triggerJobAutoExpand();
+        }
+
         // Collect pending analyses for later display
         if (
           result.data.needsUserConfirmation &&
@@ -561,6 +569,7 @@ export async function importFromSearchResult(
   if (searchResult.doi) {
     const result = await api.importByDoi(searchResult.doi);
     if (result.success && result.data) {
+      triggerJobAutoExpand(); // Show job panel for analysis progress
       await loadPapers();
       isLoading.set(false);
       return result.data;
@@ -570,6 +579,7 @@ export async function importFromSearchResult(
   if (searchResult.arxivId) {
     const result = await api.importByArxiv(searchResult.arxivId);
     if (result.success && result.data) {
+      triggerJobAutoExpand(); // Show job panel for analysis progress
       await loadPapers();
       isLoading.set(false);
       return result.data;
@@ -590,6 +600,7 @@ export async function importFromSearchResult(
   });
 
   if (result.success && result.data) {
+    triggerJobAutoExpand(); // Show job panel for analysis progress
     await loadPapers();
     isLoading.set(false);
     return result.data;

@@ -16,10 +16,18 @@
 	let blocks = $state<Block[]>(parseMarkdownToBlocks(initialContent));
 	let isDirty = $state(false);
 	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+	let isInitialLoad = $state(true);
+	let lastContent = $state(initialContent);
 
-	// Re-parse blocks when initialContent changes (e.g., after loading template)
+	// Re-parse blocks only when content truly changes from external source
+	// Don't re-parse during save (to prevent cursor reset)
 	$effect(() => {
-		blocks = parseMarkdownToBlocks(initialContent);
+		if (isInitialLoad || (initialContent !== lastContent && initialContent !== blocksToMarkdown(blocks))) {
+			// Initial load or new external content (not from user editing)
+			blocks = parseMarkdownToBlocks(initialContent);
+			lastContent = initialContent;
+			isInitialLoad = false;
+		}
 	});
 
 	/**
