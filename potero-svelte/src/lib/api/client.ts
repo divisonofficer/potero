@@ -1,4 +1,13 @@
-import type { ApiResponse, Paper, Tag, ChatMessage, ChatSession } from '$lib/types';
+import type {
+	ApiResponse,
+	Paper,
+	Tag,
+	ChatMessage,
+	ChatSession,
+	ResearchNote,
+	ResearchNoteWithLinks,
+	BacklinkInfo
+} from '$lib/types';
 
 /**
  * API client for communicating with the Kotlin backend
@@ -697,6 +706,50 @@ class ApiClient {
 		request: BulkReanalyzeRequest
 	): Promise<ApiResponse<BulkReanalyzePreview>> {
 		return this.request('POST', '/upload/bulk-reanalyze/preview', request);
+	}
+
+	// Research Notes
+	async getNotes(): Promise<ApiResponse<ResearchNote[]>> {
+		return this.request('GET', '/notes');
+	}
+
+	async getStandaloneNotes(): Promise<ApiResponse<ResearchNote[]>> {
+		return this.request('GET', '/notes/standalone');
+	}
+
+	async getNotesByPaper(paperId: string): Promise<ApiResponse<ResearchNote[]>> {
+		return this.request('GET', `/notes/paper/${paperId}`);
+	}
+
+	async getNote(id: string): Promise<ApiResponse<ResearchNoteWithLinks>> {
+		return this.request('GET', `/notes/${id}`);
+	}
+
+	async createNote(data: {
+		title: string;
+		content: string;
+		paperId?: string | null;
+	}): Promise<ApiResponse<ResearchNote>> {
+		return this.request('POST', '/notes', data);
+	}
+
+	async updateNote(
+		id: string,
+		data: { title: string; content: string; paperId?: string | null }
+	): Promise<ApiResponse<ResearchNote>> {
+		return this.request('PATCH', `/notes/${id}`, data);
+	}
+
+	async deleteNote(id: string): Promise<ApiResponse<{ deletedId: string }>> {
+		return this.request('DELETE', `/notes/${id}`);
+	}
+
+	async getBacklinks(noteId: string): Promise<ApiResponse<BacklinkInfo[]>> {
+		return this.request('GET', `/notes/${noteId}/backlinks`);
+	}
+
+	async searchNotes(query: string): Promise<ApiResponse<ResearchNote[]>> {
+		return this.request('GET', `/notes/search?q=${encodeURIComponent(query)}`);
 	}
 }
 

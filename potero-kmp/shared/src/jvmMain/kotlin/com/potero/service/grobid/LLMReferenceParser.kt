@@ -45,6 +45,16 @@ class LLMReferenceParser(
                 val preview = referencesText.take(500).replace("\n", "\\n")
                 println("[LLMReferenceParser] Input preview: $preview")
 
+                // Detect if we should use chunked parsing
+                val estimatedRefCount = countReferences(referencesText)
+                println("[LLMReferenceParser] Estimated reference count: $estimatedRefCount")
+
+                // Use chunked parsing if many references or text is very long
+                if (estimatedRefCount > 30 || referencesText.length > 25000) {
+                    println("[LLMReferenceParser] Using chunked parsing for better completion")
+                    return@runCatching parseInChunks(referencesText, paperId)
+                }
+
                 // Truncate if too long (LLM context limit)
                 val truncatedText = if (referencesText.length > 50000) {
                     println("[LLMReferenceParser] Warning: Input too long (${referencesText.length} chars), truncating to 50000")
@@ -120,6 +130,101 @@ class LLMReferenceParser(
     }
 
     /**
+     * Parse references in chunks to avoid LLM truncation.
+     * Splits references into smaller batches and processes separately.
+     */
+    private suspend fun parseInChunks(referencesText: String, paperId: String): List<GrobidReference> {
+        println("[LLMReferenceParser] Starting chunked parsing")
+
+        // Split text into reference entries
+        val referenceChunks = splitIntoReferenceChunks(referencesText, chunkSize = 20)
+        println("[LLMReferenceParser] Split into ${referenceChunks.size} chunks")
+
+        val allReferences = mutableListOf<GrobidReference>()
+
+        for ((chunkIndex, chunk) in referenceChunks.withIndex()) {
+            println("[LLMReferenceParser] Processing chunk ${chunkIndex + 1}/${referenceChunks.size}")
+
+            val prompt = buildPrompt(chunk)
+            val llmResult = llmService.chat(prompt)
+
+            llmResult.fold(
+                onSuccess = { response ->
+                    val llmResponse = parseJsonResponse(response)
+                    println("[LLMReferenceParser] Chunk ${chunkIndex + 1}: parsed ${llmResponse.references.size} references")
+
+                    val grobidReferences = llmResponse.references.mapIndexed { index, llmRef ->
+                        convertToGrobidReference(llmRef, paperId, allReferences.size + index)
+                    }
+
+                    allReferences.addAll(grobidReferences)
+                },
+                onFailure = { error ->
+                    println("[LLMReferenceParser] Chunk ${chunkIndex + 1} failed: ${error.message}")
+                    // Continue with other chunks
+                }
+            )
+
+            // Small delay to avoid rate limiting
+            if (chunkIndex < referenceChunks.size - 1) {
+                kotlinx.coroutines.delay(500)
+            }
+        }
+
+        println("[LLMReferenceParser] Chunked parsing complete: ${allReferences.size} total references")
+        return allReferences
+    }
+
+    /**
+     * Count estimated number of references in text.
+     * Looks for common reference patterns like [1], [2], (1), (2), etc.
+     */
+    private fun countReferences(text: String): Int {
+        // Pattern: Lines starting with [N] or (N) or N.
+        val pattern = Regex("""^\s*[\[\(]?\d+[\]\)]?\s*[A-Z]""", RegexOption.MULTILINE)
+        return pattern.findAll(text).count()
+    }
+
+    /**
+     * Split references text into chunks.
+     * Each chunk contains up to `chunkSize` reference entries.
+     */
+    private fun splitIntoReferenceChunks(text: String, chunkSize: Int = 20): List<String> {
+        val lines = text.lines()
+        val chunks = mutableListOf<String>()
+
+        // Pattern to detect reference start: [N], (N), or N.
+        val refStartPattern = Regex("""^\s*[\[\(]?(\d+)[\]\)]?\s+[A-Z]""")
+
+        var currentChunk = mutableListOf<String>()
+        var refCount = 0
+
+        for (line in lines) {
+            val match = refStartPattern.find(line.trim())
+
+            if (match != null) {
+                // New reference detected
+                if (refCount >= chunkSize && currentChunk.isNotEmpty()) {
+                    // Start new chunk
+                    chunks.add(currentChunk.joinToString("\n"))
+                    currentChunk = mutableListOf()
+                    refCount = 0
+                }
+                refCount++
+            }
+
+            currentChunk.add(line)
+        }
+
+        // Add remaining lines
+        if (currentChunk.isNotEmpty()) {
+            chunks.add(currentChunk.joinToString("\n"))
+        }
+
+        return chunks
+    }
+
+    /**
      * Build LLM prompt with anti-hallucination rules
      * Uses improved template with more explicit instructions
      */
@@ -133,7 +238,7 @@ The text may contain:
 - A "References" or "Bibliography" section
 - Numbered entries like [1], [2], (1), (2), etc.
 
-## CRITICAL ANTI-HALLUCINATION RULES
+## CRITICAL RULES - MUST FOLLOW
 1. **IF THE TEXT IS GARBLED/UNREADABLE** (many control characters, nonsense symbols):
    → Return EMPTY array: {"references":[]}
    → DO NOT invent or make up any data
@@ -143,11 +248,19 @@ The text may contain:
    → DO NOT use placeholder or example data
 
 3. **IF REFERENCES ARE FOUND**:
-   → Parse EVERY single reference entry (do NOT skip or omit)
-   → DO NOT use placeholders like "... (omitted for brevity)"
+   → Parse EVERY SINGLE reference entry (do NOT skip or omit ANY)
+   → DO NOT use placeholders like "... (omitted for brevity)" or "// ... more references"
+   → DO NOT stop in the middle - COMPLETE THE ENTIRE ARRAY
+   → If there are 50+ references, parse ALL of them (not just first few)
    → Extract DOI only if explicitly present in text
    → Use null for unknown fields (do NOT guess or invent)
    → Include complete raw text for each reference
+
+## COMPLETION REQUIREMENT
+**CRITICAL**: You MUST complete parsing ALL references before ending your response.
+- DO NOT stop after a few references
+- DO NOT truncate the JSON array
+- Ensure the JSON is valid and complete with closing brackets
 
 ## OUTPUT FORMAT
 Return ONLY valid JSON (no markdown, no explanations, no code blocks):
@@ -171,7 +284,7 @@ Return ONLY valid JSON (no markdown, no explanations, no code blocks):
 
 $referencesText
 
-## YOUR JSON OUTPUT
+## YOUR COMPLETE JSON OUTPUT (ALL REFERENCES, NO TRUNCATION)
         """.trimIndent()
     }
 

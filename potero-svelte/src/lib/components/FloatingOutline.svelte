@@ -281,7 +281,7 @@
 				</button>
 
 				{#if showReferences}
-					<div class="mt-2 space-y-1 ml-2 max-h-96 overflow-y-auto">
+					<div class="mt-2 space-y-1 ml-2">
 						{#each references as ref}
 							<button
 								onclick={() => onItemClick(ref)}

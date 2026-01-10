@@ -93,9 +93,19 @@ class GrobidProcessor(
         return runCatching {
             log("[GrobidProcessor] Starting processing for paper: $paperId")
 
-            // Step 1: Try GROBID first
+            // Step 1: Try GROBID first (if enabled)
             var currentPdfPath = pdfPath
             val teiDocument = try {
+                // Check if GROBID is enabled in settings (default: enabled)
+                val grobidEnabled = settingsRepository.get(SettingsKeys.GROBID_ENABLED)
+                    .getOrNull()?.equals("true", ignoreCase = true) ?: true
+
+                if (!grobidEnabled) {
+                    log("[GrobidProcessor] GROBID is disabled in settings, skipping")
+                    throw GrobidException("GROBID is disabled in settings")
+                }
+
+                log("[GrobidProcessor] GROBID is enabled, attempting processing...")
                 grobidEngine.processFulltext(currentPdfPath)
             } catch (e: GrobidException) {
                 log("[GrobidProcessor] GROBID failed: ${e.message}")
@@ -435,9 +445,9 @@ class GrobidProcessor(
         return try {
             log("[GrobidProcessor] Attempting OCR fallback for: $pdfPath")
 
-            // Check if OCR is enabled
+            // Check if OCR is enabled (default: disabled, requires Tesseract)
             val ocrEnabled = settingsRepository.get(SettingsKeys.OCR_ENABLED)
-                .getOrNull() == "true"
+                .getOrNull()?.equals("true", ignoreCase = true) ?: false
 
             if (!ocrEnabled) {
                 log("[GrobidProcessor] OCR is disabled in settings")
@@ -489,8 +499,17 @@ class GrobidProcessor(
      * @param endPage Last page (1-indexed)
      * @return Extracted text or null if pdftotext not available
      */
-    private fun extractWithPdftotext(pdfPath: String, startPage: Int, endPage: Int): String? {
+    private suspend fun extractWithPdftotext(pdfPath: String, startPage: Int, endPage: Int): String? {
         return try {
+            // Check if pdftotext is enabled in settings (default: enabled)
+            val pdftotextEnabled = settingsRepository.get(SettingsKeys.PDFTOTEXT_ENABLED)
+                .getOrNull()?.equals("true", ignoreCase = true) ?: true
+
+            if (!pdftotextEnabled) {
+                log("[GrobidProcessor] pdftotext is disabled in settings")
+                return null
+            }
+
             log("[GrobidProcessor] Trying pdftotext fallback for pages $startPage-$endPage")
 
             val process = ProcessBuilder(
@@ -538,7 +557,7 @@ class GrobidProcessor(
      * @param maxPages Maximum number of pages to extract from end
      * @return Combined text from last pages
      */
-    private fun extractLastPagesText(pdfPath: String, maxPages: Int = 15): String {
+    private suspend fun extractLastPagesText(pdfPath: String, maxPages: Int = 15): String {
         return try {
             val pdfFile = java.io.File(pdfPath)
             val document = org.apache.pdfbox.Loader.loadPDF(pdfFile)

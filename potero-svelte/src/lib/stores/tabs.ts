@@ -1,5 +1,13 @@
-import { writable, derived } from 'svelte/store';
-import type { Tab, Paper, PdfViewerState, AuthorProfile, TagProfile, JournalProfile } from '$lib/types';
+import { writable, derived, get } from 'svelte/store';
+import type {
+	Tab,
+	Paper,
+	PdfViewerState,
+	AuthorProfile,
+	TagProfile,
+	JournalProfile,
+	ResearchNote
+} from '$lib/types';
 
 // Initial tab
 const initialTabs: Tab[] = [{ id: 'home', type: 'home', title: 'Library' }];
@@ -205,6 +213,53 @@ export function openJournalProfile(journal: JournalProfile) {
 			type: 'journal',
 			title: journal.abbreviation || (journal.name.length > 20 ? journal.name.slice(0, 20) + '...' : journal.name),
 			journal
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open notes list tab
+ */
+export function openNotesList() {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'notes');
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: 'notes',
+			type: 'notes',
+			title: 'Notes'
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open a specific research note in a tab
+ */
+export function openNote(note: ResearchNote) {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'note-viewer' && t.note?.id === note.id);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `note-${note.id}`,
+			type: 'note-viewer',
+			title: note.title.length > 30 ? note.title.slice(0, 30) + '...' : note.title,
+			note
 		};
 
 		activeTabId.set(newTab.id);

@@ -70,7 +70,7 @@ export interface ChatSession {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal';
+	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal' | 'notes' | 'note-viewer';
 	title: string;
 	paper?: Paper;
 	// PDF viewer state (persisted across tab switches)
@@ -81,6 +81,8 @@ export interface Tab {
 	tag?: TagProfile;
 	// Journal/venue details
 	journal?: JournalProfile;
+	// Research note (for note-viewer tab)
+	note?: ResearchNote;
 }
 
 export interface AuthorProfile {
@@ -154,4 +156,56 @@ export function getErrorMessage(error: string | ApiError | undefined): string {
 	if (!error) return 'Unknown error';
 	if (typeof error === 'string') return error;
 	return error.message;
+}
+
+// Research Notes (separate from PDF annotation Notes)
+
+/**
+ * Research note with markdown content and wiki-style links
+ */
+export interface ResearchNote {
+	id: string;
+	paperId: string | null; // null for standalone notes
+	title: string;
+	content: string; // Markdown with LaTeX and [[...]] links
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * Wiki-style link type
+ */
+export type NoteLinkType = 'NOTE' | 'PAPER';
+
+/**
+ * Parsed wiki-style link from note content
+ */
+export interface NoteLink {
+	id: string;
+	sourceNoteId: string;
+	targetNoteId: string | null; // null if unresolved
+	targetPaperId: string | null; // for [[paper:id]] links
+	linkText: string;
+	linkType: NoteLinkType;
+	positionInContent: number;
+	createdAt: string;
+}
+
+/**
+ * Research note with outgoing links and backlinks
+ */
+export interface ResearchNoteWithLinks {
+	note: ResearchNote;
+	outgoingLinks: NoteLink[];
+	backlinks: BacklinkInfo[];
+}
+
+/**
+ * Information about a note that links to the current note
+ */
+export interface BacklinkInfo {
+	noteId: string;
+	noteTitle: string;
+	linkText: string;
+	createdAt: string;
 }

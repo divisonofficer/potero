@@ -32,7 +32,9 @@ class PdfOcrService(
      * OCR configuration loaded from settings
      */
     private suspend fun getConfig(): OcrConfig {
-        val enabled = settingsRepository.get(SettingsKeys.OCR_ENABLED).getOrNull() == "true"
+        // Default: disabled (requires Tesseract installation)
+        val enabled = settingsRepository.get(SettingsKeys.OCR_ENABLED)
+            .getOrNull()?.equals("true", ignoreCase = true) ?: false
         val language = settingsRepository.get(SettingsKeys.OCR_LANGUAGE).getOrNull() ?: "eng"
         val dpi = settingsRepository.get(SettingsKeys.OCR_DPI).getOrNull()?.toIntOrNull() ?: 300
         val engineMode = settingsRepository.get(SettingsKeys.OCR_ENGINE_MODE).getOrNull()?.toIntOrNull() ?: 3

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -25,7 +25,8 @@
 	} from '$lib/stores/library';
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
-	import type { Paper } from '$lib/types';
+	import type { Paper, ResearchNote } from '$lib/types';
+	import { createNote } from '$lib/stores/notes';
 	import { browser } from '$app/environment';
 	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
@@ -34,6 +35,8 @@
 	import AuthorModal from '$lib/components/AuthorModal.svelte';
 	import AuthorProfileView from '$lib/components/AuthorProfileView.svelte';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
+	import NoteList from '$lib/components/notes/NoteList.svelte';
+	import NoteViewer from '$lib/components/notes/NoteViewer.svelte';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 	import { online } from 'svelte/reactivity/window';
 	import {
@@ -45,7 +48,8 @@
 		Building2,
 		Search,
 		X,
-		ChevronDown
+		ChevronDown,
+		BookOpen
 	} from 'lucide-svelte';
 
 	// Tab icon mapping
@@ -55,7 +59,9 @@
 		settings: SettingsIcon,
 		author: User,
 		tag: Tag,
-		journal: Building2
+		journal: Building2,
+		notes: BookOpen,
+		'note-viewer': FileText
 	};
 
 	// LLM log panel state
@@ -623,6 +629,15 @@
 			title="Quick Search (Ctrl+K)"
 		>
 			<Search class="h-5 w-5" />
+		</button>
+
+		<!-- Notes button -->
+		<button
+			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+			onclick={() => openNotesList()}
+			title="Research Notes"
+		>
+			<BookOpen class="h-5 w-5" />
 		</button>
 
 		<!-- Settings button -->
@@ -1261,6 +1276,43 @@
 			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
 				{#if tab.author}
 					<AuthorProfileView author={tab.author} />
+				{/if}
+			</div>
+		{/each}
+
+		<!-- Notes list tab -->
+		{#if $activeTab?.type === 'notes'}
+			<NoteList
+				onSelectNote={(note) => openNote(note)}
+				onCreateNote={async () => {
+					const title = prompt('Note title:');
+					if (!title) return;
+					const note = await createNote(title, '', null);
+					if (note) openNote(note);
+				}}
+			/>
+		{/if}
+
+		<!-- Note viewer tabs -->
+		{#each $tabs.filter(t => t.type === 'note-viewer') as tab (tab.id)}
+			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.note}
+					<NoteViewer
+						noteId={tab.note.id}
+						onBack={() => openNotesList()}
+						onNavigateToNote={async (id) => {
+							const res = await api.getNote(id);
+							if (res.success && res.data) {
+								openNote(res.data.note);
+							}
+						}}
+						onNavigateToPaper={async (id) => {
+							const res = await api.getPaper(id);
+							if (res.success && res.data) {
+								openPaper(res.data as Paper);
+							}
+						}}
+					/>
 				{/if}
 			</div>
 		{/each}
