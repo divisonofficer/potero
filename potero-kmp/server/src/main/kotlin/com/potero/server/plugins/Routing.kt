@@ -26,6 +26,7 @@ fun Application.configureRouting() {
             citationRoutes()
             narrativeRoutes()
             researchNoteRoutes()
+            relatedWorkRoutes()
         }
 
         // LLM routes (separate from /api prefix for clarity)

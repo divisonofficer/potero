@@ -1,0 +1,103 @@
+-- Main comparison table
+CREATE TABLE ComparisonTable (
+    id TEXT NOT NULL PRIMARY KEY,
+    source_paper_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    generation_method TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (source_paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+CREATE INDEX comparison_table_source_idx ON ComparisonTable(source_paper_id);
+
+-- Column definitions
+CREATE TABLE ComparisonColumn (
+    id TEXT NOT NULL PRIMARY KEY,
+    table_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    data_type TEXT NOT NULL,
+    column_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE
+);
+
+CREATE INDEX comparison_column_table_idx ON ComparisonColumn(table_id);
+
+-- Cell values
+CREATE TABLE ComparisonEntry (
+    id TEXT NOT NULL PRIMARY KEY,
+    table_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL,
+    column_id TEXT NOT NULL,
+    value TEXT NOT NULL,
+    confidence REAL,
+    extraction_source TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    FOREIGN KEY (column_id) REFERENCES ComparisonColumn(id) ON DELETE CASCADE,
+    UNIQUE(table_id, paper_id, column_id)
+);
+
+CREATE INDEX comparison_entry_table_idx ON ComparisonEntry(table_id);
+CREATE INDEX comparison_entry_paper_idx ON ComparisonEntry(paper_id);
+
+-- Narrative summary
+CREATE TABLE ComparisonNarrative (
+    id TEXT NOT NULL PRIMARY KEY,
+    table_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    key_insights TEXT,  -- JSON array as TEXT
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (table_id) REFERENCES ComparisonTable(id) ON DELETE CASCADE,
+    UNIQUE(table_id)
+);
+
+-- Queries
+selectTablesBySourcePaper:
+SELECT * FROM ComparisonTable WHERE source_paper_id = ? ORDER BY updated_at DESC;
+
+selectTableById:
+SELECT * FROM ComparisonTable WHERE id = ?;
+
+selectColumnsByTable:
+SELECT * FROM ComparisonColumn WHERE table_id = ? ORDER BY column_order ASC;
+
+selectEntriesByTable:
+SELECT * FROM ComparisonEntry WHERE table_id = ?;
+
+selectEntriesByPaperAndTable:
+SELECT * FROM ComparisonEntry WHERE table_id = ? AND paper_id = ?;
+
+selectNarrativeByTable:
+SELECT * FROM ComparisonNarrative WHERE table_id = ?;
+
+insertTable:
+INSERT INTO ComparisonTable(id, source_paper_id, title, description, generation_method, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+updateTable:
+UPDATE ComparisonTable SET title = ?, description = ?, updated_at = ? WHERE id = ?;
+
+insertColumn:
+INSERT INTO ComparisonColumn(id, table_id, name, description, data_type, column_order, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+insertEntry:
+INSERT OR REPLACE INTO ComparisonEntry(id, table_id, paper_id, column_id, value, confidence, extraction_source, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertNarrative:
+INSERT OR REPLACE INTO ComparisonNarrative(id, table_id, content, key_insights, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteTableById:
+DELETE FROM ComparisonTable WHERE id = ?;
+
+deleteTablesBySourcePaper:
+DELETE FROM ComparisonTable WHERE source_paper_id = ?;

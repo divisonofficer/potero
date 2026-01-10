@@ -1,0 +1,48 @@
+CREATE TABLE RelatedWork (
+    id TEXT NOT NULL PRIMARY KEY,
+    source_paper_id TEXT NOT NULL,
+    related_paper_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    relevance_score REAL NOT NULL DEFAULT 0.5,
+    source TEXT NOT NULL,
+    reasoning TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (source_paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    FOREIGN KEY (related_paper_id) REFERENCES Paper(id) ON DELETE CASCADE,
+    UNIQUE(source_paper_id, related_paper_id, relationship_type)
+);
+
+CREATE INDEX related_work_source_idx ON RelatedWork(source_paper_id);
+CREATE INDEX related_work_related_idx ON RelatedWork(related_paper_id);
+CREATE INDEX related_work_score_idx ON RelatedWork(relevance_score DESC);
+CREATE INDEX related_work_type_idx ON RelatedWork(relationship_type);
+
+-- Queries
+selectBySourcePaper:
+SELECT * FROM RelatedWork WHERE source_paper_id = ? ORDER BY relevance_score DESC;
+
+selectByRelatedPaper:
+SELECT * FROM RelatedWork WHERE related_paper_id = ? ORDER BY relevance_score DESC;
+
+selectByType:
+SELECT * FROM RelatedWork WHERE source_paper_id = ? AND relationship_type = ? ORDER BY relevance_score DESC;
+
+selectTopRelated:
+SELECT * FROM RelatedWork WHERE source_paper_id = ? ORDER BY relevance_score DESC LIMIT ?;
+
+insert:
+INSERT INTO RelatedWork(id, source_paper_id, related_paper_id, relationship_type, relevance_score, source, reasoning, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+update:
+UPDATE RelatedWork SET relevance_score = ?, reasoning = ?, updated_at = ? WHERE id = ?;
+
+deleteBySourcePaper:
+DELETE FROM RelatedWork WHERE source_paper_id = ?;
+
+deleteById:
+DELETE FROM RelatedWork WHERE id = ?;
+
+countBySourcePaper:
+SELECT COUNT(*) FROM RelatedWork WHERE source_paper_id = ?;

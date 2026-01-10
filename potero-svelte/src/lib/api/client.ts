@@ -6,7 +6,11 @@ import type {
 	ChatSession,
 	ResearchNote,
 	ResearchNoteWithLinks,
-	BacklinkInfo
+	BacklinkInfo,
+	RelatedPaperCandidate,
+	ComparisonTableWithData,
+	ColumnDefinition,
+	ComparisonTable
 } from '$lib/types';
 
 /**
@@ -777,6 +781,80 @@ class ApiClient {
 
 	async generateNoteTemplate(paperId: string): Promise<ApiResponse<{ title: string; template: string }>> {
 		return this.request('POST', `/notes/generate-template?paperId=${paperId}`);
+	}
+
+	// Related Work & Comparison Tables
+
+	/**
+	 * Search for related papers using multiple strategies
+	 */
+	async searchRelatedPapers(
+		paperId: string,
+		limit: number = 20,
+		forceRefresh: boolean = false
+	): Promise<ApiResponse<RelatedPaperCandidate[]>> {
+		return this.request('POST', `/papers/${paperId}/related/find`, {
+			limit,
+			forceRefresh
+		});
+	}
+
+	/**
+	 * Get cached related papers
+	 */
+	async getRelatedPapers(
+		paperId: string,
+		limit?: number
+	): Promise<ApiResponse<RelatedPaperCandidate[]>> {
+		const params = limit ? `?limit=${limit}` : '';
+		return this.request('GET', `/papers/${paperId}/related${params}`);
+	}
+
+	/**
+	 * Generate comparison table for selected papers
+	 */
+	async generateComparison(
+		paperId: string,
+		relatedPaperIds: string[],
+		title: string,
+		description?: string,
+		columns?: ColumnDefinition[],
+		generateNarrative: boolean = true
+	): Promise<ApiResponse<ComparisonTableWithData>> {
+		return this.request('POST', `/papers/${paperId}/comparisons/generate`, {
+			relatedPaperIds,
+			title,
+			description,
+			columns: columns ?? [],
+			generateNarrative
+		});
+	}
+
+	/**
+	 * List all comparison tables for a paper
+	 */
+	async getComparisonTables(paperId: string): Promise<ApiResponse<ComparisonTable[]>> {
+		return this.request('GET', `/papers/${paperId}/comparisons`);
+	}
+
+	/**
+	 * Get specific comparison table with full data
+	 */
+	async getComparison(
+		paperId: string,
+		tableId: string
+	): Promise<ApiResponse<ComparisonTableWithData>> {
+		return this.request('GET', `/papers/${paperId}/comparisons/${tableId}`);
+	}
+
+	/**
+	 * Delete comparison table
+	 */
+	async deleteComparison(
+		paperId: string,
+		tableId: string
+	): Promise<ApiResponse<{ deleted: boolean }>> {
+		return this.request('DELETE', `/papers/${paperId}/comparisons/${tableId}`);
 	}
 }
 

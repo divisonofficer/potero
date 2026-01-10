@@ -6,7 +6,8 @@ import type {
 	AuthorProfile,
 	TagProfile,
 	JournalProfile,
-	ResearchNote
+	ResearchNote,
+	RelatedWorkQuery
 } from '$lib/types';
 
 // Initial tab
@@ -275,6 +276,38 @@ export function openNote(note: ResearchNote) {
 			type: 'note-viewer',
 			title: note.title.length > 30 ? note.title.slice(0, 30) + '...' : note.title,
 			note
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open related work investigation tab for a paper
+ */
+export function openRelatedWork(paper: Paper) {
+	tabs.update(($tabs) => {
+		// Check if already open for this paper
+		const existing = $tabs.find(
+			(t) => t.type === 'related-work' && t.paper?.id === paper.id
+		);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `related-work-${paper.id}-${Date.now()}`,
+			type: 'related-work',
+			title: `Related: ${paper.title.slice(0, 20)}...`,
+			paper,
+			relatedWorkQuery: {
+				sourcePaperId: paper.id,
+				sourcePaper: paper,
+				searchMethod: 'semantic',
+				maxResults: 20
+			}
 		};
 
 		activeTabId.set(newTab.id);

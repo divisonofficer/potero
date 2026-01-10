@@ -70,7 +70,7 @@ export interface ChatSession {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal' | 'notes' | 'note-viewer';
+	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal' | 'notes' | 'note-viewer' | 'related-work';
 	title: string;
 	paper?: Paper;
 	// PDF viewer state (persisted across tab switches)
@@ -83,6 +83,8 @@ export interface Tab {
 	journal?: JournalProfile;
 	// Research note (for note-viewer tab)
 	note?: ResearchNote;
+	// Related work query (for related-work tab)
+	relatedWorkQuery?: RelatedWorkQuery;
 }
 
 export interface AuthorProfile {
@@ -208,6 +210,151 @@ export interface BacklinkInfo {
 	noteTitle: string;
 	linkText: string;
 	createdAt: string;
+}
+
+// Related Work & Comparison Tables
+
+/**
+ * Related work query configuration
+ */
+export interface RelatedWorkQuery {
+	sourcePaperId: string;
+	sourcePaper: Paper;
+	searchMethod: 'semantic' | 'citation' | 'keyword' | 'author' | 'tag';
+	maxResults: number;
+}
+
+/**
+ * Relationship types between papers
+ */
+export type RelationshipType =
+	| 'CITATION'
+	| 'REFERENCE'
+	| 'CO_CITATION'
+	| 'SEMANTIC_SIMILAR'
+	| 'AUTHOR_OVERLAP'
+	| 'TOPIC_SIMILAR';
+
+/**
+ * Source of the relationship
+ */
+export type RelationshipSource =
+	| 'SEMANTIC_SCHOLAR'
+	| 'INTERNAL_CITATIONS'
+	| 'INTERNAL_LIBRARY'
+	| 'GOOGLE_SCHOLAR'
+	| 'MANUAL';
+
+/**
+ * Related paper candidate with relevance scoring
+ */
+export interface RelatedPaperCandidate {
+	paperId: string;
+	title: string;
+	authors: string[];
+	year: number | null;
+	doi: string | null;
+	abstract: string | null;
+	citationsCount: number;
+	relationshipType: RelationshipType;
+	relevanceScore: number; // 0.0 - 1.0
+	source: RelationshipSource;
+	reasoning: string | null; // Human-readable explanation
+}
+
+/**
+ * Column data types for comparison tables
+ */
+export type ColumnDataType = 'TEXT' | 'NUMBER' | 'BOOLEAN' | 'LIST' | 'DATE' | 'CITATION_COUNT';
+
+/**
+ * Column definition for comparison table
+ */
+export interface ColumnDefinition {
+	name: string;
+	description: string | null;
+	dataType: ColumnDataType;
+}
+
+/**
+ * Comparison column with metadata
+ */
+export interface ComparisonColumn {
+	id: string;
+	tableId: string;
+	name: string;
+	description: string | null;
+	dataType: ColumnDataType;
+	order: number;
+	createdAt: string;
+}
+
+/**
+ * Single entry (cell) in comparison table
+ */
+export interface ComparisonEntry {
+	id: string;
+	tableId: string;
+	paperId: string;
+	columnId: string;
+	value: string;
+	confidence: number | null; // LLM extraction confidence (0.0 - 1.0)
+	extractionSource: string | null; // 'abstract', 'pdf', 'metadata', etc.
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * Generation method for comparison table
+ */
+export type GenerationMethod = 'LLM_SUGGESTED' | 'MANUAL' | 'TEMPLATE';
+
+/**
+ * Comparison table structure
+ */
+export interface ComparisonTable {
+	id: string;
+	sourcePaperId: string;
+	title: string;
+	description: string | null;
+	columns: ComparisonColumn[];
+	generationMethod: GenerationMethod;
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * LLM-generated narrative summary
+ */
+export interface ComparisonNarrative {
+	id: string;
+	tableId: string;
+	content: string; // Markdown narrative
+	keyInsights: string[]; // Bullet points
+	createdAt: string;
+	updatedAt: string;
+}
+
+/**
+ * Full comparison table with all data
+ */
+export interface ComparisonTableWithData {
+	table: ComparisonTable;
+	// Map: paperId -> (columnId -> entry)
+	entries: Record<string, Record<string, ComparisonEntry>>;
+	papers: Paper[];
+	narrative: ComparisonNarrative | null;
+}
+
+/**
+ * Request to generate a comparison table
+ */
+export interface ComparisonTableRequest {
+	relatedPaperIds: string[];
+	title: string;
+	description?: string;
+	columns?: ColumnDefinition[];
+	generateNarrative?: boolean;
 }
 
 // Export block types for Obsidian-style editor

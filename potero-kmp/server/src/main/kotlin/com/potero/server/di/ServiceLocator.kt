@@ -408,6 +408,45 @@ object ServiceLocator {
         )
     }
 
+    // ===== Related Work Services =====
+
+    val relatedWorkRepository: com.potero.domain.repository.RelatedWorkRepository by lazy {
+        com.potero.data.repository.RelatedWorkRepositoryImpl(database)
+    }
+
+    val comparisonTableRepository: com.potero.domain.repository.ComparisonTableRepository by lazy {
+        com.potero.data.repository.ComparisonTableRepositoryImpl(
+            database = database,
+            paperRepository = paperRepository
+        )
+    }
+
+    val metricExtractionService: com.potero.service.relatedwork.MetricExtractionService by lazy {
+        com.potero.service.relatedwork.MetricExtractionService(
+            paperRepository = paperRepository,
+            preprocessedPdfProvider = preprocessedPdfProvider,
+            llmService = llmService
+        )
+    }
+
+    val comparisonService: com.potero.service.relatedwork.ComparisonService by lazy {
+        com.potero.service.relatedwork.ComparisonService(
+            comparisonRepository = comparisonTableRepository,
+            paperRepository = paperRepository,
+            metricExtractionService = metricExtractionService,
+            llmService = llmService
+        )
+    }
+
+    val relatedWorkService: com.potero.service.relatedwork.RelatedWorkService by lazy {
+        com.potero.service.relatedwork.RelatedWorkService(
+            relatedWorkRepository = relatedWorkRepository,
+            paperRepository = paperRepository,
+            grobidRepository = grobidRepository,
+            semanticScholarResolver = semanticScholarResolver
+        )
+    }
+
     /**
      * Initialize the service locator with configuration
      */
