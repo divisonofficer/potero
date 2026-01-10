@@ -44,4 +44,20 @@ object SettingsKeys {
     const val SSO_ACCESS_TOKEN = "sso.accessToken"
     const val SSO_TOKEN_EXPIRY = "sso.tokenExpiry"
     const val SSO_SITE_NAME = "sso.siteName"
+
+    // Academic API Enable/Disable flags
+    const val OPENALEX_ENABLED = "api.openalex.enabled"
+    const val PUBMED_ENABLED = "api.pubmed.enabled"
+    const val DBLP_ENABLED = "api.dblp.enabled"
+    const val EUROPEPMC_ENABLED = "api.europepmc.enabled"
+    const val CORE_ENABLED = "api.core.enabled"
+    const val IEEE_ENABLED = "api.ieee.enabled"
+    const val ACL_ENABLED = "api.acl.enabled"
+    const val DOAJ_ENABLED = "api.doaj.enabled"
+
+    // Academic API Keys
+    const val OPENALEX_API_KEY = "api.openalex.apiKey"
+    const val PUBMED_API_KEY = "api.pubmed.apiKey"
+    const val CORE_API_KEY = "api.core.apiKey"
+    const val IEEE_API_KEY = "api.ieee.apiKey"
 }

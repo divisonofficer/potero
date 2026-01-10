@@ -1,6 +1,7 @@
 package com.potero.server.routes
 
 import com.potero.domain.repository.SettingsKeys
+import com.potero.domain.repository.SettingsRepository
 import com.potero.server.di.ServiceLocator
 import io.ktor.http.*
 import io.ktor.server.request.*
@@ -38,10 +39,64 @@ data class UpdateSettingsRequest(
     val enableSciHub: Boolean? = null
 )
 
+@Serializable
+data class APIConfigDto(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+    val requiresKey: Boolean,
+    val hasKey: Boolean,
+    val keyMasked: String?,
+    val description: String,
+    val keyRegistrationUrl: String?,
+    val category: String
+)
+
 fun Route.settingsRoutes() {
     val settingsRepository = ServiceLocator.settingsRepository
 
     route("/settings") {
+        // GET /api/settings/apis - Get all API configurations
+        get("/apis") {
+            val configs = getAPIConfigurations(settingsRepository)
+            call.respond(ApiResponse(data = configs))
+        }
+
+        // PUT /api/settings/apis/{apiId} - Update API configuration
+        put("/apis/{apiId}") {
+            val apiId = call.parameters["apiId"]
+                ?: throw IllegalArgumentException("Missing apiId")
+
+            @Serializable
+            data class UpdateAPIConfigRequest(
+                val enabled: Boolean? = null,
+                val apiKey: String? = null
+            )
+
+            val request = call.receive<UpdateAPIConfigRequest>()
+
+            try {
+                // Update enabled state
+                request.enabled?.let {
+                    settingsRepository.set("api.$apiId.enabled", it.toString())
+                }
+
+                // Update API key
+                request.apiKey?.let {
+                    settingsRepository.set("api.$apiId.apiKey", it)
+                }
+
+                call.respond(ApiResponse(data = mapOf("updated" to true)))
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<Map<String, Boolean>>(
+                        success = false,
+                        error = e.message ?: "Failed to update API configuration"
+                    )
+                )
+            }
+        }
         // GET /api/settings - Get all settings
         get {
             val result = settingsRepository.getAll()
@@ -203,5 +258,59 @@ fun Route.settingsRoutes() {
                 }
             )
         }
+    }
+}
+
+/**
+ * Get all API configurations with current enabled/key status
+ */
+private suspend fun getAPIConfigurations(settingsRepository: SettingsRepository): List<APIConfigDto> {
+    val settings: Map<String, String> = settingsRepository.getAll().getOrElse { emptyMap() }
+
+    return listOf(
+        APIConfigDto(
+            id = "openalex",
+            name = "OpenAlex",
+            enabled = settings[SettingsKeys.OPENALEX_ENABLED] == "true",
+            requiresKey = false,
+            hasKey = settings[SettingsKeys.OPENALEX_API_KEY] != null,
+            keyMasked = settings[SettingsKeys.OPENALEX_API_KEY]?.let { maskAPIKey(it) },
+            description = "Comprehensive scholarly database with 200M+ works. Free, no API key required.",
+            keyRegistrationUrl = null,
+            category = "general"
+        ),
+        APIConfigDto(
+            id = "pubmed",
+            name = "PubMed",
+            enabled = settings[SettingsKeys.PUBMED_ENABLED] == "true",
+            requiresKey = false,
+            hasKey = settings[SettingsKeys.PUBMED_API_KEY] != null,
+            keyMasked = settings[SettingsKeys.PUBMED_API_KEY]?.let { maskAPIKey(it) },
+            description = "Biomedical literature from NCBI. Free. API key increases rate limit (10 req/s).",
+            keyRegistrationUrl = "https://www.ncbi.nlm.nih.gov/account/",
+            category = "lifesciences"
+        ),
+        APIConfigDto(
+            id = "dblp",
+            name = "DBLP",
+            enabled = settings[SettingsKeys.DBLP_ENABLED] == "true",
+            requiresKey = false,
+            hasKey = false,
+            keyMasked = null,
+            description = "Computer science bibliography. Free, unlimited access.",
+            keyRegistrationUrl = null,
+            category = "computerscience"
+        )
+    )
+}
+
+/**
+ * Mask API key for security (show first 4 and last 4 characters)
+ */
+private fun maskAPIKey(key: String): String {
+    return if (key.length > 8) {
+        "${key.take(4)}****${key.takeLast(4)}"
+    } else {
+        "****"
     }
 }

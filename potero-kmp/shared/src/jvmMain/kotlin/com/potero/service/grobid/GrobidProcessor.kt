@@ -233,15 +233,22 @@ class GrobidProcessor(
      * Heuristics:
      * - High ratio of control characters (0x00-0x1F, 0x7F)
      * - Low ratio of printable characters
+     * - Very low ratio of letters (main indicator)
      *
      * This indicates ToUnicode CMap issues in PDF fonts.
      */
     private fun isGarbled(text: String): Boolean {
         if (text.isBlank()) return true
 
+        val len = text.length
+
         // Count control characters (likely mapping errors)
         val controlChars = text.count { it.code in 0..31 || it.code == 127 }
-        val controlRatio = controlChars.toDouble() / text.length
+        val controlRatio = controlChars.toDouble() / len
+
+        // Count letters specifically (most important indicator)
+        val letters = text.count { it.isLetter() }
+        val letterRatio = letters.toDouble() / len
 
         // Count printable characters (letters, digits, common punctuation)
         val printableChars = text.count { ch ->
@@ -249,14 +256,12 @@ class GrobidProcessor(
             ch in listOf('.', ',', ';', ':', '-', '–', '—', '(', ')', '[', ']',
                          '{', '}', '/', '\\', '"', '\'', '?', '!')
         }
-        val printableRatio = printableChars.toDouble() / text.length
+        val printableRatio = printableChars.toDouble() / len
 
-        // Empirically: >1% control chars OR <60% printable = garbled
-        val isGarbled = controlRatio > 0.01 || printableRatio < 0.60
+        // STRICTER: >0.5% control chars OR <40% letters OR <65% printable = garbled
+        val isGarbled = controlRatio > 0.005 || letterRatio < 0.40 || printableRatio < 0.65
 
-        if (isGarbled) {
-            println("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> GARBLED")
-        }
+        println("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, letters=${String.format("%.2f%%", letterRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> ${if (isGarbled) "GARBLED ✗" else "OK ✓"}")
 
         return isGarbled
     }
@@ -289,6 +294,11 @@ class GrobidProcessor(
 
             if (exitCode == 0 && output.isNotBlank()) {
                 println("[GrobidProcessor] pdftotext succeeded: ${output.length} chars")
+
+                // Log preview to verify quality
+                val preview = output.take(500).replace("\n", "\\n")
+                println("[GrobidProcessor] pdftotext preview: $preview")
+
                 output
             } else {
                 println("[GrobidProcessor] pdftotext failed with exit code $exitCode")
@@ -329,6 +339,7 @@ class GrobidProcessor(
                 // Step 1: Try PDFBox extraction
                 val textBuilder = StringBuilder()
                 var garbledPagesCount = 0
+                var isCVFPdf = false  // Detect CVF Open Access PDFs (known to have ToUnicode issues)
 
                 for (pageNum in startPage..endPage) {
                     val stripper = org.apache.pdfbox.text.PDFTextStripper()
@@ -340,6 +351,12 @@ class GrobidProcessor(
                     stripper.setSortByPosition(true)
 
                     val pageText = stripper.getText(document)
+
+                    // Detect CVF Open Access PDF (first page only)
+                    if (pageNum == startPage && pageText.contains("This CVPR paper is the Open Access version", ignoreCase = true)) {
+                        isCVFPdf = true
+                        println("[GrobidProcessor] ⚠️  CVF Open Access PDF detected - these often have ToUnicode CMap issues")
+                    }
 
                     // Check if this page is garbled
                     if (isGarbled(pageText)) {
@@ -360,17 +377,19 @@ class GrobidProcessor(
                 val preview = pdfboxResult.take(500).replace("\n", "\\n")
                 println("[GrobidProcessor] Text preview: $preview")
 
-                // Step 2: If >30% pages are garbled, try pdftotext fallback
-                if (garbledRatio > 0.30) {
-                    println("[GrobidProcessor] High garbled ratio detected, trying pdftotext fallback")
+                // Step 2: If >10% pages are garbled, try pdftotext fallback (lowered from 30%)
+                if (garbledRatio > 0.10) {
+                    println("[GrobidProcessor] High garbled ratio (${String.format("%.0f%%", garbledRatio * 100)}) detected, trying pdftotext fallback")
 
                     val pdftotextResult = extractWithPdftotext(pdfPath, startPage, endPage)
 
                     if (pdftotextResult != null && !isGarbled(pdftotextResult)) {
-                        println("[GrobidProcessor] pdftotext produced clean text, using it instead")
+                        println("[GrobidProcessor] ✓ pdftotext produced clean text, using it instead of PDFBox")
                         return pdftotextResult
+                    } else if (pdftotextResult != null) {
+                        println("[GrobidProcessor] ✗ pdftotext also returned garbled text, falling back to PDFBox result")
                     } else {
-                        println("[GrobidProcessor] pdftotext also failed or unavailable, using PDFBox result")
+                        println("[GrobidProcessor] ✗ pdftotext unavailable or failed, falling back to PDFBox result")
                     }
                 }
 

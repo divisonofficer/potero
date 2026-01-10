@@ -27,7 +27,7 @@
 	import { toast } from '$lib/stores/toast';
 	import type { Paper } from '$lib/types';
 	import { browser } from '$app/environment';
-	import ChatPanel from '$lib/components/ChatPanel.svelte';
+	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
 	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
@@ -1241,14 +1241,15 @@
 						</div>
 					{/if}
 				</div>
-
-				<!-- Chat panel (toggleable) -->
-				{#if $isChatPanelOpen}
-					<div class="w-80 border-l">
-						<ChatPanel paper={tab.paper ?? null} />
-					</div>
-				{/if}
 			</div>
+
+			<!-- Floating Chat Panel (rendered outside main container) -->
+			{#if $isChatPanelOpen}
+				<FloatingChatPanel
+					paper={tab.paper ?? null}
+					onClose={() => toggleChatPanel()}
+				/>
+			{/if}
 		{/each}
 
 		<!-- Author profile tabs -->

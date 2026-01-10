@@ -31,6 +31,9 @@ import com.potero.service.metadata.DOIResolver
 import com.potero.service.metadata.GoogleScholarScraper
 import com.potero.service.metadata.MetadataResolver
 import com.potero.service.metadata.SemanticScholarResolver
+import com.potero.service.metadata.OpenAlexResolver
+import com.potero.service.metadata.PubMedResolver
+import com.potero.service.metadata.DBLPResolver
 import com.potero.service.search.SearchCacheService
 import com.potero.service.search.UnifiedSearchService
 import com.potero.service.tag.TagService
@@ -114,8 +117,36 @@ object ServiceLocator {
         )
     }
 
+    val openAlexResolver: OpenAlexResolver by lazy {
+        OpenAlexResolver(
+            httpClient = httpClient,
+            apiKeyProvider = {
+                settingsRepository.get(SettingsKeys.OPENALEX_API_KEY).getOrNull()
+            }
+        )
+    }
+
+    val pubMedResolver: PubMedResolver by lazy {
+        PubMedResolver(
+            httpClient = httpClient,
+            apiKeyProvider = {
+                settingsRepository.get(SettingsKeys.PUBMED_API_KEY).getOrNull()
+            }
+        )
+    }
+
+    val dblpResolver: DBLPResolver by lazy {
+        DBLPResolver(httpClient = httpClient)
+    }
+
     val metadataResolvers: List<MetadataResolver> by lazy {
-        listOf(doiResolver, arxivResolver)
+        listOf(
+            doiResolver,
+            arxivResolver,
+            openAlexResolver,
+            pubMedResolver,
+            dblpResolver
+        )
     }
 
     val llmLogger: LLMLogger by lazy {

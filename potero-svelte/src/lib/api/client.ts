@@ -245,6 +245,21 @@ class ApiClient {
 		return this.request('PUT', '/settings', settings);
 	}
 
+	async getAPIConfigs(): Promise<ApiResponse<APIConfigDto[]>> {
+		return this.request('GET', '/settings/apis');
+	}
+
+	async updateAPIConfig(
+		id: string,
+		enabled: boolean,
+		apiKey?: string
+	): Promise<ApiResponse<{ updated: boolean }>> {
+		return this.request('PUT', `/settings/apis/${id}`, {
+			enabled,
+			apiKey
+		});
+	}
+
 	async saveSSOToken(
 		accessToken: string,
 		siteName?: string,
@@ -717,6 +732,18 @@ export interface Settings {
 	ssoSiteName: string;
 	// PDF Download options
 	enableSciHub?: boolean;
+}
+
+export interface APIConfigDto {
+	id: string;
+	name: string;
+	enabled: boolean;
+	requiresKey: boolean;
+	hasKey: boolean;
+	keyMasked: string | null;
+	description: string;
+	keyRegistrationUrl: string | null;
+	category: string;
 }
 
 export interface ChatFileAttachment {
