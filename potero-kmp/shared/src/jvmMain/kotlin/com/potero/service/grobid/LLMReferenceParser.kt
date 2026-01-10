@@ -127,50 +127,51 @@ class LLMReferenceParser(
         return """
 You are a bibliographic reference parser. Extract ALL academic references from the text below.
 
-## INPUT FORMAT
+## INPUT
 The text may contain:
 - Page markers like "<<<PAGE 10>>>" (ignore these)
-- Multiple pages of text
-- A "References" or "Bibliography" section (usually at the end)
+- A "References" or "Bibliography" section
 - Numbered entries like [1], [2], (1), (2), etc.
 
-## YOUR TASK
-1. Find the References/Bibliography section (if present)
-2. Parse EVERY reference entry you can find
-3. DO NOT return empty array unless there are truly NO references
-4. Output ONLY valid JSON (no markdown, no explanation)
+## CRITICAL ANTI-HALLUCINATION RULES
+1. **IF THE TEXT IS GARBLED/UNREADABLE** (many control characters, nonsense symbols):
+   → Return EMPTY array: {"references":[]}
+   → DO NOT invent or make up any data
 
-## CRITICAL RULES
-- **PARSE EVERY SINGLE REFERENCE** - Do NOT skip or omit any entries
-- **DO NOT use placeholders** like "... (중략)" or "... (omitted for brevity)"
-- **DO NOT summarize** - Every reference must be included in full
-- If there are 50+ references, parse ALL of them (not just a few examples)
-- Extract DOI only if explicitly present (format: 10.xxxx/xxxx)
-- Use null for unknown fields (do NOT invent data)
-- Include complete raw text for each reference
-- Preserve reference numbering from original text
-- Typical references include: author names, title, venue/journal, year, pages, DOI
+2. **IF THE TEXT IS READABLE BUT NO REFERENCES FOUND**:
+   → Return EMPTY array: {"references":[]}
+   → DO NOT use placeholder or example data
+
+3. **IF REFERENCES ARE FOUND**:
+   → Parse EVERY single reference entry (do NOT skip or omit)
+   → DO NOT use placeholders like "... (omitted for brevity)"
+   → Extract DOI only if explicitly present in text
+   → Use null for unknown fields (do NOT guess or invent)
+   → Include complete raw text for each reference
 
 ## OUTPUT FORMAT
-{"references":[{"refIndex":1,"refLabel":"[1]","raw":"Full text of reference...","authors":[{"family":"LastName","given":"FirstName","raw":"Name as appears"}],"title":"Paper Title","year":2020,"venue":"Conference/Journal","doi":"10.xxxx/yyyy","url":"https://...","confidence":0.9}]}
+Return ONLY valid JSON (no markdown, no explanations, no code blocks):
 
-## EXAMPLE
-Input text:
-```
-References
-[1] A. Smith and B. Jones. Deep Learning for Vision. CVPR 2020, pp. 1-10. DOI: 10.1109/CVPR.2020.001
-[2] C. Lee et al. Natural Language Processing. arXiv:2001.12345, 2021.
-```
-
-Output:
-{"references":[{"refIndex":1,"refLabel":"[1]","raw":"A. Smith and B. Jones. Deep Learning for Vision. CVPR 2020, pp. 1-10. DOI: 10.1109/CVPR.2020.001","authors":[{"family":"Smith","given":"A.","raw":"A. Smith"},{"family":"Jones","given":"B.","raw":"B. Jones"}],"title":"Deep Learning for Vision","year":2020,"venue":"CVPR","doi":"10.1109/CVPR.2020.001","url":null,"confidence":0.95},{"refIndex":2,"refLabel":"[2]","raw":"C. Lee et al. Natural Language Processing. arXiv:2001.12345, 2021.","authors":[{"family":"Lee","given":"C.","raw":"C. Lee et al."}],"title":"Natural Language Processing","year":2021,"venue":"arXiv","doi":null,"url":null,"confidence":0.85}]}
+{"references":[
+  {
+    "refIndex": 1,
+    "refLabel": "[1]",
+    "raw": "exact reference text from input",
+    "authors": [{"family":"LastName","given":"FirstName","raw":"Full name as appears"}],
+    "title": "Paper title or null",
+    "year": 2020,
+    "venue": "Journal/Conference name or null",
+    "doi": "10.xxxx/xxxx or null",
+    "url": "https://... or null",
+    "confidence": 0.8
+  }
+]}
 
 ## TEXT TO PARSE
 
 $referencesText
 
-## OUTPUT
-Now output the JSON object with ALL references (no omissions, no placeholders):
+## YOUR JSON OUTPUT
         """.trimIndent()
     }
 

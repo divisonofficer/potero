@@ -2,7 +2,16 @@
 	import { api, type ChatFileAttachment } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
 	import type { Paper } from '$lib/types';
-	import { Paperclip, X, MessageSquare, Maximize2, Square } from 'lucide-svelte';
+	import {
+		Paperclip,
+		X,
+		MessageSquare,
+		Maximize2,
+		Square,
+		ChevronDown,
+		Plus,
+		Trash2
+	} from 'lucide-svelte';
 	import { generateUUID } from '$lib/utils/uuid';
 	import { onMount } from 'svelte';
 
@@ -18,6 +27,14 @@
 		isLoading?: boolean;
 	}
 
+	interface ChatSession {
+		id: string;
+		paperId: string | null;
+		title: string;
+		messageCount: number;
+		lastMessage: string | null;
+	}
+
 	type PanelSize = 'small' | 'medium' | 'large';
 
 	let { paper, onClose }: Props = $props();
@@ -26,6 +43,8 @@
 	let inputText = $state('');
 	let isLoading = $state(false);
 	let sessionId = $state<string | null>(null);
+	let sessions: ChatSession[] = $state([]);
+	let showSessionDropdown = $state(false);
 	let messagesContainer: HTMLDivElement | null = $state(null);
 	let attachedFiles: ChatFileAttachment[] = $state([]);
 	let isUploading = $state(false);
@@ -51,32 +70,136 @@
 		}
 	});
 
-	// Reset chat when paper changes
+	// Load sessions and restore last session when paper changes
 	$effect(() => {
-		if (paper) {
-			messages = [];
-			sessionId = null;
-			attachedFiles = [];
-		}
+		loadSessions();
 	});
+
+	// Computed: Current session info
+	const currentSession = $derived(sessions.find((s) => s.id === sessionId));
 
 	// Load saved preferences
 	onMount(() => {
 		const savedSize = localStorage.getItem('chatPanelSize') as PanelSize | null;
-		const savedPosition = localStorage.getItem('chatPanelPosition');
 
 		if (savedSize && ['small', 'medium', 'large'].includes(savedSize)) {
 			panelSize = savedSize;
 		}
 
-		if (savedPosition) {
-			const parsed = JSON.parse(savedPosition);
-			position = parsed;
+		// Position based on size
+		if (panelSize === 'large') {
+			// For large, try to restore saved position or center
+			const savedPosition = localStorage.getItem('chatPanelPosition-large');
+			if (savedPosition) {
+				try {
+					position = JSON.parse(savedPosition);
+				} catch {
+					centerPanel();
+				}
+			} else {
+				centerPanel();
+			}
 		} else {
-			// Position at bottom right on first open
+			// For small/medium, always position at bottom right
 			positionBottomRight();
 		}
+
+		// Load sessions on mount
+		loadSessions();
 	});
+
+	async function loadSessions() {
+		try {
+			const response = await api.getChatSessions(paper?.id);
+			if (response.success && response.data) {
+				sessions = response.data;
+
+				// Restore last session for this paper/global
+				const storageKey = paper ? `chat-session-paper-${paper.id}` : 'chat-session-global';
+				const savedSessionId = localStorage.getItem(storageKey);
+
+				if (savedSessionId && sessions.find((s) => s.id === savedSessionId)) {
+					// Restore saved session
+					await switchToSession(savedSessionId);
+				} else if (sessions.length > 0) {
+					// Use the most recent session
+					await switchToSession(sessions[0].id);
+				}
+			}
+		} catch (error) {
+			console.error('[Chat] Failed to load sessions:', error);
+		}
+	}
+
+	async function switchToSession(newSessionId: string) {
+		try {
+			sessionId = newSessionId;
+
+			// Save as last session
+			const storageKey = paper ? `chat-session-paper-${paper.id}` : 'chat-session-global';
+			localStorage.setItem(storageKey, newSessionId);
+
+			// Load message history
+			const response = await api.getChatHistory(newSessionId);
+			if (response.success && response.data) {
+				messages = response.data.map((msg) => ({
+					id: msg.id,
+					role: msg.role as 'user' | 'assistant',
+					content: msg.content
+				}));
+			}
+
+			showSessionDropdown = false;
+		} catch (error) {
+			console.error('[Chat] Failed to switch session:', error);
+			toast.show('Failed to load chat history', 'error');
+		}
+	}
+
+	async function createNewSession() {
+		try {
+			const title = paper ? `Chat about ${paper.title}` : 'New Chat';
+			const response = await api.createChatSession(title, paper?.id);
+
+			if (response.success && response.data) {
+				const newSession = response.data;
+				sessions = [newSession, ...sessions];
+				await switchToSession(newSession.id);
+				toast.show('New chat session created', 'success');
+			} else {
+				toast.show('Failed to create new session', 'error');
+			}
+		} catch (error) {
+			console.error('[Chat] Failed to create session:', error);
+			toast.show('Failed to create new session', 'error');
+		}
+	}
+
+	async function deleteSession(sessionIdToDelete: string) {
+		try {
+			const response = await api.deleteChatSession(sessionIdToDelete);
+			if (response.success) {
+				sessions = sessions.filter((s) => s.id !== sessionIdToDelete);
+
+				// If we deleted the current session, switch to another one
+				if (sessionId === sessionIdToDelete) {
+					if (sessions.length > 0) {
+						await switchToSession(sessions[0].id);
+					} else {
+						sessionId = null;
+						messages = [];
+					}
+				}
+
+				toast.show('Chat session deleted', 'success');
+			} else {
+				toast.show('Failed to delete session', 'error');
+			}
+		} catch (error) {
+			console.error('[Chat] Failed to delete session:', error);
+			toast.show('Failed to delete session', 'error');
+		}
+	}
 
 	function centerPanel() {
 		const config = sizeConfig[panelSize];
@@ -130,7 +253,10 @@
 			y: e.clientY - dragOffset.y
 		};
 
-		localStorage.setItem('chatPanelPosition', JSON.stringify(position));
+		// Only save position for large size
+		if (panelSize === 'large') {
+			localStorage.setItem('chatPanelPosition-large', JSON.stringify(position));
+		}
 	}
 
 	function handleMouseUp() {
@@ -308,19 +434,21 @@
 	style="left: {position.x}px; top: {position.y}px; width: {widthStyle}; height: {heightStyle}; cursor: {isDragging ? 'grabbing' : 'default'};"
 >
 	<!-- Header -->
-	<div
-		class="px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 flex items-center justify-between cursor-grab active:cursor-grabbing"
-		onmousedown={handleMouseDown}
-	>
-		<div class="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
-			<MessageSquare class="w-4 h-4 text-white shrink-0" />
-			<h3 class="font-semibold text-white shrink-0">Chat with Paper</h3>
-			{#if paper}
-				<span class="text-xs text-white/70 truncate">{paper.title}</span>
-			{/if}
-		</div>
+	<div class="bg-gradient-to-r from-blue-600 to-indigo-600">
+		<!-- Title row -->
+		<div
+			class="px-4 py-2 flex items-center justify-between cursor-grab active:cursor-grabbing"
+			onmousedown={handleMouseDown}
+		>
+			<div class="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
+				<MessageSquare class="w-4 h-4 text-white shrink-0" />
+				<h3 class="font-semibold text-white shrink-0">Chat with Paper</h3>
+				{#if paper}
+					<span class="text-xs text-white/70 truncate">{paper.title}</span>
+				{/if}
+			</div>
 
-		<div class="flex items-center gap-1 no-drag shrink-0">
+			<div class="flex items-center gap-1 no-drag shrink-0">
 			<!-- Size buttons -->
 			<button
 				onclick={() => changeSize('small')}
@@ -350,13 +478,72 @@
 				<Maximize2 class="w-3.5 h-3.5 text-white" />
 			</button>
 
-			<!-- Close button -->
+				<!-- Close button -->
+				<button
+					onclick={onClose}
+					class="p-1.5 hover:bg-white/20 rounded transition-colors"
+					title="Close"
+				>
+					<X class="w-4 h-4 text-white" />
+				</button>
+			</div>
+		</div>
+
+		<!-- Session row -->
+		<div class="px-4 pb-2 flex items-center gap-2 no-drag">
+			<!-- Session dropdown -->
+			<div class="relative flex-1">
+				<button
+					onclick={() => (showSessionDropdown = !showSessionDropdown)}
+					class="w-full px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-left text-sm text-white flex items-center justify-between transition-colors"
+				>
+					<span class="truncate">
+						{currentSession?.title || 'No session'}
+						{#if currentSession}
+							<span class="text-xs text-white/60 ml-2">
+								({currentSession.messageCount} messages)
+							</span>
+						{/if}
+					</span>
+					<ChevronDown class="w-4 h-4 shrink-0" />
+				</button>
+
+				{#if showSessionDropdown}
+					<div
+						class="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 max-h-60 overflow-y-auto z-10"
+					>
+						{#each sessions as session (session.id)}
+							<button
+								onclick={() => switchToSession(session.id)}
+								class="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between {session.id ===
+								sessionId
+									? 'bg-blue-50 dark:bg-blue-900/20'
+									: ''}"
+							>
+								<div class="flex-1 min-w-0">
+									<div class="truncate font-medium">{session.title}</div>
+									{#if session.lastMessage}
+										<div class="text-xs text-muted-foreground truncate">
+											{session.lastMessage}
+										</div>
+									{/if}
+								</div>
+								<span class="text-xs text-muted-foreground shrink-0 ml-2">
+									{session.messageCount}
+								</span>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- New session button -->
 			<button
-				onclick={onClose}
-				class="p-1.5 hover:bg-white/20 rounded transition-colors"
-				title="Close"
+				onclick={createNewSession}
+				class="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded text-sm text-white flex items-center gap-1 transition-colors shrink-0"
+				title="New chat"
 			>
-				<X class="w-4 h-4 text-white" />
+				<Plus class="w-4 h-4" />
 			</button>
 		</div>
 	</div>

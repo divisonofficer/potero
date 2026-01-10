@@ -67,6 +67,20 @@ cd "$KMP_DIR"
 # Get WSL IP for display
 WSL_IP=$(hostname -I | awk '{print $1}')
 
+# Kill any existing backend processes
+echo ""
+echo "Checking for existing backend processes..."
+EXISTING_PID=$(lsof -ti:8080 2>/dev/null || true)
+if [ -n "$EXISTING_PID" ]; then
+    echo "Found existing backend process(es) on port 8080: $EXISTING_PID"
+    echo "Stopping existing backend..."
+    kill -9 $EXISTING_PID 2>/dev/null || true
+    sleep 1
+    echo "Existing backend stopped."
+else
+    echo "No existing backend process found."
+fi
+
 echo ""
 echo "Building and starting server..."
 echo "Server will be available at:"

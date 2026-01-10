@@ -1,0 +1,106 @@
+CREATE TABLE ResearchNote (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX research_note_paper_idx ON ResearchNote(paper_id);
+CREATE INDEX research_note_updated_idx ON ResearchNote(updated_at DESC);
+CREATE INDEX research_note_title_idx ON ResearchNote(title);
+
+CREATE TABLE NoteLink (
+    id TEXT NOT NULL PRIMARY KEY,
+    source_note_id TEXT NOT NULL REFERENCES ResearchNote(id) ON DELETE CASCADE,
+    target_note_id TEXT REFERENCES ResearchNote(id) ON DELETE CASCADE,
+    target_paper_id TEXT REFERENCES Paper(id) ON DELETE CASCADE,
+    link_text TEXT NOT NULL,
+    link_type TEXT NOT NULL,
+    position_in_content INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(source_note_id, position_in_content)
+);
+
+CREATE INDEX note_link_source_idx ON NoteLink(source_note_id);
+CREATE INDEX note_link_target_note_idx ON NoteLink(target_note_id);
+CREATE INDEX note_link_target_paper_idx ON NoteLink(target_paper_id);
+CREATE INDEX note_link_text_idx ON NoteLink(link_text);
+
+-- ResearchNote Queries
+selectAll:
+SELECT * FROM ResearchNote ORDER BY updated_at DESC;
+
+selectById:
+SELECT * FROM ResearchNote WHERE id = ?;
+
+selectByPaper:
+SELECT * FROM ResearchNote WHERE paper_id = ? ORDER BY updated_at DESC;
+
+selectStandalone:
+SELECT * FROM ResearchNote WHERE paper_id IS NULL ORDER BY updated_at DESC;
+
+searchByTitle:
+SELECT * FROM ResearchNote WHERE title LIKE '%' || ? || '%' ORDER BY updated_at DESC;
+
+searchByContent:
+SELECT * FROM ResearchNote WHERE content LIKE '%' || ? || '%' ORDER BY updated_at DESC;
+
+findNoteByTitle:
+SELECT * FROM ResearchNote WHERE LOWER(title) = LOWER(?) LIMIT 1;
+
+insert:
+INSERT INTO ResearchNote(id, paper_id, title, content, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+
+update:
+UPDATE ResearchNote SET
+    title = ?,
+    content = ?,
+    paper_id = ?,
+    updated_at = ?
+WHERE id = ?;
+
+delete:
+DELETE FROM ResearchNote WHERE id = ?;
+
+deleteByPaper:
+DELETE FROM ResearchNote WHERE paper_id = ?;
+
+countAll:
+SELECT COUNT(*) FROM ResearchNote;
+
+-- NoteLink Queries
+selectLinksBySourceNote:
+SELECT * FROM NoteLink WHERE source_note_id = ? ORDER BY position_in_content;
+
+selectBacklinks:
+SELECT nl.*, rn.title
+FROM NoteLink nl
+INNER JOIN ResearchNote rn ON nl.source_note_id = rn.id
+WHERE nl.target_note_id = ?
+ORDER BY nl.created_at DESC;
+
+selectBacklinksToPaper:
+SELECT nl.*, rn.title
+FROM NoteLink nl
+INNER JOIN ResearchNote rn ON nl.source_note_id = rn.id
+WHERE nl.target_paper_id = ?
+ORDER BY nl.created_at DESC;
+
+selectUnresolvedLinks:
+SELECT * FROM NoteLink WHERE link_type = 'NOTE' AND target_note_id IS NULL;
+
+insertLink:
+INSERT OR REPLACE INTO NoteLink(id, source_note_id, target_note_id, target_paper_id, link_text, link_type, position_in_content, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteLinksForNote:
+DELETE FROM NoteLink WHERE source_note_id = ?;
+
+updateLinkTarget:
+UPDATE NoteLink SET target_note_id = ? WHERE id = ?;
+
+deleteLinkById:
+DELETE FROM NoteLink WHERE id = ?;

@@ -143,6 +143,17 @@ class ApiClient {
 		return this.request('GET', `/chat/sessions/${sessionId}/messages`);
 	}
 
+	async createChatSession(
+		title: string,
+		paperId?: string
+	): Promise<ApiResponse<ChatSession>> {
+		return this.request('POST', '/chat/sessions', { title, paperId });
+	}
+
+	async deleteChatSession(sessionId: string): Promise<ApiResponse<{ deletedSessionId: string }>> {
+		return this.request('DELETE', `/chat/sessions/${sessionId}`);
+	}
+
 	/**
 	 * Send a chat message with SSE streaming support.
 	 *

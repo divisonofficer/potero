@@ -60,4 +60,8 @@ object SettingsKeys {
     const val PUBMED_API_KEY = "api.pubmed.apiKey"
     const val CORE_API_KEY = "api.core.apiKey"
     const val IEEE_API_KEY = "api.ieee.apiKey"
+
+    // PDF Processing - Garbled text handling
+    const val GARBLED_PDF_STRATEGY = "pdf.garbled.strategy" // "arxiv_fallback" | "ocr" | "skip"
+    const val GARBLED_PDF_ARXIV_AUTO_DOWNLOAD = "pdf.garbled.arxivAutoDownload" // "true" | "false"
 }

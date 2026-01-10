@@ -3,8 +3,16 @@ package com.potero.service.grobid
 import com.potero.domain.model.GrobidCitationSpan
 import com.potero.domain.model.GrobidReference
 import com.potero.domain.repository.GrobidRepository
+import com.potero.domain.repository.PaperRepository
+import com.potero.domain.repository.SettingsKeys
+import com.potero.domain.repository.SettingsRepository
 import com.potero.service.pdf.PdfAnalyzer
+import com.potero.service.pdf.PdfDownloadService
 import kotlinx.datetime.Clock
+import java.io.File
+import java.io.FileWriter
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /**
@@ -33,8 +41,42 @@ data class GrobidProcessingStats(
 class GrobidProcessor(
     private val grobidEngine: GrobidEngine,
     private val grobidRepository: GrobidRepository,
-    private val llmReferenceParser: LLMReferenceParser
+    private val llmReferenceParser: LLMReferenceParser,
+    private val paperRepository: PaperRepository,
+    private val pdfDownloadService: PdfDownloadService,
+    private val settingsRepository: SettingsRepository
 ) {
+
+    companion object {
+        private val LOG_FILE = File(System.getProperty("user.home"), ".grobid/grobid-processor.log")
+        private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
+
+        init {
+            // Ensure log directory exists
+            LOG_FILE.parentFile?.mkdirs()
+        }
+
+        /**
+         * Log message to both console and file with timestamp
+         */
+        private fun log(message: String) {
+            val timestamp = LocalDateTime.now().format(DATE_FORMATTER)
+            val logLine = "[$timestamp] $message"
+
+            // Print to console
+            println(logLine)
+
+            // Append to log file
+            try {
+                FileWriter(LOG_FILE, true).use { writer ->
+                    writer.appendLine(logLine)
+                }
+            } catch (e: Exception) {
+                // Fail silently if file logging fails - don't break the flow
+                System.err.println("Failed to write to log file: ${e.message}")
+            }
+        }
+    }
 
     /**
      * Process a PDF with GROBID and store results in database.
@@ -48,14 +90,41 @@ class GrobidProcessor(
         val startTime = System.currentTimeMillis()
 
         return runCatching {
-            println("[GrobidProcessor] Starting processing for paper: $paperId")
+            log("[GrobidProcessor] Starting processing for paper: $paperId")
 
             // Step 1: Try GROBID first
+            var currentPdfPath = pdfPath
             val teiDocument = try {
-                grobidEngine.processFulltext(pdfPath)
+                grobidEngine.processFulltext(currentPdfPath)
             } catch (e: GrobidException) {
-                println("[GrobidProcessor] GROBID failed: ${e.message}")
-                println("[GrobidProcessor] Attempting LLM fallback...")
+                log("[GrobidProcessor] GROBID failed: ${e.message}")
+
+                // Step 1.5: Try arXiv PDF fallback before LLM
+                val arxivPdfPath = tryArxivPdfFallback(paperId)
+                if (arxivPdfPath != null) {
+                    log("[GrobidProcessor] arXiv PDF downloaded, retrying GROBID...")
+                    currentPdfPath = arxivPdfPath
+
+                    try {
+                        // Retry GROBID with arXiv PDF
+                        val arxivTeiDocument = grobidEngine.processFulltext(arxivPdfPath)
+                        log("[GrobidProcessor] ✓ GROBID succeeded with arXiv PDF!")
+
+                        // Continue with normal GROBID flow (jump to line 153)
+                        arxivTeiDocument
+                    } catch (arxivGrobidError: GrobidException) {
+                        log("[GrobidProcessor] GROBID failed even with arXiv PDF: ${arxivGrobidError.message}")
+                        log("[GrobidProcessor] Falling back to LLM...")
+
+                        // Fall through to LLM fallback
+                        null
+                    }
+                } else {
+                    log("[GrobidProcessor] No arXiv PDF available, attempting LLM fallback...")
+                    null
+                }
+            } ?: run {
+                // GROBID failed and arXiv retry also failed → LLM Fallback
 
                 // Step 2: LLM Fallback - Extract References text from PDF
                 val referencesText = try {
@@ -64,19 +133,19 @@ class GrobidProcessor(
 
                     if (result.references.isNotEmpty()) {
                         // PdfAnalyzer found references - use structured format
-                        println("[GrobidProcessor] PdfAnalyzer found ${result.references.size} references")
+                        log("[GrobidProcessor] PdfAnalyzer found ${result.references.size} references")
                         result.references.joinToString("\n\n") { ref ->
                             "[${ref.number}] ${ref.rawText}"
                         }
                     } else {
                         // PdfAnalyzer failed to find References section - extract last pages as fallback
-                        println("[GrobidProcessor] PdfAnalyzer failed to find References section")
-                        println("[GrobidProcessor] Extracting last 15 pages for LLM analysis...")
+                        log("[GrobidProcessor] PdfAnalyzer failed to find References section")
+                        log("[GrobidProcessor] Extracting last 15 pages for LLM analysis...")
 
                         extractLastPagesText(pdfPath, maxPages = 15)
                     }
                 } catch (pdfError: Exception) {
-                    println("[GrobidProcessor] PDF extraction failed: ${pdfError.message}")
+                    log("[GrobidProcessor] PDF extraction failed: ${pdfError.message}")
                     return@runCatching GrobidProcessingStats(
                         citationSpansExtracted = 0,
                         referencesExtracted = 0,
@@ -87,12 +156,12 @@ class GrobidProcessor(
                 // Step 3: Parse with LLM
                 val llmReferences = llmReferenceParser.parse(referencesText, paperId)
                     .getOrElse { llmError: Throwable ->
-                        println("[GrobidProcessor] LLM parsing failed: ${llmError.message}")
+                        log("[GrobidProcessor] LLM parsing failed: ${llmError.message}")
                         emptyList<GrobidReference>()
                     }
 
                 if (llmReferences.isEmpty()) {
-                    println("[GrobidProcessor] LLM fallback produced no references")
+                    log("[GrobidProcessor] LLM fallback produced no references")
                     return@runCatching GrobidProcessingStats(
                         citationSpansExtracted = 0,
                         referencesExtracted = 0,
@@ -105,7 +174,7 @@ class GrobidProcessor(
                 grobidRepository.insertAllReferences(llmReferences).getOrThrow()
 
                 val time = System.currentTimeMillis() - startTime
-                println("[GrobidProcessor] LLM fallback completed: ${llmReferences.size} references in ${time}ms")
+                log("[GrobidProcessor] LLM fallback completed: ${llmReferences.size} references in ${time}ms")
 
                 return@runCatching GrobidProcessingStats(
                     citationSpansExtracted = 0,  // LLM doesn't extract citation spans
@@ -115,7 +184,7 @@ class GrobidProcessor(
             }
 
             // Step 5: GROBID succeeded - normal flow
-            println("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references")
+            log("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references")
 
             // Convert TEI models to domain models
             val citationSpans = convertCitationSpans(paperId, teiDocument.body.citationSpans)
@@ -130,7 +199,7 @@ class GrobidProcessor(
             grobidRepository.insertAllReferences(references).getOrThrow()
 
             val processingTime = System.currentTimeMillis() - startTime
-            println("[GrobidProcessor] GROBID processing completed in ${processingTime}ms")
+            log("[GrobidProcessor] GROBID processing completed in ${processingTime}ms")
 
             GrobidProcessingStats(
                 citationSpansExtracted = citationSpans.size,
@@ -261,9 +330,67 @@ class GrobidProcessor(
         // STRICTER: >0.5% control chars OR <40% letters OR <65% printable = garbled
         val isGarbled = controlRatio > 0.005 || letterRatio < 0.40 || printableRatio < 0.65
 
-        println("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, letters=${String.format("%.2f%%", letterRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> ${if (isGarbled) "GARBLED ✗" else "OK ✓"}")
+        log("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, letters=${String.format("%.2f%%", letterRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> ${if (isGarbled) "GARBLED ✗" else "OK ✓"}")
 
         return isGarbled
+    }
+
+    /**
+     * Try arXiv PDF fallback when current PDF is garbled.
+     * Downloads arXiv version if available and returns new PDF path.
+     *
+     * @param paperId Paper ID to look up arXiv ID
+     * @return New PDF path if arXiv download succeeded, null otherwise
+     */
+    private suspend fun tryArxivPdfFallback(paperId: String): String? {
+        return try {
+            log("[GrobidProcessor] Attempting arXiv PDF fallback for paper: $paperId")
+
+            // Check if arXiv fallback is enabled
+            val strategyEnabled = settingsRepository.get(SettingsKeys.GARBLED_PDF_ARXIV_AUTO_DOWNLOAD)
+                .getOrNull() == "true"
+
+            if (!strategyEnabled) {
+                log("[GrobidProcessor] arXiv auto-download is disabled in settings")
+                return null
+            }
+
+            // Get paper from database to check arXiv ID
+            val paper = paperRepository.getById(paperId).getOrNull()
+            if (paper == null) {
+                log("[GrobidProcessor] Paper not found in database: $paperId")
+                return null
+            }
+
+            val arxivId = paper.arxivId
+            if (arxivId.isNullOrBlank()) {
+                log("[GrobidProcessor] No arXiv ID found for paper: $paperId")
+                return null
+            }
+
+            log("[GrobidProcessor] Found arXiv ID: $arxivId, attempting download...")
+
+            // Download arXiv PDF
+            val downloadResult = pdfDownloadService.downloadFromArxiv(arxivId)
+            val arxivPdfPath = downloadResult.getOrNull()
+
+            if (arxivPdfPath != null) {
+                log("[GrobidProcessor] ✓ arXiv PDF downloaded successfully: $arxivPdfPath")
+
+                // Update paper's PDF path to arXiv version
+                paper.copy(pdfPath = arxivPdfPath).let { updatedPaper ->
+                    paperRepository.update(updatedPaper).getOrNull()
+                }
+
+                arxivPdfPath
+            } else {
+                log("[GrobidProcessor] ✗ arXiv PDF download failed")
+                null
+            }
+        } catch (e: Exception) {
+            log("[GrobidProcessor] arXiv fallback error: ${e.message}")
+            null
+        }
     }
 
     /**
@@ -277,7 +404,7 @@ class GrobidProcessor(
      */
     private fun extractWithPdftotext(pdfPath: String, startPage: Int, endPage: Int): String? {
         return try {
-            println("[GrobidProcessor] Trying pdftotext fallback for pages $startPage-$endPage")
+            log("[GrobidProcessor] Trying pdftotext fallback for pages $startPage-$endPage")
 
             val process = ProcessBuilder(
                 "pdftotext",
@@ -293,19 +420,19 @@ class GrobidProcessor(
             val exitCode = process.waitFor()
 
             if (exitCode == 0 && output.isNotBlank()) {
-                println("[GrobidProcessor] pdftotext succeeded: ${output.length} chars")
+                log("[GrobidProcessor] pdftotext succeeded: ${output.length} chars")
 
                 // Log preview to verify quality
                 val preview = output.take(500).replace("\n", "\\n")
-                println("[GrobidProcessor] pdftotext preview: $preview")
+                log("[GrobidProcessor] pdftotext preview: $preview")
 
                 output
             } else {
-                println("[GrobidProcessor] pdftotext failed with exit code $exitCode")
+                log("[GrobidProcessor] pdftotext failed with exit code $exitCode")
                 null
             }
         } catch (e: Exception) {
-            println("[GrobidProcessor] pdftotext not available: ${e.message}")
+            log("[GrobidProcessor] pdftotext not available: ${e.message}")
             null
         }
     }
@@ -334,7 +461,7 @@ class GrobidProcessor(
             val endPage = totalPages
 
             try {
-                println("[GrobidProcessor] Extracting pages $startPage-$endPage of $totalPages")
+                log("[GrobidProcessor] Extracting pages $startPage-$endPage of $totalPages")
 
                 // Step 1: Try PDFBox extraction
                 val textBuilder = StringBuilder()
@@ -355,7 +482,7 @@ class GrobidProcessor(
                     // Detect CVF Open Access PDF (first page only)
                     if (pageNum == startPage && pageText.contains("This CVPR paper is the Open Access version", ignoreCase = true)) {
                         isCVFPdf = true
-                        println("[GrobidProcessor] ⚠️  CVF Open Access PDF detected - these often have ToUnicode CMap issues")
+                        log("[GrobidProcessor] ⚠️  CVF Open Access PDF detected - these often have ToUnicode CMap issues")
                     }
 
                     // Check if this page is garbled
@@ -371,25 +498,25 @@ class GrobidProcessor(
                 val pdfboxResult = textBuilder.toString()
                 val garbledRatio = garbledPagesCount.toDouble() / maxPages
 
-                println("[GrobidProcessor] PDFBox extracted ${pdfboxResult.length} chars, ${garbledPagesCount}/${maxPages} pages garbled (${String.format("%.0f%%", garbledRatio * 100)})")
+                log("[GrobidProcessor] PDFBox extracted ${pdfboxResult.length} chars, ${garbledPagesCount}/${maxPages} pages garbled (${String.format("%.0f%%", garbledRatio * 100)})")
 
                 // Log a preview to verify extraction quality
                 val preview = pdfboxResult.take(500).replace("\n", "\\n")
-                println("[GrobidProcessor] Text preview: $preview")
+                log("[GrobidProcessor] Text preview: $preview")
 
                 // Step 2: If >10% pages are garbled, try pdftotext fallback (lowered from 30%)
                 if (garbledRatio > 0.10) {
-                    println("[GrobidProcessor] High garbled ratio (${String.format("%.0f%%", garbledRatio * 100)}) detected, trying pdftotext fallback")
+                    log("[GrobidProcessor] High garbled ratio (${String.format("%.0f%%", garbledRatio * 100)}) detected, trying pdftotext fallback")
 
                     val pdftotextResult = extractWithPdftotext(pdfPath, startPage, endPage)
 
                     if (pdftotextResult != null && !isGarbled(pdftotextResult)) {
-                        println("[GrobidProcessor] ✓ pdftotext produced clean text, using it instead of PDFBox")
+                        log("[GrobidProcessor] ✓ pdftotext produced clean text, using it instead of PDFBox")
                         return pdftotextResult
                     } else if (pdftotextResult != null) {
-                        println("[GrobidProcessor] ✗ pdftotext also returned garbled text, falling back to PDFBox result")
+                        log("[GrobidProcessor] ✗ pdftotext also returned garbled text, falling back to PDFBox result")
                     } else {
-                        println("[GrobidProcessor] ✗ pdftotext unavailable or failed, falling back to PDFBox result")
+                        log("[GrobidProcessor] ✗ pdftotext unavailable or failed, falling back to PDFBox result")
                     }
                 }
 
@@ -398,7 +525,7 @@ class GrobidProcessor(
                 document.close()
             }
         } catch (e: Exception) {
-            println("[GrobidProcessor] Failed to extract last pages: ${e.message}")
+            log("[GrobidProcessor] Failed to extract last pages: ${e.message}")
             throw e
         }
     }

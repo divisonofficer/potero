@@ -257,7 +257,10 @@ object ServiceLocator {
         GrobidProcessor(
             grobidEngine = grobidEngine,
             grobidRepository = grobidRepository,
-            llmReferenceParser = llmReferenceParser
+            llmReferenceParser = llmReferenceParser,
+            paperRepository = paperRepository,
+            pdfDownloadService = pdfDownloadService,
+            settingsRepository = settingsRepository
         )
     }
 

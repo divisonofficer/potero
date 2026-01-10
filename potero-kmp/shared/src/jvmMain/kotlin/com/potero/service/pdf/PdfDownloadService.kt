@@ -166,6 +166,21 @@ class PdfDownloadService(
     }
 
     /**
+     * Download PDF from arXiv by arXiv ID.
+     * Used as fallback when current PDF is garbled.
+     *
+     * @param arxivId arXiv identifier (with or without "arXiv:" prefix)
+     * @return Path to downloaded PDF file
+     */
+    suspend fun downloadFromArxiv(arxivId: String): Result<String> = runCatching {
+        val arxivUrl = buildArxivPdfUrl(arxivId)
+        val fileName = "arxiv_${arxivId.removePrefix("arXiv:")}"
+
+        println("[PdfDownload] Downloading arXiv PDF: $arxivUrl")
+        downloadFromUrl(arxivUrl, "arxiv-fallback-${System.currentTimeMillis()}", fileName)
+    }
+
+    /**
      * Try to find PDF URL using Semantic Scholar API
      */
     private suspend fun trySemanticScholar(

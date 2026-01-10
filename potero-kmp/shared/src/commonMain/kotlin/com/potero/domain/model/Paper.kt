@@ -265,3 +265,65 @@ data class GrobidReference(
     val searchQuery: String
         get() = title ?: authors ?: rawTei?.take(100) ?: ""
 }
+
+/**
+ * Research note with markdown content and wiki-style links.
+ * Separate from PDF annotation Note - this is for standalone research notes.
+ */
+@Serializable
+data class ResearchNote(
+    val id: String,
+    val paperId: String? = null,  // NULL for standalone notes
+    val title: String,
+    val content: String,  // Markdown content with LaTeX and [[...]] links
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
+ * Wiki-style link type
+ */
+@Serializable
+enum class NoteLinkType {
+    NOTE,   // [[Note Title]] - links to another note
+    PAPER   // [[paper:paper_id]] - links to a paper
+}
+
+/**
+ * A parsed wiki-style link from a note's content.
+ * Represents [[...]] references in markdown.
+ */
+@Serializable
+data class NoteLink(
+    val id: String,
+    val sourceNoteId: String,
+    val targetNoteId: String? = null,  // NULL if unresolved (note doesn't exist yet)
+    val targetPaperId: String? = null,  // For [[paper:id]] links
+    val linkText: String,  // Text inside [[...]]
+    val linkType: NoteLinkType,
+    val positionInContent: Int,  // Character offset in markdown content
+    val createdAt: Instant
+)
+
+/**
+ * Research note with outgoing links and backlinks.
+ * Used for note detail view with navigation.
+ */
+@Serializable
+data class ResearchNoteWithLinks(
+    val note: ResearchNote,
+    val outgoingLinks: List<NoteLink> = emptyList(),  // Links from this note to others
+    val backlinks: List<BacklinkInfo> = emptyList()   // Links from other notes to this one
+)
+
+/**
+ * Information about a note that links to the current note.
+ * Used for displaying backlinks.
+ */
+@Serializable
+data class BacklinkInfo(
+    val noteId: String,
+    val noteTitle: String,
+    val linkText: String,  // How this note was referenced
+    val createdAt: Instant
+)
