@@ -58,11 +58,71 @@ fun Reference.toDto(): ReferenceDto = ReferenceDto(
 )
 
 /**
+ * DTO for GrobidReference
+ */
+@Serializable
+data class GrobidReferenceDto(
+    val id: String,
+    val paperId: String,
+    val xmlId: String,
+    val authors: String?,
+    val title: String?,
+    val venue: String?,
+    val year: Int?,
+    val doi: String?,
+    val arxivId: String?,
+    val pageNum: Int?,
+    val confidence: Double
+)
+
+/**
+ * Convert domain GrobidReference to DTO
+ */
+fun com.potero.domain.model.GrobidReference.toDto(): GrobidReferenceDto = GrobidReferenceDto(
+    id = id,
+    paperId = paperId,
+    xmlId = xmlId,
+    authors = authors,
+    title = title,
+    venue = venue,
+    year = year,
+    doi = doi,
+    arxivId = arxivId,
+    pageNum = pageNum,
+    confidence = confidence
+)
+
+/**
  * Routes for Reference operations
  */
 fun Route.referenceRoutes() {
     val referenceRepository = ServiceLocator.referenceRepository
     val paperRepository = ServiceLocator.paperRepository
+    val grobidRepository = ServiceLocator.grobidRepository
+
+    // GET /api/papers/{paperId}/grobid-references - Get GROBID-extracted references
+    route("/papers/{paperId}/grobid-references") {
+        get {
+            val paperId = call.parameters["paperId"]
+                ?: throw IllegalArgumentException("Missing paper ID")
+
+            val result = grobidRepository.getReferencesByPaperId(paperId)
+            result.fold(
+                onSuccess = { references ->
+                    call.respond(ApiResponse(data = references.map { it.toDto() }))
+                },
+                onFailure = { error ->
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ApiResponse<List<GrobidReferenceDto>>(
+                            success = false,
+                            error = error.message ?: "Failed to get GROBID references"
+                        )
+                    )
+                }
+            )
+        }
+    }
 
     route("/papers/{paperId}/references") {
         // GET /api/papers/{paperId}/references - Get all references for a paper

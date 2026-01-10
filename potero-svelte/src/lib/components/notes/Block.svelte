@@ -10,9 +10,10 @@
 		onEdit: () => void;
 		onBlur: () => void;
 		onChange: (content: string) => void;
+		onEnter: () => void;
 	}
 
-	let { block, isEditing, onEdit, onBlur, onChange }: Props = $props();
+	let { block, isEditing, onEdit, onBlur, onChange, onEnter }: Props = $props();
 
 	// Configure marked with extensions (KaTeX, Prism, wiki links)
 	configureMarked();
@@ -22,19 +23,46 @@
 
 	// Reference to contenteditable element
 	let editElement: HTMLDivElement | null = $state(null);
+	// Track IME composition state (for Korean, Japanese, Chinese input)
+	let isComposing = $state(false);
 
-	// Focus and move cursor to end when entering edit mode
+	// Focus and set content when entering edit mode
 	$effect(() => {
 		if (isEditing && editElement) {
+			// Set content only when entering edit mode (prevents cursor jumping)
+			editElement.textContent = block.content;
 			editElement.focus();
 			moveCaretToEnd(editElement);
 		}
 	});
 
 	/**
+	 * Handle composition start (Korean, Japanese, Chinese input)
+	 */
+	function handleCompositionStart() {
+		isComposing = true;
+	}
+
+	/**
+	 * Handle composition end (Korean, Japanese, Chinese input)
+	 */
+	function handleCompositionEnd(e: CompositionEvent) {
+		isComposing = false;
+		// Trigger onChange after composition is complete
+		const target = e.target as HTMLElement;
+		const content = target.textContent || '';
+		onChange(content);
+	}
+
+	/**
 	 * Handle input in contenteditable element
 	 */
 	function handleInput(e: Event) {
+		// Skip onChange during composition (Korean, Japanese, Chinese)
+		if (isComposing) {
+			return;
+		}
+
 		const target = e.target as HTMLElement;
 		const content = target.textContent || '';
 		onChange(content);
@@ -43,13 +71,19 @@
 	}
 
 	/**
-	 * Handle Enter key - save and exit edit mode
-	 * Shift+Enter creates new line
+	 * Handle Enter key - save and create new block
+	 * Shift+Enter creates new line within current block
 	 */
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && !e.shiftKey) {
 			e.preventDefault();
-			onBlur();
+			// Save current content first
+			if (editElement) {
+				const content = editElement.textContent || '';
+				onChange(content);
+			}
+			// Create new block (will automatically focus it)
+			onEnter();
 		}
 		// TODO: Handle other shortcuts (Week 3)
 	}
@@ -74,7 +108,7 @@
 </script>
 
 {#if isEditing}
-	<!-- Edit mode: contenteditable -->
+	<!-- Edit mode: contenteditable (content set via $effect to prevent cursor jumping) -->
 	<div
 		bind:this={editElement}
 		class={`block-edit ${getBlockClass(block.type)} min-h-[1.5em] px-2 py-1 rounded border-2 border-blue-400 focus:outline-none`}
@@ -84,9 +118,9 @@
 		onblur={onBlur}
 		oninput={handleInput}
 		onkeydown={handleKeydown}
-	>
-		{block.content}
-	</div>
+		oncompositionstart={handleCompositionStart}
+		oncompositionend={handleCompositionEnd}
+	></div>
 {:else}
 	<!-- View mode: rendered markdown -->
 	<div

@@ -147,24 +147,49 @@ class LLMReferenceParser(
             println("[LLMReferenceParser] Processing chunk ${chunkIndex + 1}/${referenceChunks.size}")
 
             val prompt = buildPrompt(chunk)
-            val llmResult = llmService.chat(prompt)
 
-            llmResult.fold(
-                onSuccess = { response ->
-                    val llmResponse = parseJsonResponse(response)
-                    println("[LLMReferenceParser] Chunk ${chunkIndex + 1}: parsed ${llmResponse.references.size} references")
+            // Retry logic for timeouts
+            var retryCount = 0
+            val maxRetries = 3
+            var success = false
 
-                    val grobidReferences = llmResponse.references.mapIndexed { index, llmRef ->
-                        convertToGrobidReference(llmRef, paperId, allReferences.size + index)
-                    }
-
-                    allReferences.addAll(grobidReferences)
-                },
-                onFailure = { error ->
-                    println("[LLMReferenceParser] Chunk ${chunkIndex + 1} failed: ${error.message}")
-                    // Continue with other chunks
+            while (retryCount < maxRetries && !success) {
+                if (retryCount > 0) {
+                    println("[LLMReferenceParser] Retry attempt ${retryCount}/${maxRetries - 1} for chunk ${chunkIndex + 1}")
+                    kotlinx.coroutines.delay(1000L * retryCount) // Exponential backoff: 1s, 2s, 3s
                 }
-            )
+
+                val llmResult = llmService.chat(prompt)
+
+                llmResult.fold(
+                    onSuccess = { response ->
+                        val llmResponse = parseJsonResponse(response)
+                        println("[LLMReferenceParser] Chunk ${chunkIndex + 1}: parsed ${llmResponse.references.size} references")
+
+                        val grobidReferences = llmResponse.references.mapIndexed { index, llmRef ->
+                            convertToGrobidReference(llmRef, paperId, allReferences.size + index)
+                        }
+
+                        allReferences.addAll(grobidReferences)
+                        success = true
+                    },
+                    onFailure = { error ->
+                        val isTimeout = error.message?.contains("timeout", ignoreCase = true) == true
+
+                        if (isTimeout && retryCount < maxRetries - 1) {
+                            println("[LLMReferenceParser] Chunk ${chunkIndex + 1} timeout - will retry")
+                            retryCount++
+                        } else {
+                            println("[LLMReferenceParser] Chunk ${chunkIndex + 1} failed: ${error.message}")
+                            if (isTimeout) {
+                                println("[LLMReferenceParser] Max retries (${maxRetries}) exceeded for chunk ${chunkIndex + 1}")
+                            }
+                            // Continue with other chunks
+                            success = true // Exit retry loop
+                        }
+                    }
+                )
+            }
 
             // Small delay to avoid rate limiting
             if (chunkIndex < referenceChunks.size - 1) {
@@ -310,11 +335,14 @@ $referencesText
      * Handles markdown code blocks, HTML comments, and malformed JSON
      */
     private fun parseJsonResponse(response: String): LLMReferenceResponse {
-        // Clean up response: remove HTML comments, JS comments, and trim
+        // Clean up response: remove HTML comments, and trim
+        // IMPORTANT: Don't remove // in middle of lines (breaks URLs like https://...)
         var cleanedResponse = response
             .replace(Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL), "") // Remove <!-- ... -->
-            .replace(Regex("""//.*"""), "") // Remove // single-line comments
+            .replace(Regex("""^\s*//.*$""", RegexOption.MULTILINE), "") // Remove ONLY line-start // comments
             .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "") // Remove /* */ multi-line comments
+            .replace(Regex("""https:\s+//"""), "https://") // Fix broken URLs: "https: //" -> "https://"
+            .replace(Regex("""http:\s+//"""), "http://")   // Fix broken URLs: "http: //" -> "http://"
             .trim()
 
         // Try to parse as-is first

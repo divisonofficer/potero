@@ -683,6 +683,11 @@ class ApiClient {
 		return this.request('GET', `/references/${referenceId}/citations`);
 	}
 
+	// GROBID References API - GROBID-extracted references with enhanced metadata
+	async getGrobidReferences(paperId: string): Promise<ApiResponse<GrobidReference[]>> {
+		return this.request('GET', `/papers/${paperId}/grobid-references`);
+	}
+
 	// Narratives API - Paper-to-Narrative Engine
 	async getNarratives(paperId: string): Promise<ApiResponse<Narrative[]>> {
 		return this.request('GET', `/papers/${paperId}/narratives`);
@@ -1205,6 +1210,23 @@ export interface CitationExtractionResponse {
 	spans: CitationSpan[];
 	links: CitationLink[];
 	stats: CitationStats;
+}
+
+/**
+ * GROBID-extracted reference with metadata
+ */
+export interface GrobidReference {
+	id: string;
+	paperId: string;
+	xmlId: string;
+	authors: string | null;
+	title: string | null;
+	venue: string | null;
+	year: number | null;
+	doi: string | null;
+	arxivId: string | null;
+	pageNum: number | null;
+	confidence: number;
 }
 
 // ============================================

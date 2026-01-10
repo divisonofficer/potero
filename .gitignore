@@ -3,4 +3,4 @@
 
 potero-svelte/build/*
 .claude/settings.local.json
-figma_make/*
+figma_make/**

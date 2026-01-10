@@ -11,6 +11,8 @@
 
 	// Track which block is currently being edited
 	let editingBlockId = $state<string | null>(null);
+	// Flag to prevent blur when switching blocks via Enter
+	let isCreatingNewBlock = $state(false);
 
 	/**
 	 * Start editing a block
@@ -23,6 +25,11 @@
 	 * Stop editing current block
 	 */
 	function handleBlur() {
+		// Don't exit edit mode if we're creating a new block
+		if (isCreatingNewBlock) {
+			isCreatingNewBlock = false;
+			return;
+		}
 		editingBlockId = null;
 		onChange();
 	}
@@ -37,6 +44,35 @@
 			// Trigger reactivity
 			blocks = [...blocks];
 		}
+	}
+
+	/**
+	 * Handle Enter key - create new block after current one
+	 */
+	function handleEnterKey(blockId: string) {
+		const blockIndex = blocks.findIndex((b) => b.id === blockId);
+		if (blockIndex === -1) return;
+
+		// Set flag to prevent blur from exiting edit mode
+		isCreatingNewBlock = true;
+
+		// Create new paragraph block
+		const newBlock: BlockType = {
+			id: generateBlockId(),
+			type: 'paragraph',
+			content: ''
+		};
+
+		// Insert after current block
+		const newBlocks = [...blocks];
+		newBlocks.splice(blockIndex + 1, 0, newBlock);
+		blocks = newBlocks;
+
+		// Switch to editing new block (will trigger focus in $effect)
+		editingBlockId = newBlock.id;
+
+		// Trigger auto-save
+		onChange();
 	}
 
 	/**
@@ -72,6 +108,7 @@
 			onEdit={() => handleEdit(block.id)}
 			onBlur={handleBlur}
 			onChange={(content) => handleBlockChange(block.id, content)}
+			onEnter={() => handleEnterKey(block.id)}
 		/>
 	{/each}
 

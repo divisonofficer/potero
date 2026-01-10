@@ -27,6 +27,12 @@
 	// Title debounce timer
 	let titleSaveTimeout: ReturnType<typeof setTimeout> | null = null;
 
+	// Sync with props when they change (e.g., after loading template)
+	$effect(() => {
+		editTitle = title;
+		editContent = content;
+	});
+
 	/**
 	 * Handle title changes with debounced auto-save
 	 */

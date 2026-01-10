@@ -17,6 +17,11 @@
 	let isDirty = $state(false);
 	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
+	// Re-parse blocks when initialContent changes (e.g., after loading template)
+	$effect(() => {
+		blocks = parseMarkdownToBlocks(initialContent);
+	});
+
 	/**
 	 * Auto-save handler with debounce
 	 */

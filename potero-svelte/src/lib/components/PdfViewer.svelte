@@ -4,7 +4,7 @@
 	import type { PdfViewerState } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
-	import { api, type Reference, type CitationSpan, type Narrative, type NarrativeStyle } from '$lib/api/client';
+	import { api, type Reference, type CitationSpan, type GrobidReference, type Narrative, type NarrativeStyle } from '$lib/api/client';
 	import { getErrorMessage } from '$lib/types';
 	import { List, BookOpen, FileText, RefreshCw } from 'lucide-svelte';
 
@@ -59,6 +59,10 @@
 	let citationSpans = $state<CitationSpan[]>([]);
 	let isLoadingCitations = $state(false);
 	let citationsSource = $state<'backend' | 'pattern' | null>(null);
+
+	// GROBID-extracted references with metadata
+	let grobidReferences = $state<GrobidReference[]>([]);
+	let isLoadingGrobidReferences = $state(false);
 
 	// Content view mode (Reader vs Blog)
 	let contentViewMode = $state<'reader' | 'blog'>('reader');
@@ -749,6 +753,32 @@
 			citationsSource = 'pattern';
 		} finally {
 			isLoadingCitations = false;
+		}
+	}
+
+	/**
+	 * Load GROBID-extracted references from backend API.
+	 * These have enhanced metadata (authors, title, venue, year, DOI, etc.)
+	 */
+	async function loadGrobidReferences() {
+		if (!paperId) {
+			return;
+		}
+
+		isLoadingGrobidReferences = true;
+		grobidReferences = [];
+
+		try {
+			const result = await api.getGrobidReferences(paperId);
+
+			if (result.success && result.data) {
+				grobidReferences = result.data;
+				console.log(`[PDF] Loaded ${grobidReferences.length} GROBID references`);
+			}
+		} catch (e) {
+			console.warn('[PDF] Failed to load GROBID references:', e);
+		} finally {
+			isLoadingGrobidReferences = false;
 		}
 	}
 
