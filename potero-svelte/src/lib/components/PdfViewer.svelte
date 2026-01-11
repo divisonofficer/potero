@@ -195,8 +195,8 @@
 
 		try {
 			const result = await api.generateNarratives(paperId, {
-				styles: ['BLOG', 'NEWS', 'REDDIT'],
-				languages: ['KOREAN', 'ENGLISH'],
+				styles: ['BLOG'],  // Default: BLOG only (6x faster)
+				languages: ['KOREAN'],  // Default: Korean only
 				regenerate,
 				includeConceptExplanations: true
 			});
@@ -211,6 +211,37 @@
 		} catch (e) {
 			console.error('[PdfViewer] Failed to generate narratives:', e);
 			narrativeError = e instanceof Error ? e.message : 'Failed to generate narratives';
+			isGeneratingNarratives = false;
+		}
+	}
+
+	/**
+	 * Generate narrative for specific style/language only
+	 */
+	async function generateSpecificNarrative(style: NarrativeStyle, langCode: string, regenerate: boolean = false) {
+		if (!paperId) return;
+
+		isGeneratingNarratives = true;
+		narrativeError = null;
+
+		try {
+			const result = await api.generateNarratives(paperId, {
+				styles: [style],  // Only the requested style
+				languages: [langCode === 'ko' ? 'KOREAN' : 'ENGLISH'],  // Only the requested language
+				regenerate,  // Pass regenerate flag
+				includeConceptExplanations: true
+			});
+
+			if (result.success && result.data) {
+				console.log('[PdfViewer] Specific narrative generation started:', result.data.jobId);
+				// Poll for completion
+				await pollNarrativeGeneration(result.data.jobId);
+			} else {
+				throw new Error(getErrorMessage(result.error));
+			}
+		} catch (e) {
+			console.error('[PdfViewer] Failed to generate specific narrative:', e);
+			narrativeError = e instanceof Error ? e.message : 'Failed to generate narrative';
 			isGeneratingNarratives = false;
 		}
 	}
@@ -350,6 +381,8 @@
 			.replace(/(<li.*<\/li>\n?)+/g, '<ul class="list-disc list-inside my-4 space-y-1">$&</ul>')
 			// Ordered lists
 			.replace(/^\d+\. (.+)$/gm, '<li class="ml-4">$1</li>')
+			// Images (MUST process before links!)
+			.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="my-6 max-w-full h-auto rounded-lg shadow-md" loading="lazy" />')
 			// Links
 			.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-purple-600 dark:text-purple-400 hover:underline" target="_blank" rel="noopener">$1</a>')
 			// Line breaks (double newline = paragraph)
@@ -2906,7 +2939,15 @@
 					{/if}
 					<button
 						class="flex items-center gap-1.5 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
-						onclick={() => generateNarratives(narratives.length > 0)}
+						onclick={() => {
+							if (narratives.length > 0) {
+								// Regenerate current selected style/language
+								generateSpecificNarrative(selectedStyle, selectedLanguageCode, true);
+							} else {
+								// First generation: BLOG + Korean
+								generateNarratives(false);
+							}
+						}}
 						disabled={isGeneratingNarratives || !paperId}
 					>
 						<RefreshCw class="h-4 w-4 {isGeneratingNarratives ? 'animate-spin' : ''}" />
@@ -3091,9 +3132,9 @@
 						</p>
 						<button
 							class="mt-4 rounded-md bg-purple-600 px-4 py-2 text-sm text-white hover:bg-purple-700"
-							onclick={() => generateNarratives(true)}
+							onclick={() => generateSpecificNarrative(selectedStyle, selectedLanguageCode)}
 						>
-							Generate All Styles
+							Generate {selectedStyle} ({selectedLanguageCode === 'ko' ? '한국어' : 'English'})
 						</button>
 					</div>
 				{/if}

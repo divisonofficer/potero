@@ -91,26 +91,34 @@ ${structural.sections.map { s ->
 
 ## Available Figures
 ${if (figures.isEmpty()) "No figures available" else figures.mapIndexed { i, f ->
-    "Figure ${i + 1} (id: ${f.id}): ${f.caption ?: "No caption"}"
+    "- Figure ${i + 1}: ${f.caption ?: "No caption"}\n  **ID: ${f.id}** (use this exact ID)"
 }.joinToString("\n")}
 
 ## Available Tables
 ${if (tables.isEmpty()) "No tables available" else tables.mapIndexed { i, t ->
-    "Table ${i + 1} (id: ${t.id}): ${t.caption ?: "No caption"}"
+    "- Table ${i + 1}: ${t.caption ?: "No caption"}\n  **ID: ${t.id}** (use this exact ID)"
 }.joinToString("\n")}
 
 ## Available Formulas (Key Equations)
 ${if (formulas.isEmpty()) "No formulas extracted" else formulas.take(10).mapIndexed { i, f ->
-    "Formula ${i + 1} (id: ${f.id}): ${f.label ?: "No label"} - ${f.latex?.take(80) ?: "LaTeX not available"}"
+    "- Formula ${i + 1}: ${f.label ?: "No label"} - ${f.latex?.take(80) ?: "LaTeX not available"}\n  **ID: ${f.id}** (use this exact ID)"
 }.joinToString("\n")}${if (formulas.size > 10) "\n... and ${formulas.size - 10} more formulas" else ""}
 
 ## Your Task
 Create a narrative outline that:
 1. Hooks readers with an interesting angle (Why should they care?)
 2. Explains WHY this matters before HOW it works
-3. Uses figures at the most impactful moments
-4. Builds understanding progressively
-5. Uses storytelling techniques (problem-solution, before-after, journey)
+3. **MUST include 2-4 figures from the available figures list** (select the most relevant ones)
+4. **MUST include 1-2 tables if available** (select tables that show key results)
+5. **MUST include 2-3 formulas if available** (select only the most essential equations)
+6. Builds understanding progressively
+7. Uses storytelling techniques (problem-solution, before-after, journey)
+
+**CRITICAL REQUIREMENTS:**
+- figureIntegrationPlan: MUST contain at least 2 figure entries (if figures are available)
+- tableIntegrationPlan: MUST contain at least 1 table entry (if tables are available)
+- formulaIntegrationPlan: MUST contain at least 2 formula entries (if formulas are available)
+- Do NOT leave these arrays empty if the content is available above
 
 Respond in JSON:
 {
@@ -160,21 +168,21 @@ Respond in JSON:
     ],
     "figureIntegrationPlan": [
         {
-            "figureId": "fig_id",
+            "figureId": "ACTUAL_FIGURE_ID_FROM_LIST_ABOVE",
             "suggestedSection": 3,
             "narrativeRole": "illustrates the main concept"
         }
     ],
     "tableIntegrationPlan": [
         {
-            "tableId": "table_id",
+            "tableId": "ACTUAL_TABLE_ID_FROM_LIST_ABOVE",
             "suggestedSection": 5,
             "narrativeRole": "compares results or shows benchmark data"
         }
     ],
     "formulaIntegrationPlan": [
         {
-            "formulaId": "formula_id",
+            "formulaId": "ACTUAL_FORMULA_ID_FROM_LIST_ABOVE",
             "suggestedSection": 4,
             "narrativeRole": "shows the key mathematical relationship"
         }
@@ -182,10 +190,14 @@ Respond in JSON:
     "conceptsToExplain": ["Concept1", "Concept2", "Concept3"]
 }
 
+**CRITICAL**: Use the EXACT IDs from the "Available Figures/Tables/Formulas" lists above.
+Do NOT create your own descriptive IDs like "conceptual_diagram" or "results_comparison".
+Copy the actual ID exactly as shown (e.g., "ccdf407a-907c-4b03-af3f-aa9975da0b2c_fig_0").
+
 Guidelines:
 - suggestedLength: "short" (100-200 words), "medium" (200-400 words), "long" (400-600 words)
 - narrativeRole examples: "introduces the problem", "visualizes the solution", "shows comparison", "demonstrates results"
-- For figures: Select visual content that best supports the narrative
+- For figures: Select 2-3 figures that best support the narrative (not all figures)
 - For tables: Include comparison tables or benchmark results that show key findings
 - For formulas: Select 2-3 key equations that are essential to understanding the method (not all formulas)
 - conceptsToExplain: List technical terms that need explanation for general readers

@@ -291,18 +291,20 @@ Write in Markdown format with:
 - A compelling opening hook
 - Clear section headings (##)
 - Inline explanations for technical terms when first mentioned
-${if (recomposed.figureIntegrationPlan.isNotEmpty()) """- Include the selected figures as markdown images:
-  Format: ![Figure label: Caption text](/api/figures/FIGURE_ID/image)
-  Example: ![Figure 1: Network architecture](/api/figures/abc-123-def/image)
-  Place each figure at its suggested section where it best supports the text""" else ""}
-${if (recomposed.tableIntegrationPlan.isNotEmpty()) """- Include the selected tables as markdown images:
-  Format: ![Table label: Caption text](/api/tables/TABLE_ID/image)
-  Example: ![Table 1: Results comparison](/api/tables/xyz-456-abc/image)
-  Add insights after each table explaining key patterns or findings""" else ""}
+${if (recomposed.figureIntegrationPlan.isNotEmpty()) """- **CRITICAL**: Use the EXACT markdown syntax from the figure list above for each figure
+  Copy the markdown line exactly as shown (including the full ID)
+  Place each figure at its suggested section""" else ""}
+${if (recomposed.tableIntegrationPlan.isNotEmpty()) """- **CRITICAL**: Use the EXACT markdown syntax from the table list above for each table
+  Copy the markdown line exactly as shown (including the full ID)
+  Add insights after each table""" else ""}
 ${if (recomposed.formulaIntegrationPlan.isNotEmpty()) "- Include the selected key formulas with explanations" else ""}
 - A memorable conclusion
 
 ${getLanguageReminder(language)}
+
+**IMPORTANT**: When including figures or tables, copy the markdown line EXACTLY from the lists above.
+Do NOT use placeholder IDs like "abc-123-def" or "xyz-456-abc".
+Use the actual IDs provided in the figure/table lists.
 
 Begin writing the narrative now:
 """.trimIndent()

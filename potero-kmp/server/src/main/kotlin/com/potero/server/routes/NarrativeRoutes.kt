@@ -114,17 +114,6 @@ fun Route.narrativeRoutes() {
                 )
             }
 
-            // Check if narratives exist and regenerate not requested
-            if (!request.regenerate && narrativeService.hasNarratives(paperId)) {
-                return@post call.respond(
-                    HttpStatusCode.OK,
-                    ApiResponse(data = NarrativeAlreadyExistsResponse(
-                        status = "already_exists",
-                        message = "Narratives already exist. Use regenerate=true to regenerate."
-                    ))
-                )
-            }
-
             // Parse styles and languages (default: BLOG + Korean only)
             val styles = try {
                 request.styles?.map { NarrativeStyle.valueOf(it.uppercase()) }
@@ -147,6 +136,33 @@ fun Route.narrativeRoutes() {
                     HttpStatusCode.BadRequest,
                     ApiResponse<String>(success = false, error = "Invalid language: ${e.message}")
                 )
+            }
+
+            // Check if requested combinations already exist (only if not regenerating)
+            if (!request.regenerate) {
+                val existingNarratives = try {
+                    val result = narrativeService.getNarratives(paperId)
+                    result.getOrNull() ?: emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+
+                // Check if ALL requested combinations already exist
+                val allExist = styles.all { style ->
+                    languages.all { lang ->
+                        existingNarratives.any { it.style == style && it.language == lang }
+                    }
+                }
+
+                if (allExist) {
+                    return@post call.respond(
+                        HttpStatusCode.OK,
+                        ApiResponse(data = NarrativeAlreadyExistsResponse(
+                            status = "already_exists",
+                            message = "Requested narratives already exist. Use regenerate=true to regenerate."
+                        ))
+                    )
+                }
             }
 
             // Submit background job

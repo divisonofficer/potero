@@ -20,11 +20,17 @@ import javax.imageio.ImageIO
  * 4. Save top-quality images as figures
  *
  * Note: Without GROBID, we don't have:
- * - Figure captions (can only use "Figure N")
+ * - Figure captions (would need Vision API or page text analysis)
  * - Accurate bounding boxes (use image position approximation)
  * - Figure-to-text linking
+ *
+ * To improve caption quality, consider:
+ * - Option 1: Pass pageTextProvider to extract page text and infer caption
+ * - Option 2: Use Vision API to analyze the image itself
  */
-class PdfBoxFigureExtractor {
+class PdfBoxFigureExtractor(
+    private val pageTextProvider: (suspend (String, Int) -> String?)? = null
+) {
 
     companion object {
         private const val MIN_IMAGE_SIZE = 150 // Minimum width/height for figures
@@ -34,8 +40,9 @@ class PdfBoxFigureExtractor {
     /**
      * Extract figures from PDF without GROBID metadata.
      * Returns list of extracted figure info with file paths.
+     * If pageTextProvider is available, attempts to infer captions from page text.
      */
-    fun extractFigures(
+    suspend fun extractFigures(
         pdfPath: String,
         paperId: String,
         outputDir: String
@@ -57,6 +64,14 @@ class PdfBoxFigureExtractor {
                 val page = document.getPage(pageIndex)
                 val pageNum = pageIndex + 1
 
+                // Get page text for caption inference (if provider available)
+                val pageText = try {
+                    pageTextProvider?.invoke(paperId, pageNum)
+                } catch (e: Exception) {
+                    println("[PdfBoxFigureExtractor] Failed to get page text: ${e.message}")
+                    null
+                }
+
                 // Extract images from this page
                 val images = extractImagesFromPage(page, document, pageNum)
 
@@ -66,10 +81,16 @@ class PdfBoxFigureExtractor {
                     .sortedByDescending { it.score }
                     .take(MAX_FIGURES_PER_PAGE)
 
-                // Save as figures
-                qualityImages.forEach { imageData ->
-                    val figureId = UUID.randomUUID().toString()
+                // Save as figures with deterministic IDs
+                qualityImages.forEachIndexed { imgIndex, imageData ->
+                    // Create deterministic ID based on paper + page + image index
+                    val figureId = "${paperId}_pdfbox_p${pageNum}_img${imgIndex}"
                     val outputPath = File(outputDir, "$figureId.png").absolutePath
+
+                    // Try to infer caption from page text
+                    val caption = pageText?.let {
+                        extractCaptionFromPageText(it, globalFigureNum)
+                    }
 
                     try {
                         ImageIO.write(imageData.image, "png", File(outputPath))
@@ -80,7 +101,7 @@ class PdfBoxFigureExtractor {
                                 paperId = paperId,
                                 pageNum = pageNum,
                                 label = "Figure $globalFigureNum",
-                                caption = null, // No caption without GROBID
+                                caption = caption, // Inferred from page text
                                 imagePath = outputPath,
                                 confidence = calculateConfidence(imageData.score)
                             )
@@ -177,6 +198,37 @@ class PdfBoxFigureExtractor {
         }
 
         return maxOf(0, score)
+    }
+
+    /**
+     * Extract figure caption from page text using pattern matching.
+     * Looks for patterns like "Figure N: caption text" or "Fig. N. caption text"
+     */
+    private fun extractCaptionFromPageText(pageText: String, figureNum: Int): String? {
+        if (pageText.isBlank()) return null
+
+        // Common patterns for figure captions
+        val patterns = listOf(
+            // "Figure 1: Caption text here."
+            Regex("Figure\\s+$figureNum[:\\.]\\s*([^\\n\\.]+[\\.]?)", RegexOption.IGNORE_CASE),
+            // "Fig. 1: Caption text here."
+            Regex("Fig\\.?\\s+$figureNum[:\\.]\\s*([^\\n\\.]+[\\.]?)", RegexOption.IGNORE_CASE),
+            // "FIG. 1. Caption text here."
+            Regex("FIG\\.?\\s+$figureNum[:\\.]\\s*([^\\n\\.]+[\\.]?)")
+        )
+
+        for (pattern in patterns) {
+            val match = pattern.find(pageText)
+            if (match != null && match.groupValues.size > 1) {
+                val caption = match.groupValues[1].trim()
+                // Return if caption is reasonable length (not too short/long)
+                if (caption.length in 10..300) {
+                    return caption
+                }
+            }
+        }
+
+        return null
     }
 
     /**

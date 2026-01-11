@@ -380,10 +380,17 @@ class PdfPreprocessingService(
      * Extract figures using PDFBox when GROBID is disabled or failed.
      * Fallback method that extracts embedded images directly from PDF.
      */
-    private fun extractFiguresWithPdfBox(paperId: String, pdfPath: String) {
+    private suspend fun extractFiguresWithPdfBox(paperId: String, pdfPath: String) {
         try {
             val outputDir = "/home/jinnyeong/potero/data/figures/$paperId"
-            val extractor = PdfBoxFigureExtractor()
+
+            // Create extractor with page text provider for caption inference
+            val extractor = PdfBoxFigureExtractor(
+                pageTextProvider = { pId, pageNum ->
+                    // Get page text from preprocessing cache
+                    preprocessingRepository.getPageText(pId, pageNum).getOrNull()?.textContent
+                }
+            )
 
             val result = extractor.extractFigures(pdfPath, paperId, outputDir)
 
