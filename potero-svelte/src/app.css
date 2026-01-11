@@ -14,8 +14,9 @@
 	--card-foreground: 222.2 84% 4.9%;
 	--popover: 0 0% 100%;
 	--popover-foreground: 222.2 84% 4.9%;
-	--primary: 222.2 47.4% 11.2%;
-	--primary-foreground: 210 40% 98%;
+	/* Vivid blue primary (matches submission workflow design #1677FF) */
+	--primary: 217 91% 55%;
+	--primary-foreground: 0 0% 100%;
 	--secondary: 210 40% 96.1%;
 	--secondary-foreground: 222.2 47.4% 11.2%;
 	--muted: 210 40% 96.1%;
@@ -26,8 +27,15 @@
 	--destructive-foreground: 210 40% 98%;
 	--border: 214.3 31.8% 91.4%;
 	--input: 214.3 31.8% 91.4%;
-	--ring: 222.2 84% 4.9%;
+	--ring: 217 91% 55%;
 	--radius: 0.5rem;
+
+	/* Workflow-specific colors */
+	--workflow-active: 217 91% 55%;
+	--workflow-completed: 142 76% 45%;
+	--workflow-pending: 220 14% 75%;
+	--workflow-success: 142 76% 45%;
+	--workflow-warning: 38 92% 50%;
 }
 
 .dark {
@@ -37,8 +45,9 @@
 	--card-foreground: 210 40% 98%;
 	--popover: 222.2 84% 4.9%;
 	--popover-foreground: 210 40% 98%;
-	--primary: 210 40% 98%;
-	--primary-foreground: 222.2 47.4% 11.2%;
+	/* Keep vivid blue in dark mode */
+	--primary: 217 91% 60%;
+	--primary-foreground: 0 0% 100%;
 	--secondary: 217.2 32.6% 17.5%;
 	--secondary-foreground: 210 40% 98%;
 	--muted: 217.2 32.6% 17.5%;
@@ -49,7 +58,14 @@
 	--destructive-foreground: 210 40% 98%;
 	--border: 217.2 32.6% 17.5%;
 	--input: 217.2 32.6% 17.5%;
-	--ring: 212.7 26.8% 83.9%;
+	--ring: 217 91% 60%;
+
+	/* Workflow-specific colors (dark mode) */
+	--workflow-active: 217 91% 60%;
+	--workflow-completed: 142 70% 50%;
+	--workflow-pending: 220 14% 45%;
+	--workflow-success: 142 70% 50%;
+	--workflow-warning: 38 92% 55%;
 }
 
 * {

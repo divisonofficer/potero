@@ -70,7 +70,7 @@ export interface ChatSession {
 
 export interface Tab {
 	id: string;
-	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal' | 'notes' | 'note-viewer' | 'related-work';
+	type: 'home' | 'viewer' | 'settings' | 'author' | 'tag' | 'journal' | 'notes' | 'note-viewer' | 'related-work' | 'submissions-list' | 'submission';
 	title: string;
 	paper?: Paper;
 	// PDF viewer state (persisted across tab switches)
@@ -85,6 +85,8 @@ export interface Tab {
 	note?: ResearchNote;
 	// Related work query (for related-work tab)
 	relatedWorkQuery?: RelatedWorkQuery;
+	// Submission workflow (for submission tab)
+	submission?: SubmissionWorkflow;
 }
 
 export interface AuthorProfile {
@@ -355,6 +357,112 @@ export interface ComparisonTableRequest {
 	description?: string;
 	columns?: ColumnDefinition[];
 	generateNarrative?: boolean;
+}
+
+// Submission Workflow Types
+
+export type WorkflowStage = 'submission' | 'review' | 'production';
+
+export type SubmissionStatus =
+	| 'draft'
+	| 'submitted'
+	| 'under_review'
+	| 'revision_requested'
+	| 'revised'
+	| 'accepted'
+	| 'in_production'
+	| 'published';
+
+export type ReviewerStatus =
+	| 'invited'
+	| 'accepted'
+	| 'not_responded'
+	| 'declined'
+	| 'cancelled'
+	| 'overdue'
+	| 'revision_requested'
+	| 'revised'
+	| 'completed';
+
+export type ReviewerRecommendation = 'accept' | 'minor_revision' | 'major_revision' | 'reject';
+
+export interface SubmissionWorkflow {
+	id: string;
+	paperId: string;
+	journalId: string;
+	journalName: string;
+	articleId: string; // e.g., "JOLIT-003"
+	articleTitle: string;
+	currentStage: WorkflowStage;
+	status: SubmissionStatus;
+	submissionDate: string | null;
+	rounds: ReviewRound[];
+	currentRoundNumber: number;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface ReviewRound {
+	roundNumber: number;
+	startDate: string;
+	endDate: string | null;
+	status: 'active' | 'completed';
+	reviewers: Reviewer[];
+	decision: ReviewDecision | null;
+}
+
+export interface ReviewDecision {
+	decision: ReviewerRecommendation;
+	decisionDate: string;
+	editorComments: string | null;
+}
+
+export interface Reviewer {
+	id: string;
+	name: string;
+	email: string;
+	affiliation: string | null;
+	status: ReviewerStatus;
+	invitedDate: string;
+	responseDate: string | null;
+	responseDueDate: string | null;
+	reviewDueDate: string | null;
+	recommendation: ReviewerRecommendation | null;
+	reviewSubmittedDate: string | null;
+	comments: string | null;
+}
+
+export interface SubmissionFile {
+	id: string;
+	submissionId: string;
+	fileName: string;
+	articleType: string; // "Research Article"
+	fileType: string; // "Manuscript", "Figures", "Additional Files"
+	fileFormat: string; // "PDF", "JPG", etc.
+	version: number;
+	uploadedAt: string;
+	children?: SubmissionFile[];
+}
+
+export interface SubmissionSideNavItem {
+	id: string;
+	label: string;
+	icon?: string;
+	badge?: number;
+	badgeType?: 'info' | 'warning' | 'success' | 'error';
+}
+
+export interface ReviewerStats {
+	total: number;
+	invited: number;
+	accepted: number;
+	notResponded: number;
+	declined: number;
+	cancelled: number;
+	overdue: number;
+	revisionRequested: number;
+	revised: number;
+	completed: number;
 }
 
 // Export block types for Obsidian-style editor

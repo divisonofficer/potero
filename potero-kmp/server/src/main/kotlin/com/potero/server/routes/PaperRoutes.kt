@@ -528,15 +528,22 @@ fun Route.paperRoutes() {
                 return@post
             }
 
-            // Check if PDF already exists
-            if (paper.pdfPath != null) {
-                call.respond(
-                    ApiResponse(data = mapOf(
-                        "pdfPath" to paper.pdfPath,
-                        "message" to "PDF already exists"
-                    ))
-                )
-                return@post
+            // Check if PDF already exists as a local file (not an external URL)
+            val existingPdfPath = paper.pdfPath
+            if (existingPdfPath != null &&
+                !existingPdfPath.startsWith("http://") &&
+                !existingPdfPath.startsWith("https://")) {
+                // It's a local path, check if file exists
+                val pdfFile = File(existingPdfPath)
+                if (pdfFile.exists()) {
+                    call.respond(
+                        ApiResponse(data = mapOf(
+                            "pdfPath" to existingPdfPath,
+                            "message" to "PDF already exists"
+                        ))
+                    )
+                    return@post
+                }
             }
 
             // Try to download PDF

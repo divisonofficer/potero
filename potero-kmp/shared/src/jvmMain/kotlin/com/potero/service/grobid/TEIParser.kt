@@ -169,7 +169,56 @@ object TEIParser {
      * Parse references from TEI back matter
      */
     private fun parseReferences(doc: Document): List<TEIReference> {
-        return doc.select("text > back > listBibl > biblStruct").map { biblStruct ->
+        // Try multiple selectors to find references
+        var biblStructs = doc.select("text > back > listBibl > biblStruct")
+
+        if (biblStructs.isEmpty()) {
+            // Try alternative selectors
+            biblStructs = doc.select("listBibl > biblStruct")
+            if (biblStructs.isNotEmpty()) {
+                println("[TEIParser] Found ${biblStructs.size} references via 'listBibl > biblStruct'")
+            }
+        }
+
+        if (biblStructs.isEmpty()) {
+            biblStructs = doc.select("back biblStruct")
+            if (biblStructs.isNotEmpty()) {
+                println("[TEIParser] Found ${biblStructs.size} references via 'back biblStruct'")
+            }
+        }
+
+        if (biblStructs.isEmpty()) {
+            biblStructs = doc.select("biblStruct")
+            if (biblStructs.isNotEmpty()) {
+                println("[TEIParser] Found ${biblStructs.size} references via 'biblStruct' (anywhere)")
+            }
+        }
+
+        if (biblStructs.isEmpty()) {
+            // Debug: print what's in the back section
+            val back = doc.selectFirst("back")
+            if (back != null) {
+                println("[TEIParser] DEBUG: back section found, children: ${back.children().map { it.tagName() }}")
+                val listBibl = back.selectFirst("listBibl")
+                if (listBibl != null) {
+                    println("[TEIParser] DEBUG: listBibl found, children count: ${listBibl.children().size}")
+                    println("[TEIParser] DEBUG: listBibl first child: ${listBibl.children().firstOrNull()?.tagName()}")
+                } else {
+                    println("[TEIParser] DEBUG: No listBibl in back section")
+                }
+            } else {
+                println("[TEIParser] DEBUG: No back section found in TEI")
+                // Check if there's a div with type=references
+                val refDiv = doc.selectFirst("div[type=references]")
+                if (refDiv != null) {
+                    println("[TEIParser] DEBUG: Found div[type=references], checking for biblStruct...")
+                    biblStructs = refDiv.select("biblStruct")
+                    println("[TEIParser] DEBUG: Found ${biblStructs.size} biblStruct in div[type=references]")
+                }
+            }
+        }
+
+        return biblStructs.map { biblStruct ->
             TEIReference(
                 xmlId = biblStruct.attr("xml:id"),
                 rawTei = biblStruct.outerHtml(),

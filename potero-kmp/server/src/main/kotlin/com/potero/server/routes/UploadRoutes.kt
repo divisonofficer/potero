@@ -183,6 +183,75 @@ fun Route.uploadRoutes() {
             )
             call.respondFile(file)
         }
+
+        // GET /api/pdf/proxy - Proxy external PDF URLs to avoid CORS issues
+        get("/proxy") {
+            val urlParam = call.request.queryParameters["url"]
+            if (urlParam.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, "Missing url parameter")
+                return@get
+            }
+
+            // Validate URL
+            val url = try {
+                java.net.URL(urlParam)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid URL: $urlParam")
+                return@get
+            }
+
+            // Only allow http/https protocols
+            if (url.protocol !in listOf("http", "https")) {
+                call.respond(HttpStatusCode.BadRequest, "Only http/https URLs are allowed")
+                return@get
+            }
+
+            // Fetch the PDF from the external URL
+            try {
+                val httpClient = ServiceLocator.httpClient
+                val response = httpClient.get(urlParam)
+
+                if (!response.status.isSuccess()) {
+                    call.respond(
+                        HttpStatusCode.BadGateway,
+                        "Failed to fetch PDF: HTTP ${response.status.value}"
+                    )
+                    return@get
+                }
+
+                val contentType = response.headers[HttpHeaders.ContentType]
+                val pdfBytes: ByteArray = response.body()
+
+                // Basic PDF validation (check magic bytes)
+                if (pdfBytes.size < 5 ||
+                    pdfBytes[0] != 0x25.toByte() || // %
+                    pdfBytes[1] != 0x50.toByte() || // P
+                    pdfBytes[2] != 0x44.toByte() || // D
+                    pdfBytes[3] != 0x46.toByte() || // F
+                    pdfBytes[4] != 0x2D.toByte()) { // -
+                    call.respond(
+                        HttpStatusCode.BadGateway,
+                        "URL does not return a valid PDF file"
+                    )
+                    return@get
+                }
+
+                call.response.header(
+                    HttpHeaders.ContentDisposition,
+                    ContentDisposition.Inline.withParameter(
+                        ContentDisposition.Parameters.FileName,
+                        "document.pdf"
+                    ).toString()
+                )
+                call.respondBytes(pdfBytes, ContentType.Application.Pdf)
+            } catch (e: Exception) {
+                println("[PDF Proxy] Error fetching PDF from $urlParam: ${e.message}")
+                call.respond(
+                    HttpStatusCode.BadGateway,
+                    "Failed to fetch PDF: ${e.message}"
+                )
+            }
+        }
     }
 
     route("/upload") {

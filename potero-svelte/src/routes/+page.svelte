@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel, openRelatedWork } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel, openRelatedWork, openSubmissionsList, openSubmissionWorkflow } from '$lib/stores/tabs';
 	import {
 		papers,
 		filteredPapers,
@@ -41,6 +41,7 @@
 	import NoteList from '$lib/components/notes/NoteList.svelte';
 	import NoteViewer from '$lib/components/notes/NoteViewer.svelte';
 	import RelatedWorkView from '$lib/components/relatedWork/RelatedWorkView.svelte';
+	import { SubmissionDashboard, SubmissionsList } from '$lib/components/submission';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 	import { online } from 'svelte/reactivity/window';
 	import {
@@ -54,7 +55,9 @@
 		X,
 		ChevronDown,
 		BookOpen,
-		Network
+		Network,
+		Send,
+		ClipboardList
 	} from 'lucide-svelte';
 
 	// Tab icon mapping
@@ -67,7 +70,9 @@
 		journal: Building2,
 		notes: BookOpen,
 		'note-viewer': FileText,
-		'related-work': Network
+		'related-work': Network,
+		'submissions-list': ClipboardList,
+		'submission': Send
 	};
 
 	// LLM log panel state
@@ -641,6 +646,15 @@
 			title="Quick Search (Ctrl+K)"
 		>
 			<Search class="h-5 w-5" />
+		</button>
+
+		<!-- Submissions button -->
+		<button
+			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+			onclick={() => openSubmissionsList()}
+			title="Submissions"
+		>
+			<ClipboardList class="h-5 w-5" />
 		</button>
 
 		<!-- Notes button -->
@@ -1603,6 +1617,22 @@
 			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
 				{#if tab.paper}
 					<RelatedWorkView paper={tab.paper} tabId={tab.id} />
+				{/if}
+			</div>
+		{/each}
+
+		<!-- Submissions List tab -->
+		{#each $tabs.filter(t => t.type === 'submissions-list') as tab (tab.id)}
+			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
+				<SubmissionsList onOpenSubmission={openSubmissionWorkflow} />
+			</div>
+		{/each}
+
+		<!-- Submission Workflow tabs -->
+		{#each $tabs.filter(t => t.type === 'submission') as tab (tab.id)}
+			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
+				{#if tab.submission}
+					<SubmissionDashboard submission={tab.submission} tabId={tab.id} />
 				{/if}
 			</div>
 		{/each}
