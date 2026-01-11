@@ -29,6 +29,12 @@ UPDATE Figure
 SET image_path = ?
 WHERE id = ?;
 
+-- Get figure by ID
+getFigureById:
+SELECT * FROM Figure
+WHERE id = ?
+LIMIT 1;
+
 -- Get all figures for a paper
 getFiguresByPaper:
 SELECT * FROM Figure

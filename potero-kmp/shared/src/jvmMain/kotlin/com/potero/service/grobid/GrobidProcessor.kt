@@ -7,8 +7,12 @@ import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.PdfPreprocessingRepository
 import com.potero.domain.repository.SettingsKeys
 import com.potero.domain.repository.SettingsRepository
+import com.potero.service.pdf.FigureImageExtractor
+import com.potero.service.pdf.TableImageExtractor
+import com.potero.service.pdf.PdfBoxFigureExtractor
 import com.potero.service.pdf.PdfAnalyzer
 import com.potero.service.pdf.PdfDownloadService
+import com.potero.db.PoteroDatabase
 import kotlinx.datetime.Clock
 import java.io.File
 import java.io.FileWriter
@@ -48,7 +52,8 @@ class GrobidProcessor(
     private val pdfDownloadService: PdfDownloadService,
     private val settingsRepository: SettingsRepository,
     private val pdfOcrService: com.potero.service.ocr.PdfOcrService,
-    private val preprocessingRepository: PdfPreprocessingRepository
+    private val preprocessingRepository: PdfPreprocessingRepository,
+    private val database: PoteroDatabase
 ) {
 
     companion object {
@@ -217,8 +222,15 @@ class GrobidProcessor(
                 grobidRepository.deleteReferencesByPaperId(paperId).getOrThrow()
                 grobidRepository.insertAllReferences(llmReferences).getOrThrow()
 
+                // Step 4.5: Extract figures using PDFBox fallback (since GROBID failed)
+                log("[GrobidProcessor] ========================================")
+                log("[GrobidProcessor] GROBID failed, using fallback strategies...")
+                log("[GrobidProcessor] ✓ References: ${llmReferences.size} (LLM parsed)")
+                extractFiguresWithPdfBox(paperId, currentPdfPath)
+
                 val time = System.currentTimeMillis() - startTime
-                log("[GrobidProcessor] LLM fallback completed: ${llmReferences.size} references in ${time}ms")
+                log("[GrobidProcessor] ✓ Fallback completed in ${time}ms")
+                log("[GrobidProcessor] ========================================")
 
                 return@runCatching GrobidProcessingStats(
                     citationSpansExtracted = 0,  // LLM doesn't extract citation spans
@@ -228,25 +240,65 @@ class GrobidProcessor(
             }
 
             // Step 5: GROBID succeeded - normal flow
-            log("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references, ${teiDocument.body.formulas.size} formulas")
+            log("[GrobidProcessor] TEI extracted: ${teiDocument.body.citationSpans.size} citations, ${teiDocument.references.size} references, ${teiDocument.body.figures.size} figures, ${teiDocument.body.tables.size} tables, ${teiDocument.body.formulas.size} formulas")
 
             // Convert TEI models to domain models
             val citationSpans = convertCitationSpans(paperId, teiDocument.body.citationSpans)
             val references = convertReferences(paperId, teiDocument.references)
+            val figures = convertFigures(paperId, teiDocument.body.figures)
+            val tables = convertTables(paperId, teiDocument.body.tables)
             val formulas = convertFormulas(paperId, teiDocument.body.formulas)
 
             // Delete old GROBID data for this paper (if any)
             grobidRepository.deleteCitationSpansByPaperId(paperId).getOrThrow()
             grobidRepository.deleteReferencesByPaperId(paperId).getOrThrow()
+            database.figureQueries.deleteFiguresByPaper(paperId)
+            database.pdfTableQueries.deleteTablesByPaper(paperId)
             formulaRepository.deleteByPaperId(paperId).getOrThrow()
 
             // Store in database
             grobidRepository.insertAllCitationSpans(citationSpans).getOrThrow()
             grobidRepository.insertAllReferences(references).getOrThrow()
+            figures.forEach { figure ->
+                database.figureQueries.insertFigure(
+                    id = figure.id,
+                    paper_id = figure.paper_id,
+                    page_num = figure.page_num,
+                    xml_id = figure.xml_id,
+                    label = figure.label,
+                    caption = figure.caption,
+                    image_path = null,  // Will be set after extraction
+                    confidence = figure.confidence,
+                    created_at = figure.created_at
+                )
+            }
+            tables.forEach { table ->
+                database.pdfTableQueries.insertTable(
+                    id = table.id,
+                    paper_id = table.paper_id,
+                    page_num = table.page_num,
+                    xml_id = table.xml_id,
+                    label = table.label,
+                    caption = table.caption,
+                    image_path = null,  // Will be set after extraction
+                    row_count = 0,  // Not extracted from TEI
+                    col_count = 0,  // Not extracted from TEI
+                    confidence = table.confidence,
+                    created_at = table.created_at
+                )
+            }
             formulaRepository.insertAll(formulas).getOrThrow()
 
+            // Extract figure and table images (non-blocking, best-effort)
+            extractFigureImages(paperId, currentPdfPath, teiDocument.body.figures, figures)
+            extractTableImages(paperId, currentPdfPath, teiDocument.body.tables, tables)
+
             val processingTime = System.currentTimeMillis() - startTime
-            log("[GrobidProcessor] GROBID processing completed in ${processingTime}ms")
+            log("[GrobidProcessor] ========================================")
+            log("[GrobidProcessor] ✓ GROBID processing completed in ${processingTime}ms")
+            log("[GrobidProcessor] ✓ Citations: ${citationSpans.size}, References: ${references.size}")
+            log("[GrobidProcessor] ✓ Figures: ${figures.size}, Tables: ${tables.size}, Formulas: ${formulas.size}")
+            log("[GrobidProcessor] ========================================")
 
             GrobidProcessingStats(
                 citationSpansExtracted = citationSpans.size,
@@ -292,6 +344,7 @@ class GrobidProcessor(
      */
     /**
      * Convert TEI formulas to database Formula objects.
+     * Uses deterministic IDs based on paper_id and xml_id to ensure consistency across re-processing.
      */
     private fun convertFormulas(
         paperId: String,
@@ -299,12 +352,19 @@ class GrobidProcessor(
     ): List<com.potero.db.Formula> {
         val now = Clock.System.now()
 
-        return teiFormulas.map { teiFormula ->
+        return teiFormulas.mapIndexed { index, teiFormula ->
             // Extract page number from first bbox (default to page 1)
             val pageNum = teiFormula.bboxes.firstOrNull()?.pageNum ?: 1
 
+            // Create deterministic ID: paper_id + xml_id (or fallback to page_num + index)
+            val formulaId = if (!teiFormula.xmlId.isNullOrBlank()) {
+                "${paperId}_${teiFormula.xmlId}"
+            } else {
+                "${paperId}_formula_p${pageNum}_${index}"
+            }
+
             com.potero.db.Formula(
-                id = UUID.randomUUID().toString(),
+                id = formulaId,
                 paper_id = paperId,
                 page_num = pageNum.toLong(),
                 xml_id = teiFormula.xmlId,
@@ -313,6 +373,230 @@ class GrobidProcessor(
                 confidence = 0.80,  // GROBID formula extraction confidence
                 created_at = now.toEpochMilliseconds()
             )
+        }
+    }
+
+    /**
+     * Convert TEI figures to database Figure objects.
+     * Uses deterministic IDs based on paper_id and xml_id to ensure consistency across re-processing.
+     */
+    private fun convertFigures(
+        paperId: String,
+        teiFigures: List<TEIFigure>
+    ): List<com.potero.db.Figure> {
+        val now = Clock.System.now()
+
+        return teiFigures.mapIndexed { index, teiFigure ->
+            // Extract page number from first bbox (default to page 1)
+            val pageNum = teiFigure.bboxes.firstOrNull()?.pageNum ?: 1
+
+            // Create deterministic ID: paper_id + xml_id (or fallback to page_num + index)
+            val figureId = if (teiFigure.xmlId.isNotBlank()) {
+                "${paperId}_${teiFigure.xmlId}"
+            } else {
+                "${paperId}_fig_p${pageNum}_${index}"
+            }
+
+            com.potero.db.Figure(
+                id = figureId,
+                paper_id = paperId,
+                page_num = pageNum.toLong(),
+                xml_id = teiFigure.xmlId,
+                label = teiFigure.label,
+                caption = teiFigure.caption,
+                image_path = null,  // Will be set after image extraction
+                confidence = 0.85,  // GROBID figure extraction confidence
+                created_at = now.toEpochMilliseconds()
+            )
+        }
+    }
+
+    /**
+     * Extract figure images from PDF based on bounding boxes.
+     * Non-blocking and best-effort - failures are logged but don't stop processing.
+     */
+    private fun extractFigureImages(
+        paperId: String,
+        pdfPath: String,
+        teiFigures: List<TEIFigure>,
+        dbFigures: List<com.potero.db.Figure>
+    ) {
+        if (teiFigures.isEmpty()) {
+            log("[GrobidProcessor] ✓ 0 figures to extract")
+            return
+        }
+
+        log("[GrobidProcessor] Extracting ${teiFigures.size} figure images...")
+        val extractor = FigureImageExtractor()
+        val dataDir = File("/home/jinnyeong/potero/data/figures/$paperId")
+        dataDir.mkdirs()
+
+        var successCount = 0
+        var failCount = 0
+
+        teiFigures.zip(dbFigures).forEach { (teiFigure, dbFigure) ->
+            val bbox = teiFigure.bboxes.firstOrNull()
+            if (bbox == null) {
+                log("[GrobidProcessor] No bbox for figure ${dbFigure.id}, skipping")
+                failCount++
+                return@forEach
+            }
+
+            val outputPath = "/home/jinnyeong/potero/data/figures/$paperId/${dbFigure.id}.png"
+
+            extractor.extractFigureImage(pdfPath, bbox, outputPath)
+                .onSuccess { path ->
+                    // Update database with image path
+                    try {
+                        database.figureQueries.updateFigureImagePath(path, dbFigure.id)
+                        successCount++
+                    } catch (e: Exception) {
+                        log("[GrobidProcessor] Failed to update figure image path: ${e.message}")
+                        failCount++
+                    }
+                }
+                .onFailure { error ->
+                    log("[GrobidProcessor] Figure extraction failed for ${dbFigure.id}: ${error.message}")
+                    failCount++
+                }
+        }
+
+        log("[GrobidProcessor] ✓ Figures: ${successCount} extracted, ${failCount} failed (${teiFigures.size} total)")
+    }
+
+    /**
+     * Convert TEI tables to database PdfTable objects.
+     * Uses deterministic IDs based on paper_id and xml_id to ensure consistency across re-processing.
+     */
+    private fun convertTables(
+        paperId: String,
+        teiTables: List<TEITable>
+    ): List<com.potero.db.PdfTable> {
+        val now = Clock.System.now()
+
+        return teiTables.mapIndexed { index, teiTable ->
+            // Extract page number from first bbox (default to page 1)
+            val pageNum = teiTable.bboxes.firstOrNull()?.pageNum ?: 1
+
+            // Create deterministic ID: paper_id + xml_id (or fallback to page_num + index)
+            val tableId = if (teiTable.xmlId.isNotBlank()) {
+                "${paperId}_${teiTable.xmlId}"
+            } else {
+                "${paperId}_tab_p${pageNum}_${index}"
+            }
+
+            com.potero.db.PdfTable(
+                id = tableId,
+                paper_id = paperId,
+                page_num = pageNum.toLong(),
+                xml_id = teiTable.xmlId,
+                label = teiTable.label,
+                caption = teiTable.caption,
+                image_path = null,  // Will be set after image extraction
+                row_count = 0,  // Not extracted from TEI
+                col_count = 0,  // Not extracted from TEI
+                confidence = 0.70,  // GROBID table extraction confidence (lower than figures)
+                created_at = now.toEpochMilliseconds()
+            )
+        }
+    }
+
+    /**
+     * Extract table images from PDF based on bounding boxes.
+     * Non-blocking and best-effort - failures are logged but don't stop processing.
+     */
+    private fun extractTableImages(
+        paperId: String,
+        pdfPath: String,
+        teiTables: List<TEITable>,
+        dbTables: List<com.potero.db.PdfTable>
+    ) {
+        if (teiTables.isEmpty()) {
+            log("[GrobidProcessor] ✓ 0 tables to extract")
+            return
+        }
+
+        log("[GrobidProcessor] Extracting ${teiTables.size} table images...")
+        val extractor = TableImageExtractor()
+        val dataDir = File("/home/jinnyeong/potero/data/tables/$paperId")
+        dataDir.mkdirs()
+
+        var successCount = 0
+        var failCount = 0
+
+        teiTables.zip(dbTables).forEach { (teiTable, dbTable) ->
+            val bbox = teiTable.bboxes.firstOrNull()
+            if (bbox == null) {
+                log("[GrobidProcessor] No bbox for table ${dbTable.id}, skipping")
+                failCount++
+                return@forEach
+            }
+
+            val outputPath = "/home/jinnyeong/potero/data/tables/$paperId/${dbTable.id}.png"
+
+            extractor.extractTableImage(pdfPath, bbox, outputPath)
+                .onSuccess { path ->
+                    // Update database with image path
+                    try {
+                        database.pdfTableQueries.updateTableImagePath(path, dbTable.id)
+                        successCount++
+                    } catch (e: Exception) {
+                        log("[GrobidProcessor] Failed to update table image path: ${e.message}")
+                        failCount++
+                    }
+                }
+                .onFailure { error ->
+                    log("[GrobidProcessor] Table extraction failed for ${dbTable.id}: ${error.message}")
+                    failCount++
+                }
+        }
+
+        log("[GrobidProcessor] ✓ Tables: ${successCount} extracted, ${failCount} failed (${teiTables.size} total)")
+    }
+
+    /**
+     * Extract figures using PDFBox when GROBID fails.
+     * Fallback method that extracts embedded images directly from PDF.
+     */
+    private fun extractFiguresWithPdfBox(paperId: String, pdfPath: String) {
+        try {
+            val outputDir = "/home/jinnyeong/potero/data/figures/$paperId"
+            val extractor = PdfBoxFigureExtractor()
+
+            val result = extractor.extractFigures(pdfPath, paperId, outputDir)
+
+            result.onSuccess { extractedFigures ->
+                // Delete existing figures for this paper
+                database.figureQueries.deleteFiguresByPaper(paperId)
+
+                // Insert extracted figures into database
+                var savedCount = 0
+                extractedFigures.forEach { fig ->
+                    try {
+                        database.figureQueries.insertFigure(
+                            id = fig.id,
+                            paper_id = fig.paperId,
+                            page_num = fig.pageNum.toLong(),
+                            xml_id = null, // No xml_id without GROBID
+                            label = fig.label,
+                            caption = fig.caption,
+                            image_path = fig.imagePath, // Already saved by extractor
+                            confidence = fig.confidence,
+                            created_at = Clock.System.now().toEpochMilliseconds()
+                        )
+                        savedCount++
+                    } catch (e: Exception) {
+                        log("[GrobidProcessor] Failed to save figure ${fig.id}: ${e.message}")
+                    }
+                }
+
+                log("[GrobidProcessor] ✓ Figures (PDFBox fallback): ${savedCount} extracted and saved")
+            }.onFailure { error ->
+                log("[GrobidProcessor] ✗ PDFBox figure extraction failed: ${error.message}")
+                // Non-blocking - continue even if extraction fails
+            }
+        } catch (e: Exception) {
+            log("[GrobidProcessor] PDFBox fallback error: ${e.message}")
         }
     }
 
@@ -481,35 +765,27 @@ class GrobidProcessor(
 
             // CRITICAL: Check preprocessing cache first to avoid redundant OCR
             log("[GrobidProcessor] [CACHE CHECK] Querying preprocessing cache...")
+
+            // Try to get cached text regardless of status
+            val cachedText = preprocessingRepository.getFullText(paperId).getOrNull()
+
+            if (cachedText != null && cachedText.isNotBlank()) {
+                val preprocessingStatus = preprocessingRepository.getStatus(paperId).getOrNull()
+                log("[GrobidProcessor] [CACHE HIT] ✓ Found cached text: ${cachedText.length} chars")
+                log("[GrobidProcessor] [CACHE HIT] ✓ Status: ${preprocessingStatus?.status ?: "unknown"}")
+                log("[GrobidProcessor] [CACHE HIT] ✓ Method: ${preprocessingStatus?.extractionMethod ?: "unknown"}")
+                log("[GrobidProcessor] [CACHE HIT] ✓✓✓ SKIPPING OCR - Using cached text")
+                log("[GrobidProcessor] ========================================")
+                return cachedText
+            }
+
+            // No cached text available
             val preprocessingStatus = preprocessingRepository.getStatus(paperId).getOrNull()
-
             if (preprocessingStatus != null) {
-                log("[GrobidProcessor] [CACHE CHECK] Status found: ${preprocessingStatus.status}")
-                log("[GrobidProcessor] [CACHE CHECK] Total pages: ${preprocessingStatus.totalPages}")
-                log("[GrobidProcessor] [CACHE CHECK] Extraction method: ${preprocessingStatus.extractionMethod}")
-                log("[GrobidProcessor] [CACHE CHECK] Quality score: ${preprocessingStatus.qualityScore}")
-
-                if (preprocessingStatus.status == com.potero.domain.model.PreprocessingStatus.COMPLETED) {
-                    log("[GrobidProcessor] [CACHE HIT] ✓ Preprocessing cache is COMPLETED")
-
-                    // Get cached full text from preprocessing
-                    log("[GrobidProcessor] [CACHE HIT] Retrieving cached text from database...")
-                    val cachedText = preprocessingRepository.getFullText(paperId).getOrNull()
-                    if (cachedText != null && cachedText.isNotBlank()) {
-                        log("[GrobidProcessor] [CACHE HIT] ✓✓✓ SUCCESS: Retrieved ${cachedText.length} chars from cache")
-                        log("[GrobidProcessor] [CACHE HIT] ✓✓✓ SKIPPING OCR - Using cached text")
-                        log("[GrobidProcessor] ========================================")
-                        return cachedText
-                    } else {
-                        log("[GrobidProcessor] [CACHE ERROR] ✗ Preprocessing marked as completed but no cached text found!")
-                        log("[GrobidProcessor] [CACHE ERROR] This should not happen - falling back to OCR")
-                    }
-                } else {
-                    log("[GrobidProcessor] [CACHE MISS] Preprocessing status is ${preprocessingStatus.status} (not COMPLETED)")
-                }
+                log("[GrobidProcessor] [CACHE MISS] Status found: ${preprocessingStatus.status}, but no cached text")
+                log("[GrobidProcessor] [CACHE MISS] This might mean preprocessing is still running")
             } else {
                 log("[GrobidProcessor] [CACHE MISS] No preprocessing cache found for paper $paperId")
-                log("[GrobidProcessor] [CACHE MISS] Will run full OCR extraction")
             }
 
             log("[GrobidProcessor] ========================================")

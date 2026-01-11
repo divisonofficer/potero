@@ -9,6 +9,8 @@ import com.potero.service.grobid.GrobidProcessor
 import com.potero.service.ocr.PdfOcrService
 import com.potero.service.pdf.PdfAnalyzer
 import com.potero.service.pdf.PdfDownloadService
+import com.potero.service.pdf.PdfBoxFigureExtractor
+import com.potero.db.PoteroDatabase
 import kotlinx.datetime.Clock
 import org.apache.pdfbox.Loader
 import org.apache.pdfbox.text.PDFTextStripper
@@ -36,7 +38,8 @@ class PdfPreprocessingService(
     private val pdfOcrService: PdfOcrService,
     private val pdfDownloadService: PdfDownloadService,
     private val paperRepository: PaperRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val database: PoteroDatabase
 ) {
 
     companion object {
@@ -324,7 +327,8 @@ class PdfPreprocessingService(
                 .getOrNull()?.equals("true", ignoreCase = true) ?: true
 
             if (!grobidEnabled) {
-                log("[Preprocessing] GROBID disabled, skipping")
+                log("[Preprocessing] GROBID disabled, using PDFBox for figure extraction...")
+                extractFiguresWithPdfBox(paperId, pdfPath)
                 return GrobidProcessStatus.SKIPPED
             }
 
@@ -370,6 +374,52 @@ class PdfPreprocessingService(
 
         preprocessingRepository.insertAllPageTexts(pageTexts).getOrThrow()
         log("[Preprocessing] Saved ${pageTexts.size} page texts to database")
+    }
+
+    /**
+     * Extract figures using PDFBox when GROBID is disabled or failed.
+     * Fallback method that extracts embedded images directly from PDF.
+     */
+    private fun extractFiguresWithPdfBox(paperId: String, pdfPath: String) {
+        try {
+            val outputDir = "/home/jinnyeong/potero/data/figures/$paperId"
+            val extractor = PdfBoxFigureExtractor()
+
+            val result = extractor.extractFigures(pdfPath, paperId, outputDir)
+
+            result.onSuccess { extractedFigures ->
+                // Delete existing figures for this paper
+                database.figureQueries.deleteFiguresByPaper(paperId)
+
+                // Insert extracted figures into database
+                var savedCount = 0
+                extractedFigures.forEach { fig ->
+                    try {
+                        database.figureQueries.insertFigure(
+                            id = fig.id,
+                            paper_id = fig.paperId,
+                            page_num = fig.pageNum.toLong(),
+                            xml_id = null, // No xml_id without GROBID
+                            label = fig.label,
+                            caption = fig.caption,
+                            image_path = fig.imagePath, // Already saved by extractor
+                            confidence = fig.confidence,
+                            created_at = Clock.System.now().toEpochMilliseconds()
+                        )
+                        savedCount++
+                    } catch (e: Exception) {
+                        log("[Preprocessing] Failed to save figure ${fig.id}: ${e.message}")
+                    }
+                }
+
+                log("[Preprocessing] ✓ Figures (PDFBox): ${savedCount} extracted and saved")
+            }.onFailure { error ->
+                log("[Preprocessing] ✗ PDFBox figure extraction failed: ${error.message}")
+                // Non-blocking - continue even if extraction fails
+            }
+        } catch (e: Exception) {
+            log("[Preprocessing] PDFBox fallback error: ${e.message}")
+        }
     }
 
     // === Helper Methods (from GrobidProcessor) ===

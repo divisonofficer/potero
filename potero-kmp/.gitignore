@@ -3,3 +3,8 @@ database/build/*
 server/build/*
 shared/build/*
 .kotlin/**
+
+# Generated data files
+data/figures/
+data/tables/
+data/thumbnails/

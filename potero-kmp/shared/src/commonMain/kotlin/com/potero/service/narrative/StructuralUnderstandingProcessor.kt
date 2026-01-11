@@ -29,9 +29,10 @@ class StructuralUnderstandingProcessor(
         paper: Paper,
         pdfText: String?,
         figures: List<FigureInfo>,
+        tables: List<TableInfo> = emptyList(),
         formulas: List<FormulaInfo> = emptyList()
     ): Result<StructuralUnderstanding> = runCatching {
-        val prompt = buildStructuralPrompt(paper, pdfText, figures, formulas)
+        val prompt = buildStructuralPrompt(paper, pdfText, figures, tables, formulas)
 
         val startTime = System.currentTimeMillis()
         val llmResult = llmService.chat(prompt)
@@ -73,6 +74,7 @@ class StructuralUnderstandingProcessor(
         paper: Paper,
         pdfText: String?,
         figures: List<FigureInfo>,
+        tables: List<TableInfo>,
         formulas: List<FormulaInfo>
     ): String = """
 You are an expert at understanding academic papers. Analyze the following paper and extract its structural understanding.
@@ -90,6 +92,11 @@ ${pdfText?.take(8000) ?: "Full text not available. Use abstract and title for an
 ## Figures in Paper
 ${if (figures.isEmpty()) "No figures available" else figures.mapIndexed { i, f ->
     "- ${f.label ?: "Figure ${i + 1}"}: ${f.caption ?: "No caption"}"
+}.joinToString("\n")}
+
+## Tables in Paper
+${if (tables.isEmpty()) "No tables available" else tables.mapIndexed { i, t ->
+    "- ${t.label ?: "Table ${i + 1}"}: ${t.caption ?: "No caption"}"
 }.joinToString("\n")}
 
 ## Formulas in Paper
@@ -215,5 +222,15 @@ data class FormulaInfo(
     val id: String,
     val label: String?,
     val latex: String?,
+    val pageNum: Int
+)
+
+/**
+ * Simple table info for processor input
+ */
+data class TableInfo(
+    val id: String,
+    val label: String?,
+    val caption: String?,
     val pageNum: Int
 )

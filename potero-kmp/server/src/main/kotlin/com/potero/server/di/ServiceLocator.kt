@@ -297,7 +297,8 @@ object ServiceLocator {
             pdfDownloadService = pdfDownloadService,
             settingsRepository = settingsRepository,
             pdfOcrService = pdfOcrService,
-            preprocessingRepository = pdfPreprocessingRepository
+            preprocessingRepository = pdfPreprocessingRepository,
+            database = database
         )
     }
 
@@ -308,7 +309,8 @@ object ServiceLocator {
             pdfOcrService = pdfOcrService,
             pdfDownloadService = pdfDownloadService,
             paperRepository = paperRepository,
-            settingsRepository = settingsRepository
+            settingsRepository = settingsRepository,
+            database = database
         )
     }
 
@@ -375,6 +377,22 @@ object ServiceLocator {
                     }
                 } catch (e: Exception) {
                     println("[ServiceLocator] Failed to load figures: ${e.message}")
+                    emptyList()
+                }
+            },
+            tableProvider = { paperId ->
+                // Load tables from database
+                try {
+                    database.pdfTableQueries.getTablesByPaper(paperId).executeAsList().map { table ->
+                        com.potero.service.narrative.TableInfo(
+                            id = table.id,
+                            label = table.label,
+                            caption = table.caption,
+                            pageNum = table.page_num.toInt()
+                        )
+                    }
+                } catch (e: Exception) {
+                    println("[ServiceLocator] Failed to load tables: ${e.message}")
                     emptyList()
                 }
             },

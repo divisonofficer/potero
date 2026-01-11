@@ -304,6 +304,29 @@ object DriverFactory {
             driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_person_mention_name ON PersonMention(person_name)", 0)
         }
 
+        // 6.7: PdfTable table
+        if (!tableExists("PdfTable")) {
+            println("[DB Migration] Creating PdfTable table")
+            driver.execute(null, """
+                CREATE TABLE IF NOT EXISTS PdfTable (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    paper_id TEXT NOT NULL REFERENCES Paper(id) ON DELETE CASCADE,
+                    page_num INTEGER NOT NULL,
+                    xml_id TEXT,
+                    label TEXT,
+                    caption TEXT,
+                    image_path TEXT,
+                    row_count INTEGER NOT NULL DEFAULT 0,
+                    col_count INTEGER NOT NULL DEFAULT 0,
+                    confidence REAL NOT NULL DEFAULT 0.70,
+                    created_at INTEGER NOT NULL
+                )
+            """.trimIndent(), 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_pdftable_paper ON PdfTable(paper_id)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_pdftable_page ON PdfTable(paper_id, page_num)", 0)
+            driver.execute(null, "CREATE INDEX IF NOT EXISTS idx_pdftable_xmlid ON PdfTable(paper_id, xml_id)", 0)
+        }
+
         // Migration 7: Create Narrative tables
 
         // 7.1: Narrative table

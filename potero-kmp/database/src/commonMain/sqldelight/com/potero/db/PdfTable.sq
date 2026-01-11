@@ -1,0 +1,78 @@
+-- Tables extracted from PDFs (by GROBID)
+-- Stores table captions, labels, and optional extracted images
+CREATE TABLE IF NOT EXISTS PdfTable (
+    id TEXT NOT NULL PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    page_num INTEGER NOT NULL,
+    xml_id TEXT,                    -- GROBID xml:id (e.g., "tab_0")
+    label TEXT,                     -- "Table 1", "Table 2", etc.
+    caption TEXT,                   -- Table caption text
+    image_path TEXT,                -- Path to extracted table image (optional)
+    row_count INTEGER NOT NULL DEFAULT 0,
+    col_count INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.70,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (paper_id) REFERENCES Paper(id) ON DELETE CASCADE
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_pdftable_paper ON PdfTable(paper_id);
+CREATE INDEX IF NOT EXISTS idx_pdftable_page ON PdfTable(paper_id, page_num);
+CREATE INDEX IF NOT EXISTS idx_pdftable_xmlid ON PdfTable(paper_id, xml_id);
+
+-- Insert a table
+insertTable:
+INSERT INTO PdfTable (id, paper_id, page_num, xml_id, label, caption, image_path, row_count, col_count, confidence, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- Update table image path
+updateTableImagePath:
+UPDATE PdfTable
+SET image_path = ?
+WHERE id = ?;
+
+-- Get table by ID
+getTableById:
+SELECT * FROM PdfTable
+WHERE id = ?
+LIMIT 1;
+
+-- Get all tables for a paper
+getTablesByPaper:
+SELECT * FROM PdfTable
+WHERE paper_id = ?
+ORDER BY page_num ASC, label ASC;
+
+-- Get tables for a specific page
+getTablesByPage:
+SELECT * FROM PdfTable
+WHERE paper_id = ? AND page_num = ?
+ORDER BY label ASC;
+
+-- Get table by xml_id
+getTableByXmlId:
+SELECT * FROM PdfTable
+WHERE paper_id = ? AND xml_id = ?
+LIMIT 1;
+
+-- Get table by label (e.g., "Table 1")
+getTableByLabel:
+SELECT * FROM PdfTable
+WHERE paper_id = ? AND label = ?
+LIMIT 1;
+
+-- Delete all tables for a paper
+deleteTablesByPaper:
+DELETE FROM PdfTable
+WHERE paper_id = ?;
+
+-- Count tables for a paper
+countTablesByPaper:
+SELECT COUNT(*) FROM PdfTable
+WHERE paper_id = ?;
+
+-- Search tables by caption
+searchTablesByCaption:
+SELECT * FROM PdfTable
+WHERE paper_id = ? AND caption LIKE '%' || ? || '%'
+ORDER BY page_num ASC;

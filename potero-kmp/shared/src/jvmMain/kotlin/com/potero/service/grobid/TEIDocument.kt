@@ -34,16 +34,6 @@ data class TEIAuthor(
 }
 
 /**
- * TEI document body with structural elements
- */
-data class TEIBody(
-    val citationSpans: List<TEICitationSpan>,
-    val figures: List<TEIFigure>,
-    val formulas: List<TEIFormula>,
-    val personMentions: List<TEIPersonMention>
-)
-
-/**
  * Citation span with bounding box and linking information
  */
 data class TEICitationSpan(
@@ -65,6 +55,16 @@ data class TEIFigure(
 )
 
 /**
+ * Table with caption and bounding boxes
+ */
+data class TEITable(
+    val xmlId: String,
+    val label: String?,  // "Table 1"
+    val caption: String?,
+    val bboxes: List<TEIBoundingBox>
+)
+
+/**
  * Formula with LaTeX and bounding boxes
  */
 data class TEIFormula(
@@ -72,6 +72,17 @@ data class TEIFormula(
     val label: String?,  // "(1)"
     val latex: String?,
     val bboxes: List<TEIBoundingBox>
+)
+
+/**
+ * TEI document body with structural elements
+ */
+data class TEIBody(
+    val citationSpans: List<TEICitationSpan>,
+    val figures: List<TEIFigure>,
+    val tables: List<TEITable>,
+    val formulas: List<TEIFormula>,
+    val personMentions: List<TEIPersonMention>
 )
 
 /**

@@ -125,10 +125,10 @@ fun Route.narrativeRoutes() {
                 )
             }
 
-            // Parse styles and languages
+            // Parse styles and languages (default: BLOG + Korean only)
             val styles = try {
                 request.styles?.map { NarrativeStyle.valueOf(it.uppercase()) }
-                    ?: NarrativeStyle.entries
+                    ?: listOf(NarrativeStyle.BLOG)  // Default: BLOG only
             } catch (e: Exception) {
                 return@post call.respond(
                     HttpStatusCode.BadRequest,
@@ -141,7 +141,7 @@ fun Route.narrativeRoutes() {
                     NarrativeLanguage.entries.find {
                         it.code == langCode || it.name.equals(langCode, ignoreCase = true)
                     } ?: throw IllegalArgumentException("Unknown language: $langCode")
-                } ?: NarrativeLanguage.entries
+                } ?: listOf(NarrativeLanguage.KOREAN)  // Default: Korean only
             } catch (e: Exception) {
                 return@post call.respond(
                     HttpStatusCode.BadRequest,

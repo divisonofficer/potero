@@ -33,6 +33,7 @@ class StyleRenderingProcessor(
         recomposed: RecomposedContent,
         concepts: List<ConceptExplanation>,
         figures: List<FigureInfo>,
+        tables: List<TableInfo> = emptyList(),
         formulas: List<FormulaInfo> = emptyList(),
         style: NarrativeStyle,
         language: NarrativeLanguage
@@ -40,7 +41,7 @@ class StyleRenderingProcessor(
         val narrativeId = UUID.randomUUID().toString()
 
         // Generate main content
-        val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, formulas, style, language)
+        val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, tables, formulas, style, language)
         val startTime = System.currentTimeMillis()
         val contentResult = llmService.chat(contentPrompt)
         val endTime = System.currentTimeMillis()
@@ -88,6 +89,19 @@ class StyleRenderingProcessor(
             emptyList()
         }
 
+        // Generate table explanations
+        val tableExplanations = if (tables.isNotEmpty() && recomposed.tableIntegrationPlan.isNotEmpty()) {
+            generateTableExplanations(
+                tables = tables,
+                placements = recomposed.tableIntegrationPlan,
+                style = style,
+                language = language,
+                narrativeId = narrativeId
+            )
+        } else {
+            emptyList()
+        }
+
         // Generate formula explanations
         val formulaExplanations = if (formulas.isNotEmpty() && recomposed.formulaIntegrationPlan.isNotEmpty()) {
             generateFormulaExplanations(
@@ -115,6 +129,7 @@ class StyleRenderingProcessor(
             content = content,
             summary = summary,
             figureExplanations = figureExplanations,
+            tableExplanations = tableExplanations,
             formulaExplanations = formulaExplanations,
             conceptExplanations = concepts.map { it.copy(narrativeId = narrativeId) },
             estimatedReadTime = estimateReadTime(content),
@@ -129,6 +144,7 @@ class StyleRenderingProcessor(
         recomposed: RecomposedContent,
         concepts: List<ConceptExplanation>,
         figures: List<FigureInfo>,
+        tables: List<TableInfo>,
         formulas: List<FormulaInfo>,
         style: NarrativeStyle,
         language: NarrativeLanguage
@@ -137,24 +153,69 @@ class StyleRenderingProcessor(
         val stylePersona = getStylePersona(style)
         val languageInstruction = getLanguageInstruction(language)
 
-        // Build figure integration section
-        val figureSection = if (figures.isNotEmpty()) {
-            val figureList = figures.mapIndexed { index, fig ->
-                val placement = recomposed.figureIntegrationPlan.find { it.figureId == fig.id }
-                """
-- **${fig.label ?: "Figure ${index + 1}"}**: ${fig.caption ?: "No caption"}
-  - Best placed: ${placement?.suggestedSection ?: "Where relevant"}
-  - Role: ${placement?.narrativeRole ?: "Supports the main argument"}
+        // Build figure integration section - only show figures in integration plan
+        val figureSection = if (figures.isNotEmpty() && recomposed.figureIntegrationPlan.isNotEmpty()) {
+            val plannedFigures = recomposed.figureIntegrationPlan.mapNotNull { placement ->
+                val fig = figures.find { it.id == placement.figureId }
+                fig?.let { Triple(it, placement, figures.indexOf(it) + 1) }
+            }
+
+            if (plannedFigures.isNotEmpty()) {
+                val figureList = plannedFigures.joinToString("\n") { (fig, placement, index) ->
+                    """
+- **${fig.label ?: "Figure $index"}** (ID: ${fig.id})
+  - Caption: ${fig.caption ?: "No caption"}
+  - Suggested Section: ${placement.suggestedSection}
+  - Role: ${placement.narrativeRole}
+  - Markdown: ![${fig.label ?: "Figure $index"}: ${fig.caption?.take(80) ?: "Visual"}](/api/figures/${fig.id}/image)
 """.trim()
-            }.joinToString("\n")
-            """
-## Available Figures (MUST reference these in your narrative)
+                }
+                """
+## Selected Figures for Integration (${plannedFigures.size} of ${figures.size} available)
 $figureList
 
-IMPORTANT: You MUST integrate ALL figures naturally into your narrative.
-For each figure, write "[See ${if (language == NarrativeLanguage.KOREAN) "Figure" else "Figure"} X: brief description]" at appropriate points.
-Explain what each figure shows and why it matters to readers.
+IMPORTANT: Include these figures at their suggested sections.
+- Review each caption carefully and place the figure where it best supports your narrative
+- Distribute figures across multiple sections (avoid clustering all figures in one place)
+- Add 1-2 sentences after each figure explaining what it shows and why it matters
+- You may skip a figure if it doesn't fit naturally into the narrative flow
 """
+            } else {
+                ""
+            }
+        } else {
+            ""
+        }
+
+        // Build table integration section - only show tables in integration plan
+        val tableSection = if (tables.isNotEmpty() && recomposed.tableIntegrationPlan.isNotEmpty()) {
+            val plannedTables = recomposed.tableIntegrationPlan.mapNotNull { placement ->
+                val table = tables.find { it.id == placement.tableId }
+                table?.let { Triple(it, placement, tables.indexOf(it) + 1) }
+            }
+
+            if (plannedTables.isNotEmpty()) {
+                val tableList = plannedTables.joinToString("\n") { (table, placement, index) ->
+                    """
+- **${table.label ?: "Table $index"}** (ID: ${table.id})
+  - Caption: ${table.caption ?: "No caption"}
+  - Suggested Section: ${placement.suggestedSection}
+  - Role: ${placement.narrativeRole}
+  - Markdown: ![${table.label ?: "Table $index"}: ${table.caption?.take(80) ?: "Data"}](/api/tables/${table.id}/image)
+""".trim()
+                }
+                """
+## Selected Tables for Integration (${plannedTables.size} of ${tables.size} available)
+$tableList
+
+IMPORTANT: Include these tables at their suggested sections.
+- Review each caption and place the table where it best supports your narrative
+- Add 1-2 sentences after each table explaining the key insights and what the data shows
+- You may skip a table if it doesn't add value to the narrative flow
+"""
+            } else {
+                ""
+            }
         } else {
             ""
         }
@@ -213,6 +274,8 @@ ${recomposed.narrativeOutline.map { section ->
 
 $figureSection
 
+$tableSection
+
 $formulaSection
 
 ## Concept Definitions to Include
@@ -228,8 +291,15 @@ Write in Markdown format with:
 - A compelling opening hook
 - Clear section headings (##)
 - Inline explanations for technical terms when first mentioned
-${if (figures.isNotEmpty()) "- **CRITICAL**: Reference ALL ${figures.size} figures at appropriate points using [See Figure X: description] format" else ""}
-${if (recomposed.formulaIntegrationPlan.isNotEmpty()) "- **CRITICAL**: Include ALL ${recomposed.formulaIntegrationPlan.size} key formulas with explanations" else ""}
+${if (recomposed.figureIntegrationPlan.isNotEmpty()) """- Include the selected figures as markdown images:
+  Format: ![Figure label: Caption text](/api/figures/FIGURE_ID/image)
+  Example: ![Figure 1: Network architecture](/api/figures/abc-123-def/image)
+  Place each figure at its suggested section where it best supports the text""" else ""}
+${if (recomposed.tableIntegrationPlan.isNotEmpty()) """- Include the selected tables as markdown images:
+  Format: ![Table label: Caption text](/api/tables/TABLE_ID/image)
+  Example: ![Table 1: Results comparison](/api/tables/xyz-456-abc/image)
+  Add insights after each table explaining key patterns or findings""" else ""}
+${if (recomposed.formulaIntegrationPlan.isNotEmpty()) "- Include the selected key formulas with explanations" else ""}
 - A memorable conclusion
 
 ${getLanguageReminder(language)}
@@ -258,18 +328,19 @@ Begin writing the narrative now:
             val figureList = figures.mapIndexed { index, fig ->
                 val placement = recomposed.figureIntegrationPlan.find { it.figureId == fig.id }
                 """
-- **${fig.label ?: "Figure ${index + 1}"}**: ${fig.caption ?: "No caption"}
-  - Best placed: ${placement?.suggestedSection ?: "Where relevant"}
+- **${fig.label ?: "Figure ${index + 1}"}** (ID: ${fig.id}): ${fig.caption ?: "No caption"}
+  - Best placed: Section ${placement?.suggestedSection ?: "any"}
   - Role: ${placement?.narrativeRole ?: "Supports the main argument"}
+  - Markdown: ![${fig.label ?: "Figure ${index + 1}"}: ${fig.caption?.take(80) ?: "Visual"}](/api/figures/${fig.id}/image)
 """.trim()
             }.joinToString("\n")
             """
-## Available Figures (MUST reference these in your narrative)
+## Available Figures (MUST include these in your narrative)
 $figureList
 
-IMPORTANT: You MUST integrate ALL figures naturally into your narrative.
-For each figure, write "[See ${if (language == NarrativeLanguage.KOREAN) "Figure" else "Figure"} X: brief description]" at appropriate points.
-Explain what each figure shows and why it matters to readers.
+IMPORTANT: You MUST include ALL ${figures.size} figures as markdown images at appropriate points.
+Use the exact markdown syntax provided above for each figure.
+Add 1-2 sentences after each figure explaining what it shows and why it matters.
 """
         } else {
             ""
@@ -318,7 +389,10 @@ Write in Markdown format with:
 - A compelling opening hook
 - Clear section headings (##)
 - Inline explanations for technical terms when first mentioned
-${if (figures.isNotEmpty()) "- **CRITICAL**: Reference ALL ${figures.size} figures at appropriate points using [See Figure X: description] format" else ""}
+${if (figures.isNotEmpty()) """- **CRITICAL**: Include ALL ${figures.size} figures as markdown images at appropriate points:
+  Format: ![Figure label: Caption text](/api/figures/FIGURE_ID/image)
+  Example: ![Figure 1: Network architecture](/api/figures/abc-123-def/image)
+  Place figures where they support the narrative best""" else ""}
 - A memorable conclusion
 
 ${getLanguageReminder(language)}
@@ -479,6 +553,109 @@ Respond with ONLY the JSON object.
             } ?: emptyList()
         } catch (e: Exception) {
             println("[StyleRendering] Failed to parse figure explanations: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private suspend fun generateTableExplanations(
+        tables: List<TableInfo>,
+        placements: List<TablePlacement>,
+        style: NarrativeStyle,
+        language: NarrativeLanguage,
+        narrativeId: String
+    ): List<TableExplanation> {
+        val prompt = buildTablePrompt(tables, placements, style, language)
+
+        val result = llmService.chat(prompt)
+        val response = result.getOrNull() ?: return emptyList()
+
+        return parseTableExplanations(response, tables, narrativeId)
+    }
+
+    private fun buildTablePrompt(
+        tables: List<TableInfo>,
+        placements: List<TablePlacement>,
+        style: NarrativeStyle,
+        language: NarrativeLanguage
+    ): String {
+        val languageNote = if (language == NarrativeLanguage.KOREAN)
+            "Write all explanations in Korean (한국어)."
+        else
+            "Write all explanations in English."
+
+        return """
+$languageNote
+
+Explain these tables for a ${getStylePersona(style)}:
+
+## Tables
+${tables.mapIndexed { i, t ->
+    val placement = placements.find { it.tableId == t.id }
+    """
+Table ${i + 1} (id: ${t.id}):
+- Label: ${t.label ?: "Table ${i + 1}"}
+- Original Caption: ${t.caption ?: "No caption available"}
+- Role in Narrative: ${placement?.narrativeRole ?: "Presents data comparison"}
+""".trim()
+}.joinToString("\n\n")}
+
+## Your Task
+For each table, provide a ${style.name.lowercase()}-style explanation.
+
+Respond in JSON:
+{
+    "tables": [
+        {
+            "tableId": "table_id",
+            "summary": "2-3 sentence summary of what the table shows",
+            "keyInsights": "The most important insights or patterns from the data"
+        }
+    ]
+}
+
+Respond with ONLY the JSON object.
+""".trimIndent()
+    }
+
+    private fun parseTableExplanations(
+        response: String,
+        tables: List<TableInfo>,
+        narrativeId: String
+    ): List<TableExplanation> {
+        return try {
+            var jsonText = response
+                .trim()
+                .removePrefix("```json")
+                .removePrefix("```")
+                .removeSuffix("```")
+                .trim()
+
+            jsonText = jsonText.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "").trim()
+
+            val jsonStart = jsonText.indexOf('{')
+            val jsonEnd = jsonText.lastIndexOf('}')
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                jsonText = jsonText.substring(jsonStart, jsonEnd + 1)
+            }
+
+            val parsed = json.decodeFromString<TablesResponseJson>(jsonText)
+            val now = Clock.System.now()
+
+            parsed.tables?.mapNotNull { t ->
+                val tableInfo = tables.find { it.id == t.tableId } ?: return@mapNotNull null
+                TableExplanation(
+                    id = UUID.randomUUID().toString(),
+                    narrativeId = narrativeId,
+                    tableId = t.tableId ?: "",
+                    label = tableInfo.label ?: "Table",
+                    originalCaption = tableInfo.caption,
+                    summary = t.summary ?: "Summary not available",
+                    keyInsights = t.keyInsights,
+                    createdAt = now
+                )
+            } ?: emptyList()
+        } catch (e: Exception) {
+            println("[StyleRendering] Failed to parse table explanations: ${e.message}")
             emptyList()
         }
     }
@@ -712,6 +889,18 @@ private data class FormulaJson(
     val formulaId: String? = null,
     val explanation: String? = null,
     val relevance: String? = null
+)
+
+@Serializable
+private data class TablesResponseJson(
+    val tables: List<TableJson>? = null
+)
+
+@Serializable
+private data class TableJson(
+    val tableId: String? = null,
+    val summary: String? = null,
+    val keyInsights: String? = null
 )
 
 @Serializable

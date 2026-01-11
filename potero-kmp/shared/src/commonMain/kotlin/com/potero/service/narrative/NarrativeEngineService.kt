@@ -20,6 +20,7 @@ class NarrativeEngineService(
     private val cacheService: NarrativeCacheService,
     private val preprocessedPdfProvider: PreprocessedPdfProvider,
     private val figureProvider: suspend (String) -> List<FigureInfo>,
+    private val tableProvider: suspend (String) -> List<TableInfo>,
     private val formulaProvider: suspend (String) -> List<FormulaInfo>
 ) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
@@ -49,6 +50,7 @@ class NarrativeEngineService(
             ?: throw IllegalArgumentException("Paper not found: $paperId")
 
         val figures = loadFigures(paperId)
+        val tables = loadTables(paperId)
         val formulas = loadFormulas(paperId)
 
         // Get PDF text from preprocessed cache
@@ -64,7 +66,7 @@ class NarrativeEngineService(
         ))
 
         val structural = cacheService.getOrComputeStructural(paperId) {
-            structuralProcessor.process(paper, pdfText, figures, formulas).getOrThrow()
+            structuralProcessor.process(paper, pdfText, figures, tables, formulas).getOrThrow()
         }
 
         // 3. Stage 2: Content Recomposition (cacheable)
@@ -76,7 +78,7 @@ class NarrativeEngineService(
         ))
 
         val recomposed = cacheService.getOrComputeRecomposed(paperId) {
-            recompositionProcessor.process(structural, figures, formulas).getOrThrow()
+            recompositionProcessor.process(structural, figures, tables, formulas).getOrThrow()
         }
 
         // 4. Stage 3: Concept Simplification
@@ -124,6 +126,8 @@ class NarrativeEngineService(
                     recomposed = recomposed,
                     concepts = concepts,
                     figures = figures,
+                    tables = tables,
+                    formulas = formulas,
                     style = style,
                     language = language
                 ).getOrThrow()
@@ -203,6 +207,15 @@ class NarrativeEngineService(
             figureProvider(paperId)
         } catch (e: Exception) {
             println("[NarrativeEngine] Failed to load figures: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private suspend fun loadTables(paperId: String): List<TableInfo> {
+        return try {
+            tableProvider(paperId)
+        } catch (e: Exception) {
+            println("[NarrativeEngine] Failed to load tables: ${e.message}")
             emptyList()
         }
     }

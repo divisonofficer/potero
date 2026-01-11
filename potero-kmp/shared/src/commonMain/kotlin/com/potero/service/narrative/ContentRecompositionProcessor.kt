@@ -28,9 +28,10 @@ class ContentRecompositionProcessor(
     suspend fun process(
         structural: StructuralUnderstanding,
         figures: List<FigureInfo>,
+        tables: List<TableInfo> = emptyList(),
         formulas: List<FormulaInfo> = emptyList()
     ): Result<RecomposedContent> = runCatching {
-        val prompt = buildRecompositionPrompt(structural, figures, formulas)
+        val prompt = buildRecompositionPrompt(structural, figures, tables, formulas)
 
         val startTime = System.currentTimeMillis()
         val llmResult = llmService.chat(prompt)
@@ -69,6 +70,7 @@ class ContentRecompositionProcessor(
     private fun buildRecompositionPrompt(
         structural: StructuralUnderstanding,
         figures: List<FigureInfo>,
+        tables: List<TableInfo>,
         formulas: List<FormulaInfo>
     ): String = """
 You are a science communicator. Based on the structural understanding below, create a narrative outline that will be engaging for general readers.
@@ -90,6 +92,11 @@ ${structural.sections.map { s ->
 ## Available Figures
 ${if (figures.isEmpty()) "No figures available" else figures.mapIndexed { i, f ->
     "Figure ${i + 1} (id: ${f.id}): ${f.caption ?: "No caption"}"
+}.joinToString("\n")}
+
+## Available Tables
+${if (tables.isEmpty()) "No tables available" else tables.mapIndexed { i, t ->
+    "Table ${i + 1} (id: ${t.id}): ${t.caption ?: "No caption"}"
 }.joinToString("\n")}
 
 ## Available Formulas (Key Equations)
@@ -158,6 +165,13 @@ Respond in JSON:
             "narrativeRole": "illustrates the main concept"
         }
     ],
+    "tableIntegrationPlan": [
+        {
+            "tableId": "table_id",
+            "suggestedSection": 5,
+            "narrativeRole": "compares results or shows benchmark data"
+        }
+    ],
     "formulaIntegrationPlan": [
         {
             "formulaId": "formula_id",
@@ -171,6 +185,8 @@ Respond in JSON:
 Guidelines:
 - suggestedLength: "short" (100-200 words), "medium" (200-400 words), "long" (400-600 words)
 - narrativeRole examples: "introduces the problem", "visualizes the solution", "shows comparison", "demonstrates results"
+- For figures: Select visual content that best supports the narrative
+- For tables: Include comparison tables or benchmark results that show key findings
 - For formulas: Select 2-3 key equations that are essential to understanding the method (not all formulas)
 - conceptsToExplain: List technical terms that need explanation for general readers
 
@@ -214,6 +230,13 @@ Respond with ONLY the JSON object, no additional text.
                         narrativeRole = f.narrativeRole ?: "supports the narrative"
                     )
                 } ?: emptyList(),
+                tableIntegrationPlan = parsed.tableIntegrationPlan?.map { t ->
+                    TablePlacement(
+                        tableId = t.tableId ?: "",
+                        suggestedSection = t.suggestedSection ?: 1,
+                        narrativeRole = t.narrativeRole ?: "presents data comparison"
+                    )
+                } ?: emptyList(),
                 formulaIntegrationPlan = parsed.formulaIntegrationPlan?.map { formula ->
                     FormulaPlacement(
                         formulaId = formula.formulaId ?: "",
@@ -232,6 +255,7 @@ Respond with ONLY the JSON object, no additional text.
                 paperId = paperId,
                 narrativeOutline = getDefaultOutline(),
                 figureIntegrationPlan = emptyList(),
+                tableIntegrationPlan = emptyList(),
                 formulaIntegrationPlan = emptyList(),
                 conceptsToExplain = emptyList()
             )
@@ -251,6 +275,7 @@ Respond with ONLY the JSON object, no additional text.
 private data class RecomposedContentJson(
     val narrativeOutline: List<NarrativeSectionJson>? = null,
     val figureIntegrationPlan: List<FigurePlacementJson>? = null,
+    val tableIntegrationPlan: List<TablePlacementJson>? = null,
     val formulaIntegrationPlan: List<FormulaPlacementJson>? = null,
     val conceptsToExplain: List<String>? = null
 )
@@ -267,6 +292,13 @@ private data class NarrativeSectionJson(
 @Serializable
 private data class FigurePlacementJson(
     val figureId: String? = null,
+    val suggestedSection: Int? = null,
+    val narrativeRole: String? = null
+)
+
+@Serializable
+private data class TablePlacementJson(
+    val tableId: String? = null,
     val suggestedSection: Int? = null,
     val narrativeRole: String? = null
 )

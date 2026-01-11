@@ -75,6 +75,7 @@ object TEIParser {
         return TEIBody(
             citationSpans = parseCitationSpans(bodyElem),
             figures = parseFigures(bodyElem),
+            tables = parseTables(bodyElem),
             formulas = parseFormulas(bodyElem),
             personMentions = parsePersonMentions(bodyElem)
         )
@@ -101,17 +102,34 @@ object TEIParser {
     }
 
     /**
-     * Parse figures with captions
+     * Parse figures with captions (excludes tables)
      */
     private fun parseFigures(bodyElem: Element?): List<TEIFigure> {
         if (bodyElem == null) return emptyList()
 
-        return bodyElem.select("figure").map { figElem ->
+        return bodyElem.select("figure:not([type=table])").map { figElem ->
             TEIFigure(
                 xmlId = figElem.attr("xml:id"),
                 label = figElem.selectFirst("head")?.text(),
                 caption = figElem.selectFirst("figDesc")?.text(),
                 bboxes = parseCoordsAttribute(figElem.attr("coords"))
+            )
+        }
+    }
+
+    /**
+     * Parse tables with captions
+     * In GROBID TEI, tables are encoded as <figure type="table">
+     */
+    private fun parseTables(bodyElem: Element?): List<TEITable> {
+        if (bodyElem == null) return emptyList()
+
+        return bodyElem.select("figure[type=table]").map { tableElem ->
+            TEITable(
+                xmlId = tableElem.attr("xml:id"),
+                label = tableElem.selectFirst("head")?.text(),
+                caption = tableElem.selectFirst("figDesc")?.text(),
+                bboxes = parseCoordsAttribute(tableElem.attr("coords"))
             )
         }
     }

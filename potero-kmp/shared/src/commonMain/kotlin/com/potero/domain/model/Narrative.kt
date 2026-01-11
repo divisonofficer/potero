@@ -23,26 +23,6 @@ enum class NarrativeLanguage(val code: String, val displayName: String) {
 }
 
 /**
- * A generated narrative for a paper
- */
-@Serializable
-data class Narrative(
-    val id: String,
-    val paperId: String,
-    val style: NarrativeStyle,
-    val language: NarrativeLanguage,
-    val title: String,
-    val content: String,
-    val summary: String,
-    val figureExplanations: List<FigureExplanation> = emptyList(),
-    val formulaExplanations: List<FormulaExplanation> = emptyList(),
-    val conceptExplanations: List<ConceptExplanation> = emptyList(),
-    val estimatedReadTime: Int = 5,
-    val createdAt: Instant,
-    val updatedAt: Instant
-)
-
-/**
  * Figure explanation for narrative
  */
 @Serializable
@@ -54,6 +34,21 @@ data class FigureExplanation(
     val originalCaption: String? = null,
     val explanation: String,
     val relevance: String? = null,
+    val createdAt: Instant
+)
+
+/**
+ * Table explanation for narrative
+ */
+@Serializable
+data class TableExplanation(
+    val id: String,
+    val narrativeId: String,
+    val tableId: String,
+    val label: String,
+    val originalCaption: String? = null,
+    val summary: String,
+    val keyInsights: String? = null,
     val createdAt: Instant
 )
 
@@ -87,6 +82,27 @@ data class ConceptExplanation(
 )
 
 /**
+ * A generated narrative for a paper
+ */
+@Serializable
+data class Narrative(
+    val id: String,
+    val paperId: String,
+    val style: NarrativeStyle,
+    val language: NarrativeLanguage,
+    val title: String,
+    val content: String,
+    val summary: String,
+    val figureExplanations: List<FigureExplanation> = emptyList(),
+    val tableExplanations: List<TableExplanation> = emptyList(),
+    val formulaExplanations: List<FormulaExplanation> = emptyList(),
+    val conceptExplanations: List<ConceptExplanation> = emptyList(),
+    val estimatedReadTime: Int = 5,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
  * Intermediate result from structural understanding stage (Stage 1)
  */
 @Serializable
@@ -117,6 +133,7 @@ data class RecomposedContent(
     val paperId: String,
     val narrativeOutline: List<NarrativeSection> = emptyList(),
     val figureIntegrationPlan: List<FigurePlacement> = emptyList(),
+    val tableIntegrationPlan: List<TablePlacement> = emptyList(),
     val formulaIntegrationPlan: List<FormulaPlacement> = emptyList(),
     val conceptsToExplain: List<String> = emptyList()
 )
@@ -138,6 +155,13 @@ data class FigurePlacement(
 )
 
 @Serializable
+data class TablePlacement(
+    val tableId: String,
+    val suggestedSection: Int,
+    val narrativeRole: String
+)
+
+@Serializable
 data class FormulaPlacement(
     val formulaId: String,
     val suggestedSection: Int,
@@ -146,12 +170,15 @@ data class FormulaPlacement(
 
 /**
  * Generation request for narrative
+ *
+ * Default behavior: Generate BLOG style in Korean only (1 narrative)
+ * To generate multiple: Specify desired styles/languages explicitly
  */
 @Serializable
 data class NarrativeGenerationRequest(
     val paperId: String,
-    val styles: List<NarrativeStyle> = NarrativeStyle.entries,
-    val languages: List<NarrativeLanguage> = NarrativeLanguage.entries,
+    val styles: List<NarrativeStyle> = listOf(NarrativeStyle.BLOG),  // Default: BLOG only
+    val languages: List<NarrativeLanguage> = listOf(NarrativeLanguage.KOREAN),  // Default: Korean only
     val includeFigureExplanations: Boolean = true,
     val includeConceptExplanations: Boolean = true,
     val regenerate: Boolean = false
