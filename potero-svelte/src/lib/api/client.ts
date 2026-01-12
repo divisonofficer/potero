@@ -327,6 +327,71 @@ class ApiClient {
 		}
 	}
 
+	/**
+	 * Fetch user's GenAI API keys using SSO Bearer token
+	 * Returns the first API key if available, or null if none exist
+	 */
+	async fetchGenAIApiKeys(accessToken: string): Promise<{
+		success: boolean;
+		apiKey?: string;
+		apiKeyPreview?: string;
+		hasKeys: boolean;
+		error?: string;
+	}> {
+		try {
+			const response = await fetch('https://genai.postech.ac.kr/v2/datahub/user-api-keys', {
+				method: 'GET',
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					'Content-Type': 'application/json'
+				}
+			});
+
+			if (!response.ok) {
+				return {
+					success: false,
+					hasKeys: false,
+					error: `Failed to fetch API keys: ${response.status}`
+				};
+			}
+
+			const result = await response.json();
+
+			if (result.code === '200' && result.data && result.data.length > 0) {
+				// Return the first (most recent) API key
+				const firstKey = result.data[0];
+				return {
+					success: true,
+					apiKey: firstKey.rawApiKey,
+					apiKeyPreview: firstKey.apiKeyPreview,
+					hasKeys: true
+				};
+			}
+
+			return {
+				success: true,
+				hasKeys: false
+			};
+		} catch (error) {
+			return {
+				success: false,
+				hasKeys: false,
+				error: error instanceof Error ? error.message : 'Failed to fetch API keys'
+			};
+		}
+	}
+
+	/**
+	 * Open external URL (for API key generation page)
+	 */
+	openExternalUrl(url: string): void {
+		if (typeof window !== 'undefined' && window.electronAPI?.openExternal) {
+			window.electronAPI.openExternal(url);
+		} else {
+			window.open(url, '_blank');
+		}
+	}
+
 	// File Upload - uses direct backend URL to avoid proxy issues with large files
 	// Now returns UploadAnalysisResponse with PDF analysis results
 	async uploadPdf(
@@ -927,6 +992,7 @@ export interface Settings {
 	llmApiKey: string | null;
 	llmProvider: string;
 	pdfStoragePath: string | null;
+	databasePath: string | null;
 	theme: string;
 	semanticScholarApiKey: string | null;
 	// SSO Authentication for POSTECH GenAI file upload
@@ -939,6 +1005,8 @@ export interface Settings {
 	grobidEnabled?: boolean;
 	pdftotextEnabled?: boolean;
 	ocrEnabled?: boolean;
+	// Onboarding
+	onboardingCompleted?: boolean;
 }
 
 export interface APIConfigDto {

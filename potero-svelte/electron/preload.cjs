@@ -30,6 +30,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     windowClose: () => ipcRenderer.invoke('window-close'),
 
     /**
+     * Open folder selection dialog
+     * Returns: string (selected path) or null if cancelled
+     */
+    selectDirectory: () => ipcRenderer.invoke('select-directory'),
+
+    /**
+     * Open external URL in default browser
+     */
+    openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+    /**
      * Check if running in Electron
      */
     isElectron: true

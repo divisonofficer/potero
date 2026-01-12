@@ -53,6 +53,8 @@
 	import FloatingNotePanel from '$lib/components/notes/FloatingNotePanel.svelte';
 	import FloatingSearchModal from '$lib/components/FloatingSearchModal.svelte';
 	import SearchResultsDialog from '$lib/components/SearchResultsDialog.svelte';
+	import { OnboardingWizard } from '$lib/components/onboarding';
+	import { checkOnboardingRequired, startOnboarding } from '$lib/stores/onboarding';
 	import JobStatusPanel from '$lib/components/JobStatusPanel.svelte';
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
 	import AuthorModal from '$lib/components/AuthorModal.svelte';
@@ -66,6 +68,9 @@
 	import { SubmissionDashboard, SubmissionsList } from '$lib/components/submission';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
 	import { Network, ChevronDown, X, Home, FileText, Tag, User, BookOpen, StickyNote, FolderOpen } from 'lucide-svelte';
+
+	// Onboarding state
+	let showOnboarding = $state(false);
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
@@ -333,9 +338,16 @@
 		isBulkReanalyzing = false;
 	}
 
-	onMount(() => {
+	onMount(async () => {
 		initializeLibrary();
-		loadSettings();
+		await loadSettings();
+
+		// Check if onboarding is needed
+		const needsOnboarding = await checkOnboardingRequired();
+		if (needsOnboarding) {
+			startOnboarding();
+			showOnboarding = true;
+		}
 	});
 
 	// Trigger online search when local results are few
@@ -351,6 +363,12 @@
 		if (result.success && result.data) {
 			settings = result.data;
 		}
+	}
+
+	async function handleOnboardingComplete() {
+		showOnboarding = false;
+		await loadSettings();
+		toast.success('Setup complete! Welcome to Potero.');
 	}
 
 	async function saveSettings() {
@@ -750,15 +768,17 @@
 					</div>
 
 					{#if viewingPaper?.pdfUrl && PdfViewer}
-						<svelte:component
-							this={PdfViewer}
-							pdfUrl={viewingPaper.pdfUrl}
-							paperId={viewingPaper.id}
-							paper={viewingPaper}
-							tabId={$activeTab?.id}
-							initialState={$activeTab?.viewerState}
-							onOpenPaper={openPaperById}
-						/>
+						{#key $activeTab?.id}
+							<svelte:component
+								this={PdfViewer}
+								pdfUrl={viewingPaper.pdfUrl}
+								paperId={viewingPaper.id}
+								paper={viewingPaper}
+								tabId={$activeTab?.id}
+								initialState={$activeTab?.viewerState}
+								onOpenPaper={openPaperById}
+							/>
+						{/key}
 					{:else if viewingPaper?.pdfUrl && !PdfViewer}
 						<div class="flex flex-1 items-center justify-center bg-muted/20">
 							<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
@@ -1372,6 +1392,11 @@
 <!-- Floating Search Modal -->
 {#if showFloatingSearch}
 	<FloatingSearchModal onClose={() => showFloatingSearch = false} />
+{/if}
+
+<!-- Onboarding Wizard -->
+{#if showOnboarding}
+	<OnboardingWizard onComplete={handleOnboardingComplete} />
 {/if}
 
 <svelte:window onkeydown={(e) => {

@@ -76,4 +76,10 @@ object SettingsKeys {
     const val OCR_LANGUAGE = "ocr.language" // "eng" | "kor" | "eng+kor"
     const val OCR_DPI = "ocr.dpi" // "150" | "300" (default: 300)
     const val OCR_ENGINE_MODE = "ocr.engineMode" // "0" (legacy) | "1" (neural) | "2" (combined) | "3" (default)
+
+    // Onboarding
+    const val ONBOARDING_COMPLETED = "onboarding.completed" // "true" | "false"
+
+    // Database Storage Path (Windows-specific)
+    const val DATABASE_PATH = "storage.databasePath"
 }

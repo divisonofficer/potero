@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, dialog, shell } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
@@ -349,6 +349,27 @@ ipcMain.handle('window-maximize', () => {
 
 ipcMain.handle('window-close', () => {
     if (mainWindow) mainWindow.close();
+});
+
+// ============ Directory Selection Handler ============
+
+/**
+ * Open a folder selection dialog (Windows-focused)
+ * Returns the selected folder path or null if cancelled
+ */
+ipcMain.handle('select-directory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select Storage Directory'
+    });
+    return result.canceled ? null : result.filePaths[0];
+});
+
+/**
+ * Open external URL in default browser
+ */
+ipcMain.handle('open-external', async (event, url) => {
+    await shell.openExternal(url);
 });
 
 // ============ App Lifecycle ============
