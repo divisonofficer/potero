@@ -7,7 +7,8 @@ import type {
 	TagProfile,
 	JournalProfile,
 	ResearchNote,
-	RelatedWorkQuery
+	RelatedWorkQuery,
+	SubmissionWorkflow
 } from '$lib/types';
 
 // Initial tab
@@ -308,6 +309,55 @@ export function openRelatedWork(paper: Paper) {
 				searchMethod: 'semantic',
 				maxResults: 20
 			}
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open submissions list tab
+ */
+export function openSubmissionsList() {
+	tabs.update(($tabs) => {
+		// Check if already open
+		const existing = $tabs.find((t) => t.type === 'submissions-list');
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: 'submissions-list',
+			type: 'submissions-list',
+			title: 'Submissions'
+		};
+
+		activeTabId.set(newTab.id);
+		return [...$tabs, newTab];
+	});
+}
+
+/**
+ * Open submission workflow tab for a specific submission
+ */
+export function openSubmissionWorkflow(submission: SubmissionWorkflow) {
+	tabs.update(($tabs) => {
+		// Check if already open for this submission
+		const existing = $tabs.find(
+			(t) => t.type === 'submission' && t.submission?.id === submission.id
+		);
+		if (existing) {
+			activeTabId.set(existing.id);
+			return $tabs;
+		}
+
+		const newTab: Tab = {
+			id: `submission-${submission.id}-${Date.now()}`,
+			type: 'submission',
+			title: submission.articleId,
+			submission
 		};
 
 		activeTabId.set(newTab.id);

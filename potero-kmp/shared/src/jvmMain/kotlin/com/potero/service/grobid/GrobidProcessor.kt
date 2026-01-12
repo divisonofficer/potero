@@ -244,7 +244,29 @@ class GrobidProcessor(
 
             // Convert TEI models to domain models
             val citationSpans = convertCitationSpans(paperId, teiDocument.body.citationSpans)
-            val references = convertReferences(paperId, teiDocument.references)
+            var references = convertReferences(paperId, teiDocument.references)
+
+            // If GROBID found 0 references, try LLM fallback
+            if (references.isEmpty()) {
+                log("[GrobidProcessor] GROBID found 0 references, trying LLM fallback...")
+                try {
+                    val referencesText: String? = extractReferencesTextForLLM(paperId, currentPdfPath)
+                    if (!referencesText.isNullOrBlank()) {
+                        val llmReferences = llmReferenceParser.parse(referencesText, paperId).getOrNull()
+                        if (!llmReferences.isNullOrEmpty()) {
+                            log("[GrobidProcessor] LLM fallback found ${llmReferences.size} references")
+                            references = llmReferences
+                        } else {
+                            log("[GrobidProcessor] LLM fallback found no references")
+                        }
+                    } else {
+                        log("[GrobidProcessor] No references text found for LLM fallback")
+                    }
+                } catch (e: Exception) {
+                    log("[GrobidProcessor] LLM fallback failed: ${e.message}")
+                }
+            }
+
             val figures = convertFigures(paperId, teiDocument.body.figures)
             val tables = convertTables(paperId, teiDocument.body.tables)
             val formulas = convertFormulas(paperId, teiDocument.body.formulas)
@@ -428,8 +450,8 @@ class GrobidProcessor(
 
         log("[GrobidProcessor] Extracting ${teiFigures.size} figure images...")
         val extractor = FigureImageExtractor()
-        val dataDir = File("/home/jinnyeong/potero/data/figures/$paperId")
-        dataDir.mkdirs()
+        val figuresBaseDir = File(System.getProperty("user.home"), ".potero/data/figures/$paperId")
+        figuresBaseDir.mkdirs()
 
         var successCount = 0
         var failCount = 0
@@ -442,7 +464,7 @@ class GrobidProcessor(
                 return@forEach
             }
 
-            val outputPath = "/home/jinnyeong/potero/data/figures/$paperId/${dbFigure.id}.png"
+            val outputPath = File(figuresBaseDir, "${dbFigure.id}.png").absolutePath
 
             extractor.extractFigureImage(pdfPath, bbox, outputPath)
                 .onSuccess { path ->
@@ -518,8 +540,8 @@ class GrobidProcessor(
 
         log("[GrobidProcessor] Extracting ${teiTables.size} table images...")
         val extractor = TableImageExtractor()
-        val dataDir = File("/home/jinnyeong/potero/data/tables/$paperId")
-        dataDir.mkdirs()
+        val tablesBaseDir = File(System.getProperty("user.home"), ".potero/data/tables/$paperId")
+        tablesBaseDir.mkdirs()
 
         var successCount = 0
         var failCount = 0
@@ -532,7 +554,7 @@ class GrobidProcessor(
                 return@forEach
             }
 
-            val outputPath = "/home/jinnyeong/potero/data/tables/$paperId/${dbTable.id}.png"
+            val outputPath = File(tablesBaseDir, "${dbTable.id}.png").absolutePath
 
             extractor.extractTableImage(pdfPath, bbox, outputPath)
                 .onSuccess { path ->
@@ -560,7 +582,7 @@ class GrobidProcessor(
      */
     private suspend fun extractFiguresWithPdfBox(paperId: String, pdfPath: String) {
         try {
-            val outputDir = "/home/jinnyeong/potero/data/figures/$paperId"
+            val outputDir = File(System.getProperty("user.home"), ".potero/data/figures/$paperId").absolutePath
 
             // Create extractor with page text provider for caption inference
             val extractor = PdfBoxFigureExtractor(
@@ -697,6 +719,45 @@ class GrobidProcessor(
         log("[GrobidProcessor] Text quality check: control=${String.format("%.2f%%", controlRatio * 100)}, letters=${String.format("%.2f%%", letterRatio * 100)}, printable=${String.format("%.2f%%", printableRatio * 100)} -> ${if (isGarbled) "GARBLED ✗" else "OK ✓"}")
 
         return isGarbled
+    }
+
+    /**
+     * Extract references text from PDF for LLM fallback parsing.
+     * Tries cached preprocessing text first, then PdfAnalyzer as fallback.
+     */
+    private suspend fun extractReferencesTextForLLM(paperId: String, pdfPath: String): String? {
+        return try {
+            // Try 1: Use cached preprocessing text
+            val cachedText = preprocessingRepository.getFullText(paperId).getOrNull()
+            if (!cachedText.isNullOrBlank()) {
+                val lines = cachedText.lines()
+                val referencesStart = lines.indexOfFirst { line ->
+                    line.trim().equals("References", ignoreCase = true) ||
+                    line.trim().equals("Bibliography", ignoreCase = true)
+                }
+                if (referencesStart >= 0) {
+                    log("[GrobidProcessor] Found References section in cached text")
+                    return lines.drop(referencesStart).joinToString("\n")
+                }
+            }
+
+            // Try 2: Use PdfAnalyzer
+            val analyzer = PdfAnalyzer(pdfPath)
+            val result = analyzer.analyzeReferences()
+            if (result.references.isNotEmpty()) {
+                log("[GrobidProcessor] PdfAnalyzer found ${result.references.size} references")
+                return result.references.joinToString("\n\n") { ref ->
+                    "[${ref.number}] ${ref.rawText}"
+                }
+            }
+
+            // Try 3: Extract last pages as fallback
+            log("[GrobidProcessor] Extracting last 15 pages for references")
+            extractLastPagesText(pdfPath, maxPages = 15)
+        } catch (e: Exception) {
+            log("[GrobidProcessor] Failed to extract references text: ${e.message}")
+            null
+        }
     }
 
     /**

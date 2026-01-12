@@ -244,7 +244,7 @@
 >
 	<!-- Search Box -->
 	<div
-		class="w-full max-w-2xl rounded-xl bg-background shadow-2xl"
+		class="w-full max-w-2xl rounded-xl glass shadow-glass"
 		onclick={(e) => e.stopPropagation()}
 	>
 		<!-- Search Input -->

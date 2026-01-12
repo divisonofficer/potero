@@ -151,8 +151,16 @@ class FigureImageExtractor {
      */
     private fun saveImage(image: BufferedImage, outputPath: String): String {
         val outputFile = File(outputPath)
-        outputFile.parentFile?.mkdirs()
-        ImageIO.write(image, "png", outputFile)
+        val parentDir = outputFile.parentFile
+        if (parentDir != null && !parentDir.exists()) {
+            val created = parentDir.mkdirs()
+            if (!created && !parentDir.exists()) {
+                throw java.io.IOException("Failed to create directory: ${parentDir.absolutePath}")
+            }
+        }
+        java.io.FileOutputStream(outputFile).use { fos ->
+            ImageIO.write(image, "png", fos)
+        }
         return outputPath
     }
 }

@@ -424,13 +424,35 @@
 			// Handle local file paths - convert to blob URL via API
 			let url = pdfUrl;
 			if (pdfUrl.startsWith('/') || pdfUrl.startsWith('~')) {
-				// Fetch PDF through backend API
+				// Fetch PDF through backend API (local file)
 				const response = await fetch(`/api/pdf/file?path=${encodeURIComponent(pdfUrl)}`);
 				if (!response.ok) {
 					throw new Error('Failed to load PDF file');
 				}
 				const blob = await response.blob();
 				url = URL.createObjectURL(blob);
+			} else if (pdfUrl.startsWith('http://') || pdfUrl.startsWith('https://')) {
+				// Fetch PDF through backend proxy (external URL) to avoid CORS issues
+				const response = await fetch(`/api/pdf/proxy?url=${encodeURIComponent(pdfUrl)}`);
+				if (!response.ok) {
+					throw new Error('Failed to load PDF from external URL');
+				}
+				const blob = await response.blob();
+				url = URL.createObjectURL(blob);
+
+				// Trigger background download to save PDF locally for future use
+				if (paperId) {
+					console.log('[PdfViewer] Triggering background PDF download for local storage');
+					api.downloadPdf(paperId).then((result) => {
+						if (result.success && result.data) {
+							console.log('[PdfViewer] PDF saved locally:', result.data.pdfPath);
+							// Update pdfUrl to local path so future operations use local file
+							pdfUrl = result.data.pdfPath;
+						}
+					}).catch((err) => {
+						console.warn('[PdfViewer] Background PDF download failed:', err);
+					});
+				}
 			}
 
 			const loadingTask = pdfjsLib.getDocument(url);
@@ -920,18 +942,79 @@
 		const pdfWidth = viewport.width;
 		const pdfHeight = viewport.height;
 
+		// Check for CropBox offset (arXiv PDFs often have left margin for watermark)
+		// @ts-ignore - view property exists on PDF.js page
+		const pageView = page.view; // [x1, y1, x2, y2] - CropBox or MediaBox
+		const offsetX = pageView ? pageView[0] : 0;
+		const offsetY = pageView ? pageView[1] : 0;
+
 		// Scale factor from PDF coordinates to display coordinates
 		const scaleX = canvasWidth / pdfWidth;
 		const scaleY = canvasHeight / pdfHeight;
 
+		// Get text content from PDF.js for accurate positioning
+		const textContent = await page.getTextContent();
+		const displayViewport = page.getViewport({ scale: scaleX }); // Use display scale
+
+		// Build a map of text items with their positions
+		const textItems: Array<{text: string, x: number, y: number, width: number, height: number}> = [];
+		for (const item of textContent.items) {
+			if ('str' in item && item.str) {
+				const tx = pdfjsLib.Util.transform(displayViewport.transform, item.transform);
+				textItems.push({
+					text: item.str,
+					x: tx[4],
+					y: tx[5] - item.height * scaleY, // Adjust for baseline
+					width: item.width * scaleX,
+					height: item.height * scaleY
+				});
+			}
+		}
+
 		// Create overlay for each citation span
 		let validOverlays = 0;
 		for (const span of pageSpans) {
-			// Backend bbox is already in top-left origin, no Y-flip needed
-			let displayX1 = span.bbox.x1 * scaleX;
-			let displayY1 = span.bbox.y1 * scaleY;
-			let displayX2 = span.bbox.x2 * scaleX;
-			let displayY2 = span.bbox.y2 * scaleY;
+			// Try to find citation text in PDF.js text layer for accurate position
+			let displayX1: number | null = null;
+			let displayY1: number | null = null;
+			let displayX2: number | null = null;
+			let displayY2: number | null = null;
+
+			// Search for the citation text in text items
+			const searchText = span.rawText.trim();
+			for (const item of textItems) {
+				const idx = item.text.indexOf(searchText);
+				if (idx !== -1) {
+					// Found the text - calculate position
+					// For exact match (item contains only the citation), use full item bounds
+					if (item.text.trim() === searchText) {
+						displayX1 = item.x;
+						displayY1 = item.y;
+						displayX2 = item.x + item.width;
+						displayY2 = item.y + item.height + 4;
+					} else {
+						// Partial match - use proportional positioning
+						// Calculate start position based on prefix ratio
+						const prefixRatio = idx / item.text.length;
+						const textRatio = searchText.length / item.text.length;
+						displayX1 = item.x + item.width * prefixRatio;
+						displayY1 = item.y;
+						displayX2 = item.x + item.width * (prefixRatio + textRatio);
+						displayY2 = item.y + item.height + 4;
+					}
+					console.log(`[PDF] Found "${searchText}" in "${item.text.substring(0, 30)}..." at (${displayX1!.toFixed(1)}, ${displayY1!.toFixed(1)})`);
+					break;
+				}
+			}
+
+			// Fallback to GROBID bbox if not found in text layer
+			if (displayX1 === null) {
+				displayX1 = span.bbox.x1 * scaleX;
+				displayY1 = span.bbox.y1 * scaleY;
+				displayX2 = span.bbox.x2 * scaleX;
+				displayY2 = span.bbox.y2 * scaleY;
+				console.log(`[PDF] Using GROBID bbox for "${searchText}" (not found in text layer)`);
+			}
 
 			const width = displayX2 - displayX1;
 			const rawHeight = displayY2 - displayY1;
