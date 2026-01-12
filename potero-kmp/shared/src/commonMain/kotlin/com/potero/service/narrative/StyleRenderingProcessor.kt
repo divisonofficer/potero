@@ -5,6 +5,7 @@ import com.potero.service.llm.LLMService
 import com.potero.service.llm.LLMLogger
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
@@ -24,6 +25,8 @@ class StyleRenderingProcessor(
         prettyPrint = false
     }
 
+    private val editorialRewriter = EditorialRewriter(llmService)
+
     /**
      * Render the final narrative
      */
@@ -40,41 +43,100 @@ class StyleRenderingProcessor(
     ): Result<Narrative> = runCatching {
         val narrativeId = UUID.randomUUID().toString()
 
-        // Generate main content
-        val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, tables, formulas, style, language)
-        val startTime = System.currentTimeMillis()
-        val contentResult = llmService.chat(contentPrompt)
-        val endTime = System.currentTimeMillis()
+        // Generate main content (REDDIT style uses special thread generation)
+        val content = if (style == NarrativeStyle.REDDIT) {
+            // Generate Reddit Thread
+            val redditThread = generateRedditThread(
+                paper = paper,
+                structural = structural,
+                recomposed = recomposed,
+                figures = figures,
+                tables = tables,
+                formulas = formulas,
+                language = language
+            )
 
-        val content = contentResult.fold(
-            onSuccess = { response ->
-                llmLogger.log(
-                    provider = llmService.provider,
-                    purpose = "narrative_render_${style.name.lowercase()}_${language.code}",
-                    inputPrompt = contentPrompt,
-                    outputResponse = response,
-                    durationMs = endTime - startTime,
-                    success = true,
-                    paperId = paper.id,
-                    paperTitle = paper.title
-                )
-                response
-            },
-            onFailure = { error ->
-                llmLogger.log(
-                    provider = llmService.provider,
-                    purpose = "narrative_render_${style.name.lowercase()}_${language.code}",
-                    inputPrompt = contentPrompt,
-                    outputResponse = null,
-                    durationMs = endTime - startTime,
-                    success = false,
-                    errorMessage = error.message,
-                    paperId = paper.id,
-                    paperTitle = paper.title
-                )
-                throw error
-            }
-        )
+            // Serialize to JSON
+            json.encodeToString<RedditThread>(redditThread)
+        } else {
+            // Pass A: Generate draft content
+            val contentPrompt = buildContentPrompt(paper, structural, recomposed, concepts, figures, tables, formulas, style, language)
+            val startTime = System.currentTimeMillis()
+            val contentResult = llmService.chat(contentPrompt)
+            val endTime = System.currentTimeMillis()
+
+            val draftContent = contentResult.fold(
+                onSuccess = { response ->
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "narrative_render_draft_${style.name.lowercase()}_${language.code}",
+                        inputPrompt = contentPrompt,
+                        outputResponse = response,
+                        durationMs = endTime - startTime,
+                        success = true,
+                        paperId = paper.id,
+                        paperTitle = paper.title
+                    )
+                    response
+                },
+                onFailure = { error ->
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "narrative_render_draft_${style.name.lowercase()}_${language.code}",
+                        inputPrompt = contentPrompt,
+                        outputResponse = null,
+                        durationMs = endTime - startTime,
+                        success = false,
+                        errorMessage = error.message,
+                        paperId = paper.id,
+                        paperTitle = paper.title
+                    )
+                    throw error
+                }
+            )
+
+            // Pass B: Apply editorial improvements
+            val editorialStartTime = System.currentTimeMillis()
+            val editedContent = editorialRewriter.applyEditorialPass(
+                draftContent = draftContent,
+                outline = recomposed.narrativeOutline,
+                style = style,
+                language = language
+            )
+            val editorialEndTime = System.currentTimeMillis()
+
+            editedContent.fold(
+                onSuccess = { edited: String ->
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "narrative_editorial_${style.name.lowercase()}_${language.code}",
+                        inputPrompt = "Editorial pass on ${draftContent.length} chars",
+                        outputResponse = edited,
+                        durationMs = editorialEndTime - editorialStartTime,
+                        success = true,
+                        paperId = paper.id,
+                        paperTitle = paper.title
+                    )
+                    edited
+                },
+                onFailure = { error: Throwable ->
+                    llmLogger.log(
+                        provider = llmService.provider,
+                        purpose = "narrative_editorial_${style.name.lowercase()}_${language.code}",
+                        inputPrompt = "Editorial pass",
+                        outputResponse = null,
+                        durationMs = editorialEndTime - editorialStartTime,
+                        success = false,
+                        errorMessage = error.message,
+                        paperId = paper.id,
+                        paperTitle = paper.title
+                    )
+                    // Fallback to draft if editorial fails
+                    println("[StyleRendering] Editorial pass failed, using draft: ${error.message}")
+                    draftContent
+                }
+            )
+        }
 
         // Generate figure explanations
         val figureExplanations = if (figures.isNotEmpty()) {
@@ -300,11 +362,33 @@ ${if (recomposed.tableIntegrationPlan.isNotEmpty()) """- **CRITICAL**: Use the E
 ${if (recomposed.formulaIntegrationPlan.isNotEmpty()) "- Include the selected key formulas with explanations" else ""}
 - A memorable conclusion
 
+**Avoid These Generic Phrases:**
+- "This paper makes an important contribution"
+- "The results are impressive" or "The results are significant"
+- "This is a significant improvement" (without specific numbers)
+- "The method is novel" (without explaining how)
+- "Future work should explore..." (without specific directions)
+
+**Instead, use specific evidence:**
+- "This paper improves X from 85% to 92.7% (Table 1)"
+- "The method achieves SOTA on benchmark Y (Section 4.2)"
+- "Unlike previous work, this approach reduces latency by 40%"
+
 ${getLanguageReminder(language)}
 
 **IMPORTANT**: When including figures or tables, copy the markdown line EXACTLY from the lists above.
 Do NOT use placeholder IDs like "abc-123-def" or "xyz-456-abc".
 Use the actual IDs provided in the figure/table lists.
+
+## Self-Check Before Submitting
+
+For each major section, verify:
+- [ ] At least 2 paper-specific details mentioned (methods, results, specific innovations)
+- [ ] At least 1 evidence reference (Figure/Table/Section citation)
+- [ ] All technical terms defined inline when first mentioned
+- [ ] No vague claims without supporting numbers or evidence
+
+If any section fails these checks, revise it to include specific details and evidence.
 
 Begin writing the narrative now:
 """.trimIndent()
@@ -866,6 +950,753 @@ Respond with ONLY the JSON object.
         // Average reading speed: ~200 words per minute for technical content
         val wordCount = content.split(Regex("\\s+")).size
         return maxOf(1, (wordCount / 200.0).toInt())
+    }
+
+    // =============================================================================
+    // Reddit Thread Generation
+    // =============================================================================
+
+    /**
+     * Generate a Reddit Thread for the paper
+     */
+    private suspend fun generateRedditThread(
+        paper: Paper,
+        structural: StructuralUnderstanding,
+        recomposed: RecomposedContent,
+        figures: List<FigureInfo>,
+        tables: List<TableInfo>,
+        formulas: List<FormulaInfo>,
+        language: NarrativeLanguage
+    ): RedditThread {
+        // Generate OP (Original Post)
+        val op = generateOP(paper, structural, figures, tables, formulas, language)
+
+        // Generate top-level comments (one per role)
+        val roles = RedditRole.entries
+        val topLevelComments = roles.mapIndexed { index, role ->
+            generateComment(
+                role = role,
+                structural = structural,
+                figures = figures,
+                tables = tables,
+                language = language,
+                parentId = null,
+                depth = 1,
+                order = index
+            )
+        }
+
+        // Generate replies from OP
+        val replies = topLevelComments.mapIndexed { index, comment ->
+            generateReply(
+                parentComment = comment,
+                structural = structural,
+                language = language,
+                depth = 2,
+                order = index
+            )
+        }
+
+        return RedditThread(
+            originalPost = op,
+            comments = topLevelComments + replies
+        )
+    }
+
+    /**
+     * Generate the Original Post
+     */
+    private suspend fun generateOP(
+        paper: Paper,
+        structural: StructuralUnderstanding,
+        figures: List<FigureInfo>,
+        tables: List<TableInfo>,
+        formulas: List<FormulaInfo>,
+        language: NarrativeLanguage
+    ): RedditPost {
+        val languageInstruction = if (language == NarrativeLanguage.KOREAN) {
+            "Write in Korean (한국어). Use casual, friendly Korean."
+        } else {
+            "Write in English. Use casual, conversational tone."
+        }
+
+        val prompt = """
+$languageInstruction
+
+You are writing a Reddit post (OP) about this research paper.
+
+## Paper Information
+- Title: ${paper.title}
+- Authors: ${paper.formattedAuthors}
+- Venue: ${paper.conference ?: "Unknown"}
+- Year: ${paper.year ?: "Unknown"}
+
+## Paper Understanding
+- Main Objective: ${structural.mainObjective}
+- Research Question: ${structural.researchQuestion}
+- Methodology: ${structural.methodology}
+- Key Findings: ${structural.keyFindings.joinToString("; ")}
+- Contributions: ${structural.contributions.joinToString("; ")}
+
+## Claims (for reference in your post)
+${structural.claims.mapIndexed { i, claim ->
+    "[Claim #$i] ${claim.statement} (${claim.type}, confidence: ${claim.confidence})"
+}.joinToString("\n")}
+
+## Available Figures
+${figures.take(5).mapIndexed { i, f ->
+    "- ${f.label ?: "Figure ${i + 1}"} (ID: ${f.id}): ${f.caption ?: "No caption"}"
+}.joinToString("\n")}
+
+## Available Tables
+${tables.take(5).mapIndexed { i, t ->
+    "- ${t.label ?: "Table ${i + 1}"} (ID: ${t.id}): ${t.caption ?: "No caption"}"
+}.joinToString("\n")}
+
+## Your Task
+Write a Reddit OP with this structure:
+
+**[Catchy Title, max 200 chars]**
+
+**TL;DR** (3 bullet points)
+- Key finding 1 [Claim #X]
+- Key finding 2 [Claim #Y]
+- Why it matters [Claim #Z]
+
+**Introduction** (2-3 sentences)
+Hook the reader. Why should they care about this problem?
+
+**The Approach** (3-4 sentences)
+ELI5 explanation of the method. Keep it simple!
+
+**Results** (3-5 bullet points)
+- Result 1 [Claim #A]
+  ![Figure label](/api/figures/FIGURE_ID/image)
+- Result 2 [Claim #B]
+  ![Table label](/api/tables/TABLE_ID/image)
+
+**Why This Matters** (2-3 sentences)
+Real-world implications.
+
+**Limitations** (2-3 bullet points)
+${structural.limitations.take(3).map { "- $it" }.joinToString("\n")}
+
+**Related Work** (if available)
+${if (structural.relatedPapers.isNotEmpty()) {
+    structural.relatedPapers.take(3).map { "- ${it.title} (${it.year ?: "N/A"}): ${it.relationship}" }.joinToString("\n")
+} else {
+    "(No related papers listed)"
+}}
+
+## Rules
+1. Use [Claim #X] notation to reference claims (0-indexed)
+2. Use markdown images for figures/tables: ![Label](/api/figures/{id}/image)
+3. Casual, conversational tone - like you're explaining to a friend
+4. Use **bold** for emphasis
+5. Max 1200 words
+6. Be enthusiastic but honest about limitations
+
+Respond with ONLY the markdown text of the post. No JSON, no code blocks.
+""".trimIndent()
+
+        val startTime = System.currentTimeMillis()
+        val result = llmService.chat(prompt)
+        val endTime = System.currentTimeMillis()
+
+        return result.fold(
+            onSuccess = { response ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_op_generation",
+                    inputPrompt = prompt,
+                    outputResponse = response,
+                    durationMs = endTime - startTime,
+                    success = true,
+                    paperId = paper.id,
+                    paperTitle = paper.title
+                )
+
+                val claimRefs = extractClaimReferences(response)
+                val score = calculateOPScore(structural.claims, claimRefs)
+
+                RedditPost(
+                    id = "op_${UUID.randomUUID()}",
+                    parentId = null,
+                    role = null,
+                    author = "OP",
+                    content = response.trim(),
+                    claimReferences = claimRefs,
+                    depth = 0,
+                    order = 0,
+                    score = score
+                )
+            },
+            onFailure = { error ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_op_generation",
+                    inputPrompt = prompt,
+                    outputResponse = null,
+                    durationMs = endTime - startTime,
+                    success = false,
+                    errorMessage = error.message,
+                    paperId = paper.id,
+                    paperTitle = paper.title
+                )
+
+                // Fallback OP
+                RedditPost(
+                    id = "op_${UUID.randomUUID()}",
+                    parentId = null,
+                    role = null,
+                    author = "OP",
+                    content = "**${paper.title}**\n\nTL;DR: ${structural.mainObjective}",
+                    claimReferences = emptyList(),
+                    depth = 0,
+                    order = 0,
+                    score = 500
+                )
+            }
+        )
+    }
+
+    /**
+     * Generate a role-based comment
+     */
+    private suspend fun generateComment(
+        role: RedditRole,
+        structural: StructuralUnderstanding,
+        figures: List<FigureInfo>,
+        tables: List<TableInfo>,
+        language: NarrativeLanguage,
+        parentId: String?,
+        depth: Int,
+        order: Int
+    ): RedditPost {
+        val languageInstruction = if (language == NarrativeLanguage.KOREAN) {
+            "Write in Korean (한국어). Use casual Reddit comment style."
+        } else {
+            "Write in English. Use casual Reddit comment style."
+        }
+
+        val prompt = buildCommentPrompt(role, structural, figures, tables, languageInstruction)
+
+        val startTime = System.currentTimeMillis()
+        val result = llmService.chat(prompt)
+        val endTime = System.currentTimeMillis()
+
+        return result.fold(
+            onSuccess = { response ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_comment_${role.name.lowercase()}",
+                    inputPrompt = prompt,
+                    outputResponse = response,
+                    durationMs = endTime - startTime,
+                    success = true
+                )
+
+                val claimRefs = extractClaimReferences(response)
+                val score = calculateCommentScore(role, structural.claims, claimRefs)
+
+                RedditPost(
+                    id = "c_${role.name.lowercase()}_${UUID.randomUUID()}",
+                    parentId = parentId,
+                    role = role,
+                    author = "${role.name.lowercase()}_user",
+                    content = response.trim(),
+                    claimReferences = claimRefs,
+                    depth = depth,
+                    order = order,
+                    score = score
+                )
+            },
+            onFailure = { error ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_comment_${role.name.lowercase()}",
+                    inputPrompt = prompt,
+                    outputResponse = null,
+                    durationMs = endTime - startTime,
+                    success = false,
+                    errorMessage = error.message
+                )
+
+                // Fallback comment
+                RedditPost(
+                    id = "c_${role.name.lowercase()}_${UUID.randomUUID()}",
+                    parentId = parentId,
+                    role = role,
+                    author = "${role.name.lowercase()}_user",
+                    content = "Interesting paper! Looking forward to reading more about this.",
+                    claimReferences = emptyList(),
+                    depth = depth,
+                    order = order,
+                    score = 50
+                )
+            }
+        )
+    }
+
+    /**
+     * Build role-specific comment prompt
+     */
+    private fun buildCommentPrompt(
+        role: RedditRole,
+        structural: StructuralUnderstanding,
+        figures: List<FigureInfo>,
+        tables: List<TableInfo>,
+        languageInstruction: String
+    ): String {
+        val claimsList = structural.claims.mapIndexed { i, claim ->
+            "[Claim #$i] ${claim.statement} (${claim.type}, confidence: ${claim.confidence})"
+        }.joinToString("\n")
+
+        return when (role) {
+            RedditRole.SKEPTIC -> """
+$languageInstruction
+
+You are a skeptical researcher commenting on this paper.
+
+## Available Claims
+$claimsList
+
+## Your Task
+Challenge 1-2 specific claims by asking for more evidence or questioning methodology.
+- Reference [Claim #X] in your comment
+- Be constructive, not rude
+- Ask specific questions about experimental setup, baselines, or fairness
+
+Write 2-3 sentences. Casual but intelligent tone.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.IMPLEMENTER -> """
+$languageInstruction
+
+You want to reproduce this work.
+
+## Available Claims
+$claimsList
+
+## Your Task
+Ask practical implementation questions:
+- Code availability?
+- Hyperparameters?
+- Compute requirements?
+- Training time?
+- Dataset details?
+
+Reference [Claim #X] if relevant.
+Write 2-3 sentences.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.REVIEWER_2 -> """
+$languageInstruction
+
+You are an academic reviewer providing constructive critique.
+
+## Available Claims
+$claimsList
+
+## Your Task
+Point out potential weaknesses:
+- Missing ablations?
+- Statistical significance?
+- Limited datasets?
+- Related work gaps?
+- Generalization concerns?
+
+Reference [Claim #X].
+Write 3-4 sentences. Professional but critical tone.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.ELI5 -> """
+$languageInstruction
+
+You don't understand technical jargon and want simpler explanations.
+
+## Paper Summary
+- Objective: ${structural.mainObjective}
+- Methodology: ${structural.methodology}
+
+## Your Task
+Ask for simpler explanations of complex concepts:
+- "What does [technical term] mean?"
+- "Can you explain [method] without equations?"
+- "ELI5: how does this actually work?"
+
+Write 1-2 friendly, curious questions.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.RELATED_PAPER -> """
+$languageInstruction
+
+You know the research landscape well.
+
+## Related Papers
+${if (structural.relatedPapers.isNotEmpty()) {
+    structural.relatedPapers.take(3).map { "- ${it.title} (${it.year ?: "N/A"})" }.joinToString("\n")
+} else {
+    "(No related papers listed)"
+}}
+
+## Your Task
+Mention 2-3 related works and how they compare:
+- "This reminds me of [Paper X] from [Year]"
+- "How does this differ from [approach]?"
+- "You should also check out [Paper Y]"
+
+Write 3-4 sentences.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.COMPARATIVE_CRITIC -> """
+$languageInstruction
+
+You've read similar papers and want to compare.
+
+## Available Claims
+$claimsList
+
+## Your Task
+Compare with related approaches:
+- "I read [Paper X] which does [similar thing]"
+- "What makes this better than [baseline]?"
+- "The improvement seems marginal compared to [method]"
+
+Reference [Claim #X] when comparing results.
+Write 2-3 sentences. Slightly provocative but fair.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+
+            RedditRole.ALTERNATIVE_VIEW -> """
+$languageInstruction
+
+You present an alternative perspective.
+
+## Available Claims
+$claimsList
+
+## Your Task
+Challenge an assumption or propose alternative interpretation:
+- "What if we approached this differently by [alternative]?"
+- "I disagree with [assumption] because..."
+- "Another way to interpret [result] is..."
+
+Reference [Claim #X].
+Write 2-3 sentences. Respectful disagreement.
+Respond with ONLY the comment text, no JSON.
+""".trimIndent()
+        }
+    }
+
+    /**
+     * Generate OP's reply to a comment
+     */
+    private suspend fun generateReply(
+        parentComment: RedditPost,
+        structural: StructuralUnderstanding,
+        language: NarrativeLanguage,
+        depth: Int,
+        order: Int
+    ): RedditPost {
+        val languageInstruction = if (language == NarrativeLanguage.KOREAN) {
+            "Write in Korean (한국어). Respond as the paper's advocate."
+        } else {
+            "Write in English. Respond as the paper's advocate."
+        }
+
+        val claimsList = structural.claims.mapIndexed { i, claim ->
+            "[Claim #$i] ${claim.statement}\nEvidence: ${claim.evidence.snippet}"
+        }.joinToString("\n\n")
+
+        val prompt = """
+$languageInstruction
+
+You are responding to a comment as the OP (original poster).
+
+## Original Comment
+Role: ${parentComment.role}
+Author: ${parentComment.author}
+Content: ${parentComment.content}
+
+## Available Claims with Evidence
+$claimsList
+
+## Your Task
+Answer the comment using claim evidence:
+- Be helpful and factual
+- Reference [Claim #X] to support your answer
+- If challenged, defend with evidence or acknowledge limitation
+- Keep it friendly and informative
+
+Write 2-3 sentences.
+Respond with ONLY the reply text, no JSON.
+""".trimIndent()
+
+        val startTime = System.currentTimeMillis()
+        val result = llmService.chat(prompt)
+        val endTime = System.currentTimeMillis()
+
+        return result.fold(
+            onSuccess = { response ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_reply_op",
+                    inputPrompt = prompt,
+                    outputResponse = response,
+                    durationMs = endTime - startTime,
+                    success = true
+                )
+
+                val claimRefs = extractClaimReferences(response)
+
+                RedditPost(
+                    id = "r_op_${UUID.randomUUID()}",
+                    parentId = parentComment.id,
+                    role = null,
+                    author = "OP",
+                    content = response.trim(),
+                    claimReferences = claimRefs,
+                    depth = depth,
+                    order = order,
+                    score = (parentComment.score * 0.6).toInt().coerceAtLeast(30)
+                )
+            },
+            onFailure = { error ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_reply_op",
+                    inputPrompt = prompt,
+                    outputResponse = null,
+                    durationMs = endTime - startTime,
+                    success = false,
+                    errorMessage = error.message
+                )
+
+                // Fallback reply
+                RedditPost(
+                    id = "r_op_${UUID.randomUUID()}",
+                    parentId = parentComment.id,
+                    role = null,
+                    author = "OP",
+                    content = "Thanks for your comment! That's a great point to consider.",
+                    claimReferences = emptyList(),
+                    depth = depth,
+                    order = order,
+                    score = 30
+                )
+            }
+        )
+    }
+
+    /**
+     * Extract [Claim #X] references from text
+     */
+    private fun extractClaimReferences(text: String): List<Int> {
+        val regex = Regex("""\[Claim #(\d+)\]""")
+        return regex.findAll(text)
+            .map { it.groupValues[1].toInt() }
+            .distinct()
+            .toList()
+    }
+
+    /**
+     * Calculate OP score based on claims referenced
+     */
+    private fun calculateOPScore(claims: List<Claim>, claimRefs: List<Int>): Int {
+        val baseScore = 500
+        val avgConfidence = claimRefs.mapNotNull { ref ->
+            claims.getOrNull(ref)?.confidence
+        }.map { conf ->
+            when (conf) {
+                ClaimConfidence.HIGH -> 1.0
+                ClaimConfidence.MEDIUM -> 0.7
+                ClaimConfidence.LOW -> 0.4
+            }
+        }.average().takeIf { !it.isNaN() } ?: 0.7
+
+        return (baseScore + (avgConfidence * 500)).toInt()
+    }
+
+    /**
+     * Calculate comment score based on role and claims
+     */
+    private fun calculateCommentScore(role: RedditRole, claims: List<Claim>, claimRefs: List<Int>): Int {
+        val baseScore = when (role) {
+            RedditRole.SKEPTIC -> 120
+            RedditRole.IMPLEMENTER -> 180
+            RedditRole.REVIEWER_2 -> 80
+            RedditRole.ELI5 -> 150
+            RedditRole.RELATED_PAPER -> 100
+            RedditRole.COMPARATIVE_CRITIC -> 90
+            RedditRole.ALTERNATIVE_VIEW -> 70
+        }
+
+        // Adjust based on claim confidence
+        val avgConfidence = claimRefs.mapNotNull { ref ->
+            claims.getOrNull(ref)?.confidence
+        }.map { conf ->
+            when (conf) {
+                ClaimConfidence.HIGH -> 1.0
+                ClaimConfidence.MEDIUM -> 0.8
+                ClaimConfidence.LOW -> 0.5
+            }
+        }.average().takeIf { !it.isNaN() } ?: 0.7
+
+        // Limitation claims get lower scores (controversial)
+        val hasLimitationClaim = claimRefs.any { ref ->
+            claims.getOrNull(ref)?.type == ClaimType.LIMITATION
+        }
+
+        val multiplier = if (hasLimitationClaim) 0.7 else 1.0
+
+        return (baseScore * avgConfidence * multiplier).toInt()
+    }
+
+    // =============================================================================
+    // Interactive User Comments
+    // =============================================================================
+
+    /**
+     * Generate AI reply to a user's comment
+     * Returns the updated RedditThread with the user comment and AI reply added
+     */
+    suspend fun handleUserComment(
+        currentThread: RedditThread,
+        userComment: String,
+        structural: StructuralUnderstanding,
+        language: NarrativeLanguage,
+        parentId: String? = null
+    ): Result<RedditThread> = runCatching {
+        // Create user's comment post
+        val userPost = RedditPost(
+            id = "u_${UUID.randomUUID()}",
+            parentId = parentId,
+            role = null,
+            author = "User",
+            content = userComment,
+            claimReferences = extractClaimReferences(userComment),
+            depth = if (parentId == null) 1 else 2,
+            order = currentThread.comments.count { it.parentId == parentId },
+            score = 1
+        )
+
+        // Generate AI reply to user's comment
+        val aiReply = generateUserReply(
+            userComment = userPost,
+            structural = structural,
+            language = language
+        )
+
+        // Add both user comment and AI reply to thread
+        val updatedComments = currentThread.comments + userPost + aiReply
+
+        RedditThread(
+            originalPost = currentThread.originalPost,
+            comments = updatedComments
+        )
+    }
+
+    /**
+     * Generate OP's reply to a user comment
+     */
+    private suspend fun generateUserReply(
+        userComment: RedditPost,
+        structural: StructuralUnderstanding,
+        language: NarrativeLanguage
+    ): RedditPost {
+        val languageInstruction = if (language == NarrativeLanguage.KOREAN) {
+            "Write in Korean (한국어). Respond as the paper's advocate."
+        } else {
+            "Write in English. Respond as the paper's advocate."
+        }
+
+        val claimsList = structural.claims.mapIndexed { i, claim ->
+            "[Claim #$i] ${claim.statement}\nEvidence: ${claim.evidence.snippet}"
+        }.joinToString("\n\n")
+
+        val prompt = """
+$languageInstruction
+
+You are responding to a user's comment as the OP (original poster) who wrote about this research paper.
+
+## User's Comment
+${userComment.content}
+
+## Available Claims with Evidence
+$claimsList
+
+## Your Task
+Answer the user's comment using claim evidence:
+- Be helpful, friendly, and informative
+- Reference [Claim #X] to support your answer with evidence from the paper
+- If the user asks a question, answer it directly
+- If the user challenges something, defend with evidence or acknowledge if it's a valid limitation
+- Keep the conversational tone of Reddit
+
+Write 2-4 sentences.
+Respond with ONLY the reply text, no JSON, no code blocks.
+""".trimIndent()
+
+        val startTime = System.currentTimeMillis()
+        val result = llmService.chat(prompt)
+        val endTime = System.currentTimeMillis()
+
+        return result.fold(
+            onSuccess = { response ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_user_reply",
+                    inputPrompt = prompt,
+                    outputResponse = response,
+                    durationMs = endTime - startTime,
+                    success = true
+                )
+
+                val claimRefs = extractClaimReferences(response)
+
+                RedditPost(
+                    id = "r_user_${UUID.randomUUID()}",
+                    parentId = userComment.id,
+                    role = null,
+                    author = "OP",
+                    content = response.trim(),
+                    claimReferences = claimRefs,
+                    depth = userComment.depth + 1,
+                    order = 0,
+                    score = 50
+                )
+            },
+            onFailure = { error ->
+                llmLogger.log(
+                    provider = llmService.provider,
+                    purpose = "reddit_user_reply",
+                    inputPrompt = prompt,
+                    outputResponse = null,
+                    durationMs = endTime - startTime,
+                    success = false,
+                    errorMessage = error.message
+                )
+
+                // Fallback reply
+                RedditPost(
+                    id = "r_user_${UUID.randomUUID()}",
+                    parentId = userComment.id,
+                    role = null,
+                    author = "OP",
+                    content = "Thanks for your comment! That's an interesting point.",
+                    claimReferences = emptyList(),
+                    depth = userComment.depth + 1,
+                    order = 0,
+                    score = 30
+                )
+            }
+        )
     }
 }
 

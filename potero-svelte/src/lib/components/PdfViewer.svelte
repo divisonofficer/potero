@@ -5,6 +5,7 @@
 	import type { PdfViewerState, Paper, AuthorProfile, JournalProfile } from '$lib/types';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
+	import RedditThreadView from './RedditThreadView.svelte';
 	import { api, type Reference, type CitationSpan, type GrobidReference, type Narrative, type NarrativeStyle } from '$lib/api/client';
 	import { getErrorMessage } from '$lib/types';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
@@ -3041,21 +3042,30 @@
 					</div>
 				{:else if selectedNarrative}
 					<!-- Narrative Display -->
-					<article class="prose prose-neutral dark:prose-invert max-w-none">
-						<h1 class="text-2xl font-bold leading-tight text-neutral-900 dark:text-white">
-							{selectedNarrative.title}
-						</h1>
+					{#if selectedNarrative.style === 'REDDIT'}
+						<!-- Reddit Thread View -->
+						<RedditThreadView
+							narrative={selectedNarrative}
+							paperId={paperId || ''}
+							language={selectedLanguageCode}
+						/>
+					{:else}
+						<!-- Blog/News Markdown View -->
+						<article class="prose prose-neutral dark:prose-invert max-w-none">
+							<h1 class="text-2xl font-bold leading-tight text-neutral-900 dark:text-white">
+								{selectedNarrative.title}
+							</h1>
 
-						{#if selectedNarrative.summary}
-							<p class="text-lg text-neutral-600 dark:text-neutral-300 border-l-4 border-purple-500 pl-4 italic">
-								{selectedNarrative.summary}
-							</p>
-						{/if}
+							{#if selectedNarrative.summary}
+								<p class="text-lg text-neutral-600 dark:text-neutral-300 border-l-4 border-purple-500 pl-4 italic">
+									{selectedNarrative.summary}
+								</p>
+							{/if}
 
-						<!-- Main Content (Markdown) -->
-						<div class="mt-8 narrative-content">
-							{@html formatMarkdown(selectedNarrative.content)}
-						</div>
+							<!-- Main Content (Markdown) -->
+							<div class="mt-8 narrative-content">
+								{@html formatMarkdown(selectedNarrative.content)}
+							</div>
 
 						<!-- Concept Explanations -->
 						{#if selectedNarrative.conceptExplanations && selectedNarrative.conceptExplanations.length > 0}
@@ -3103,6 +3113,7 @@
 							</div>
 						{/if}
 					</article>
+					{/if}
 				{:else if narratives.length === 0}
 					<!-- No narratives yet -->
 					<div class="flex flex-col items-center justify-center py-16 text-neutral-500 dark:text-neutral-400">

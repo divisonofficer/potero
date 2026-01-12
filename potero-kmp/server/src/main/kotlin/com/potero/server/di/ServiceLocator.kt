@@ -357,6 +357,10 @@ object ServiceLocator {
         NarrativeCacheService(narrativeRepository)
     }
 
+    val styleRenderingProcessor: com.potero.service.narrative.StyleRenderingProcessor by lazy {
+        com.potero.service.narrative.StyleRenderingProcessor(llmService, llmLogger)
+    }
+
     val narrativeEngineService: NarrativeEngineService by lazy {
         NarrativeEngineService(
             llmService = llmService,
@@ -412,6 +416,13 @@ object ServiceLocator {
                     emptyList()
                 }
             }
+        )
+    }
+
+    val redditThreadService: com.potero.service.narrative.RedditThreadService by lazy {
+        com.potero.service.narrative.RedditThreadService(
+            narrativeRepository = narrativeRepository,
+            styleRenderingProcessor = styleRenderingProcessor
         )
     }
 
