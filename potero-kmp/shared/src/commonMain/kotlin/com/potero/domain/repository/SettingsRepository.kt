@@ -68,6 +68,7 @@ object SettingsKeys {
 
     // Reference Extraction Engines
     const val GROBID_ENABLED = "reference.engine.grobid.enabled" // "true" | "false"
+    const val GROBID_CLOUD_URL = "reference.engine.grobid.cloudUrl" // e.g., "https://kermitt2-grobid.hf.space"
     const val PDFTOTEXT_ENABLED = "reference.engine.pdftotext.enabled" // "true" | "false"
     const val OCR_ENABLED = "ocr.enabled" // "true" | "false"
 

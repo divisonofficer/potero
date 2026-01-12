@@ -15,9 +15,9 @@ import java.io.File
 /**
  * GROBID engine implementation using REST API
  *
- * This implementation starts a local GROBID server process and communicates
- * via HTTP REST API. This approach is ideal for Electron deployment as it
- * doesn't require Docker and can be bundled with the application.
+ * Supports two modes:
+ * 1. Cloud mode: Uses external GROBID service (via GROBID_CLOUD_URL env var)
+ * 2. Local mode: Uses bundled or downloaded GROBID server
  *
  * Thread-safe singleton with lazy initialization.
  */
@@ -30,31 +30,89 @@ class GrobidRestEngine(
     @Volatile
     private var initialized = false
 
+    @Volatile
+    private var serverUrl: String? = null
+
+    @Volatile
+    private var isCloudMode = false
+
     /**
-     * Initialize GROBID server (lazy)
-     * Starts the server process on first use
+     * Get the GROBID server URL (cloud or local)
+     */
+    private fun getServerUrl(): String {
+        return serverUrl ?: throw GrobidException("GROBID not initialized")
+    }
+
+    /**
+     * Initialize GROBID (lazy)
+     * Checks for cloud URL env var first, otherwise starts local server
      */
     private suspend fun initialize() = initMutex.withLock {
         if (initialized) return
 
         try {
-            println("[GROBID REST] Initializing server...")
+            println("[GROBID REST] Initializing...")
 
-            // Register shutdown hook
-            Runtime.getRuntime().addShutdownHook(GrobidShutdownHook())
+            // Check for cloud URL via environment variable
+            val cloudUrl = System.getenv("GROBID_CLOUD_URL")?.takeIf { it.isNotBlank() }
 
-            // Start GROBID server process
-            val started = GrobidProcessManager.start()
-            if (!started) {
-                throw GrobidException("Failed to start GROBID server")
+            if (cloudUrl != null) {
+                // Cloud mode - use external GROBID service
+                println("[GROBID REST] Using cloud GROBID: $cloudUrl")
+                serverUrl = cloudUrl.trimEnd('/')
+                isCloudMode = true
+
+                // Verify cloud service is reachable
+                val isAlive = verifyCloudService(serverUrl!!)
+                if (!isAlive) {
+                    println("[GROBID REST] Cloud GROBID not reachable, falling back to local...")
+                    startLocalGrobid()
+                } else {
+                    initialized = true
+                    println("[GROBID REST] Cloud GROBID ready at: $serverUrl")
+                }
+            } else {
+                // Local mode - start GROBID server process
+                startLocalGrobid()
             }
-
-            initialized = true
-            println("[GROBID REST] Server ready at: ${GrobidProcessManager.getServerUrl()}")
 
         } catch (e: Exception) {
             println("[GROBID REST] Initialization failed: ${e.message}")
             throw GrobidException("Failed to initialize GROBID REST engine", e)
+        }
+    }
+
+    private suspend fun startLocalGrobid() {
+        println("[GROBID REST] Starting local GROBID server...")
+
+        val started = GrobidProcessManager.start()
+        if (!started) {
+            throw GrobidException("Failed to start GROBID server")
+        }
+
+        serverUrl = GrobidProcessManager.getServerUrl()
+        isCloudMode = false
+        initialized = true
+        println("[GROBID REST] Local GROBID ready at: $serverUrl")
+    }
+
+    /**
+     * Verify cloud GROBID service is reachable
+     */
+    private suspend fun verifyCloudService(url: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = httpClient.get("$url/api/isalive") {
+                    timeout {
+                        requestTimeoutMillis = 10_000
+                        connectTimeoutMillis = 5_000
+                    }
+                }
+                response.status.isSuccess()
+            } catch (e: Exception) {
+                println("[GROBID REST] Cloud service check failed: ${e.message}")
+                false
+            }
         }
     }
 
@@ -72,15 +130,16 @@ class GrobidRestEngine(
             try {
                 println("[GROBID REST] Processing full text: ${pdfFile.name}")
 
-                val serverUrl = GrobidProcessManager.getServerUrl()
-                val response = httpClient.post("$serverUrl/api/processFulltextDocument") {
+                val url = getServerUrl()
+                val response = httpClient.post("$url/api/processFulltextDocument") {
                     // Accept TEI XML response
                     header(HttpHeaders.Accept, "application/xml")
 
                     // GROBID PDF processing can take 2-3 minutes for large/complex PDFs
+                    // Cloud services may be slower, use longer timeout
                     timeout {
-                        requestTimeoutMillis = 180_000  // 3 minutes
-                        socketTimeoutMillis = 180_000   // 3 minutes
+                        requestTimeoutMillis = if (isCloudMode) 300_000 else 180_000  // 5 min for cloud, 3 min for local
+                        socketTimeoutMillis = if (isCloudMode) 300_000 else 180_000
                     }
 
                     setBody(
@@ -151,8 +210,13 @@ class GrobidRestEngine(
             try {
                 println("[GROBID REST] Processing header: ${pdfFile.name}")
 
-                val serverUrl = GrobidProcessManager.getServerUrl()
-                val response = httpClient.post("$serverUrl/api/processHeaderDocument") {
+                val url = getServerUrl()
+                val response = httpClient.post("$url/api/processHeaderDocument") {
+                    timeout {
+                        requestTimeoutMillis = if (isCloudMode) 120_000 else 60_000
+                        socketTimeoutMillis = if (isCloudMode) 120_000 else 60_000
+                    }
+
                     setBody(
                         MultiPartFormDataContent(
                             formData {
@@ -201,25 +265,24 @@ class GrobidRestEngine(
     }
 
     override fun isAvailable(): Boolean {
-        // Note: GrobidProcessManager.isHealthy() is suspend, so we can't call it here
-        // In practice, if initialized=true, server should be running
         return initialized
     }
 
     override fun getInfo(): GrobidEngineInfo {
         return GrobidEngineInfo(
-            version = "0.8.2 (REST API)",
-            grobidHomePath = GrobidProcessManager.getServerUrl(),
+            version = if (isCloudMode) "Cloud API" else "0.8.2 (REST API)",
+            grobidHomePath = serverUrl ?: "Not initialized",
             isInitialized = initialized,
-            modelsDownloaded = true  // Server includes models
+            modelsDownloaded = true
         )
     }
 
     /**
-     * Stop GROBID server
-     * Call this on application shutdown
+     * Stop GROBID server (only for local mode)
      */
     fun shutdown() {
-        GrobidProcessManager.stop()
+        if (!isCloudMode) {
+            GrobidProcessManager.stop()
+        }
     }
 }

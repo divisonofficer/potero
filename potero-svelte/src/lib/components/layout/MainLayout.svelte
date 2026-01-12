@@ -9,10 +9,11 @@
 		showInspector?: boolean;
 		sidebarWidth?: number;
 		inspectorWidth?: number;
-		sidebar: Snippet;
+		sidebar?: Snippet;
 		content: Snippet;
 		inspector?: Snippet;
 		statusBar?: Snippet;
+		tabBar?: Snippet;
 		onSearch?: () => void;
 		onAdd?: () => void;
 		onSettings?: () => void;
@@ -28,6 +29,7 @@
 		content,
 		inspector,
 		statusBar,
+		tabBar,
 		onSearch,
 		onAdd,
 		onSettings
@@ -65,8 +67,13 @@
 <svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
 
 <div class="flex h-screen w-screen flex-col overflow-hidden bg-background">
-	<!-- Title Bar -->
+	<!-- Title Bar with integrated tabs -->
 	<MacTitleBar {title} showTrafficLights>
+		{#snippet tabs()}
+			{#if tabBar}
+				{@render tabBar()}
+			{/if}
+		{/snippet}
 		{#snippet actions()}
 			<div class="flex items-center gap-1">
 				{#if onSearch}
@@ -103,7 +110,7 @@
 	<!-- Main Content Area -->
 	<div class="flex flex-1 overflow-hidden">
 		<!-- Sidebar -->
-		{#if showSidebar}
+		{#if showSidebar && sidebar}
 			<aside
 				class="h-full shrink-0 overflow-hidden border-r border-border/30 bg-[hsl(var(--sidebar-bg))] backdrop-blur-[var(--blur-lg)]"
 				style="width: {currentSidebarWidth}px;"

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { browser } from '$app/environment';
 
 	interface Props {
 		title?: string;
@@ -11,6 +12,7 @@
 		class?: string;
 		children?: Snippet;
 		actions?: Snippet;
+		tabs?: Snippet;
 	}
 
 	let {
@@ -22,23 +24,55 @@
 		onMaximize,
 		class: className = '',
 		children,
-		actions
+		actions,
+		tabs
 	}: Props = $props();
 
 	let isHovering = $state(false);
+
+	// Check if running in Electron
+	const isElectron = browser && typeof window !== 'undefined' && (window as any).electronAPI?.isElectron;
+
+	// Window control handlers (use Electron API if available, otherwise use props)
+	function handleClose() {
+		if (isElectron) {
+			(window as any).electronAPI.windowClose();
+		} else if (onClose) {
+			onClose();
+		}
+	}
+
+	function handleMinimize() {
+		if (isElectron) {
+			(window as any).electronAPI.windowMinimize();
+		} else if (onMinimize) {
+			onMinimize();
+		}
+	}
+
+	function handleMaximize() {
+		if (isElectron) {
+			(window as any).electronAPI.windowMaximize();
+		} else if (onMaximize) {
+			onMaximize();
+		}
+	}
 </script>
 
 <header
-	class="h-[var(--window-header-height)] flex items-center justify-between px-4 border-b transition-colors duration-[var(--transition-fast)]
+	class="h-[var(--window-header-height)] flex items-center px-4 border-b transition-colors duration-[var(--transition-fast)]
 		   {transparent ? 'bg-transparent border-transparent' : 'glass-subtle border-border/30'}
 		   {className}"
+	style={isElectron ? '-webkit-app-region: drag' : ''}
 	role="banner"
 >
-	<div class="flex items-center gap-3">
+	<!-- Left: Traffic lights + Title -->
+	<div class="flex items-center gap-3 shrink-0">
 		{#if showTrafficLights}
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
 				class="flex items-center gap-2 group"
+				style={isElectron ? '-webkit-app-region: no-drag' : ''}
 				onmouseenter={() => (isHovering = true)}
 				onmouseleave={() => (isHovering = false)}
 			>
@@ -47,7 +81,7 @@
 					class="w-3 h-3 rounded-full bg-[#FF5F57] transition-all duration-[var(--transition-fast)]
 						   hover:brightness-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[#FF5F57]
 						   flex items-center justify-center"
-					onclick={onClose}
+					onclick={handleClose}
 					aria-label="Close window"
 				>
 					{#if isHovering}
@@ -62,7 +96,7 @@
 					class="w-3 h-3 rounded-full bg-[#FEBC2E] transition-all duration-[var(--transition-fast)]
 						   hover:brightness-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[#FEBC2E]
 						   flex items-center justify-center"
-					onclick={onMinimize}
+					onclick={handleMinimize}
 					aria-label="Minimize window"
 				>
 					{#if isHovering}
@@ -77,7 +111,7 @@
 					class="w-3 h-3 rounded-full bg-[#28C840] transition-all duration-[var(--transition-fast)]
 						   hover:brightness-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-[#28C840]
 						   flex items-center justify-center"
-					onclick={onMaximize}
+					onclick={handleMaximize}
 					aria-label="Maximize window"
 				>
 					{#if isHovering}
@@ -89,19 +123,27 @@
 			</div>
 		{/if}
 
-		{#if title}
+		{#if title && !tabs}
 			<span class="text-sm font-medium text-foreground/80 ml-2 select-none">{title}</span>
 		{/if}
 
 		{#if children}
-			<div class="flex items-center">
+			<div class="flex items-center" style={isElectron ? '-webkit-app-region: no-drag' : ''}>
 				{@render children()}
 			</div>
 		{/if}
 	</div>
 
+	<!-- Center: Tabs (takes remaining space) - keep drag region, individual tabs will be no-drag -->
+	{#if tabs}
+		<div class="flex-1 flex items-center overflow-x-auto mx-4 scrollbar-hide">
+			{@render tabs()}
+		</div>
+	{/if}
+
+	<!-- Right: Action buttons -->
 	{#if actions}
-		<div class="flex items-center gap-2">
+		<div class="flex items-center gap-2 shrink-0" style={isElectron ? '-webkit-app-region: no-drag' : ''}>
 			{@render actions()}
 		</div>
 	{/if}

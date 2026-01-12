@@ -59,15 +59,21 @@ fun Application.configureStatusPages() {
         }
 
         status(HttpStatusCode.NotFound) { call, status ->
-            call.respond(
-                status,
-                ErrorResponse(
-                    error = ErrorDetail(
-                        code = "NOT_FOUND",
-                        message = "The requested resource was not found"
+            // Only return JSON error for API routes
+            // For other routes, let the static file handler deal with it
+            val path = call.request.local.uri
+            if (path.startsWith("/api/") || path.startsWith("/llm/") || path == "/health") {
+                call.respond(
+                    status,
+                    ErrorResponse(
+                        error = ErrorDetail(
+                            code = "NOT_FOUND",
+                            message = "The requested resource was not found"
+                        )
                     )
                 )
-            )
+            }
+            // For non-API routes, don't respond here - let static files handle it
         }
     }
 }

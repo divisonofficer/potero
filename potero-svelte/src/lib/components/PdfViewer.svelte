@@ -423,7 +423,10 @@
 
 			// Handle local file paths - convert to blob URL via API
 			let url = pdfUrl;
-			if (pdfUrl.startsWith('/') || pdfUrl.startsWith('~')) {
+			// Check for local file paths: Unix paths (/...), home dir (~), or Windows paths (C:\...)
+			const isLocalPath = pdfUrl.startsWith('/') || pdfUrl.startsWith('~') || /^[A-Za-z]:[\\/]/.test(pdfUrl);
+
+			if (isLocalPath) {
 				// Fetch PDF through backend API (local file)
 				const response = await fetch(`/api/pdf/file?path=${encodeURIComponent(pdfUrl)}`);
 				if (!response.ok) {

@@ -11,6 +11,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     loginSSO: () => ipcRenderer.invoke('sso-login'),
 
     /**
+     * Get app version
+     * Returns: string (e.g., "0.1.0")
+     */
+    getAppVersion: () => ipcRenderer.invoke('app-version'),
+
+    /**
+     * Get backend server status
+     * Returns: { running: boolean, port: number }
+     */
+    getBackendStatus: () => ipcRenderer.invoke('backend-status'),
+
+    /**
+     * Window control functions
+     */
+    windowMinimize: () => ipcRenderer.invoke('window-minimize'),
+    windowMaximize: () => ipcRenderer.invoke('window-maximize'),
+    windowClose: () => ipcRenderer.invoke('window-close'),
+
+    /**
      * Check if running in Electron
      */
     isElectron: true

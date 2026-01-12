@@ -1,16 +1,23 @@
 {
-  "name": "potero-svelte",
+  "name": "potero",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/fix-paths.mjs",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder"
+    "electron:dev": "cross-env NODE_ENV=development concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dev:backend": "cross-env NODE_ENV=development START_BACKEND=true concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder --config electron-builder.yml",
+    "electron:build:win": "npm run build && electron-builder --config electron-builder.yml --win",
+    "build:backend": "cd ../potero-kmp && JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 ./gradlew :server:buildFatJar",
+    "download:jre": "node scripts/download-jre.mjs",
+    "prepare:grobid": "node scripts/prepare-grobid-bundle.mjs",
+    "dist": "npm run build:backend && npm run download:jre && npm run electron:build:win",
+    "dist:full": "npm run build:backend && npm run download:jre && npm run prepare:grobid && npm run electron:build:win"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.8",
@@ -21,6 +28,7 @@
     "@types/node": "^22.10.5",
     "@types/prismjs": "^1.26.5",
     "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
     "electron": "^33.0.0",
     "electron-builder": "^24.13.3",
     "svelte": "^5.16.6",
@@ -33,7 +41,9 @@
   "dependencies": {
     "bits-ui": "^1.0.0-next.79",
     "clsx": "^2.1.1",
+    "express": "^5.2.1",
     "fuse.js": "^7.1.0",
+    "http-proxy-middleware": "^3.0.5",
     "katex": "^0.16.27",
     "lucide-svelte": "^0.474.0",
     "marked": "^17.0.1",

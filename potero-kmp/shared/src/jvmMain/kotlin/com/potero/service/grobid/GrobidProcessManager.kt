@@ -16,7 +16,10 @@ import java.util.zip.ZipInputStream
 /**
  * Manages GROBID server process lifecycle
  *
- * Downloads GROBID source code, builds it with Gradle, and runs as a local process.
+ * Supports two modes:
+ * 1. Bundled GROBID: Pre-built GROBID shipped with Electron app
+ * 2. Downloaded GROBID: Downloaded and built on first use (development)
+ *
  * This approach doesn't require Docker and works on all platforms.
  */
 object GrobidProcessManager {
@@ -36,9 +39,52 @@ object GrobidProcessManager {
     @Volatile
     private var isRunning = false
 
+    @Volatile
+    private var grobidDir: File? = null
+
+    @Volatile
+    private var isBundledMode = false
+
+    /**
+     * Find bundled GROBID directory (for Electron packaged app)
+     * Checks multiple potential locations
+     */
+    private fun findBundledGrobid(): File? {
+        // Get JAR location to find resources relative to it
+        val jarLocation = object {}.javaClass.protectionDomain?.codeSource?.location?.toURI()?.let { File(it).parentFile }
+        val cwd = File(System.getProperty("user.dir"))
+
+        val potentialPaths = mutableListOf<File>()
+
+        // Electron packaged app: resources/grobid/
+        jarLocation?.let {
+            potentialPaths.add(File(it, "grobid"))
+            potentialPaths.add(File(it.parentFile, "grobid"))
+        }
+
+        // Also check relative to working directory
+        potentialPaths.addAll(listOf(
+            File(cwd, "grobid"),
+            File(cwd, "resources/grobid"),
+            File(cwd, "../resources/grobid")
+        ))
+
+        for (path in potentialPaths) {
+            val onejar = File(path, "grobid-service-$GROBID_VERSION-onejar.jar")
+            val grobidHome = File(path, "grobid-home")
+
+            if (onejar.exists() && grobidHome.exists()) {
+                println("[GROBID Process] Found bundled GROBID at: ${path.absolutePath}")
+                return path
+            }
+        }
+
+        return null
+    }
+
     /**
      * Start GROBID server process
-     * Downloads source if not present, builds it, then starts the server
+     * First tries bundled GROBID, then falls back to downloaded version
      *
      * @return true if server started successfully
      */
@@ -49,8 +95,19 @@ object GrobidProcessManager {
         }
 
         try {
-            // Step 1: Ensure GROBID is built
-            ensureGrobidBuilt()
+            // Step 1: Find GROBID (bundled or downloaded)
+            val bundledDir = findBundledGrobid()
+            if (bundledDir != null) {
+                grobidDir = bundledDir
+                isBundledMode = true
+                println("[GROBID Process] Using bundled GROBID")
+            } else {
+                // Fall back to downloaded GROBID
+                println("[GROBID Process] No bundled GROBID found, checking downloaded version...")
+                ensureGrobidBuilt()
+                grobidDir = File(grobidInstallPath, "grobid-$GROBID_VERSION")
+                isBundledMode = false
+            }
 
             // Step 2: Start GROBID server process
             println("[GROBID Process] Starting server on port $GROBID_PORT...")
@@ -120,7 +177,7 @@ object GrobidProcessManager {
     }
 
     /**
-     * Ensure GROBID is downloaded and built
+     * Ensure GROBID is downloaded and built (only for non-bundled mode)
      */
     private suspend fun ensureGrobidBuilt() {
         val installDir = File(grobidInstallPath)
@@ -247,9 +304,17 @@ object GrobidProcessManager {
      * This is much lighter than gradle run and avoids OOM issues
      */
     private fun startProcess() {
-        val sourceDir = File(grobidInstallPath, "grobid-$GROBID_VERSION")
-        val onejarFile = File(sourceDir, "grobid-service/build/libs/grobid-service-$GROBID_VERSION-onejar.jar")
-        val grobidHome = File(sourceDir, "grobid-home")
+        val dir = grobidDir ?: throw GrobidException("GROBID directory not set")
+
+        // Bundled mode: onejar is directly in the grobid directory
+        // Downloaded mode: onejar is in grobid-service/build/libs/
+        val onejarFile = if (isBundledMode) {
+            File(dir, "grobid-service-$GROBID_VERSION-onejar.jar")
+        } else {
+            File(dir, "grobid-service/build/libs/grobid-service-$GROBID_VERSION-onejar.jar")
+        }
+
+        val grobidHome = File(dir, "grobid-home")
         val configFile = File(grobidHome, "config/grobid.yaml")
 
         if (!onejarFile.exists()) {
@@ -276,7 +341,7 @@ object GrobidProcessManager {
             configFile.absolutePath  // Path to config YAML file
         )
 
-        processBuilder.directory(sourceDir)
+        processBuilder.directory(dir)
         processBuilder.redirectErrorStream(true)
 
         // Set GROBID_HOME environment variable
@@ -285,6 +350,7 @@ object GrobidProcessManager {
 
         // Redirect output to log file
         val logFile = File(grobidInstallPath, "grobid.log")
+        logFile.parentFile?.mkdirs()
         processBuilder.redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
 
         process = processBuilder.start()
@@ -357,18 +423,15 @@ object GrobidProcessManager {
 
                         // Print progress every 10MB
                         if (totalBytes % (10 * 1024 * 1024) < 8192) {
-                            val progress = if (contentLength > 0) {
-                                " (${(totalBytes * 100 / contentLength)}%)"
-                            } else {
-                                ""
-                            }
-                            println("[GROBID Process] Downloaded ${totalBytes / (1024 * 1024)} MB$progress")
+                            val percent = if (contentLength > 0) (totalBytes * 100 / contentLength) else 0
+                            println("[GROBID Process] Downloaded ${totalBytes / (1024 * 1024)} MB ($percent%)")
                         }
                     }
-
-                    println("[GROBID Process] Download complete: ${totalBytes / (1024 * 1024)} MB")
                 }
             }
+
+            println("[GROBID Process] Download complete: ${destination.length() / (1024 * 1024)} MB")
+
         } catch (e: Exception) {
             throw GrobidException("Failed to download from $url: ${e.message}", e)
         } finally {
@@ -377,62 +440,58 @@ object GrobidProcessManager {
     }
 
     /**
-     * Extract ZIP file
+     * Extract ZIP file to destination directory
      */
-    private fun extractZip(zipFile: File, destination: File) {
-        ZipInputStream(zipFile.inputStream()).use { zipInput ->
-            var entry = zipInput.nextEntry
+    private fun extractZip(zipFile: File, destDir: File) {
+        ZipInputStream(zipFile.inputStream()).use { zis ->
+            var entry = zis.nextEntry
             while (entry != null) {
-                val filePath = File(destination, entry.name)
+                val destFile = File(destDir, entry.name)
 
                 if (entry.isDirectory) {
-                    filePath.mkdirs()
+                    destFile.mkdirs()
                 } else {
-                    filePath.parentFile?.mkdirs()
-                    FileOutputStream(filePath).use { output ->
-                        zipInput.copyTo(output)
+                    destFile.parentFile?.mkdirs()
+                    FileOutputStream(destFile).use { fos ->
+                        val buffer = ByteArray(8192)
+                        var len: Int
+                        while (zis.read(buffer).also { len = it } > 0) {
+                            fos.write(buffer, 0, len)
+                        }
                     }
                 }
 
-                zipInput.closeEntry()
-                entry = zipInput.nextEntry
+                zis.closeEntry()
+                entry = zis.nextEntry
             }
         }
     }
-
 
     /**
-     * Make pdfalto binaries executable (required for PDF processing).
-     * GROBID uses pdfalto to convert PDF to XML, but the binaries are not executable after extraction.
+     * Make pdfalto binaries executable on Unix-like systems
+     * This is required for GROBID to process PDFs
      */
     private fun makePdfaltoBinariesExecutable(sourceDir: File) {
-        val pdfaltoBinDir = File(sourceDir, "grobid-home/pdfalto/lin-64")
-        if (!pdfaltoBinDir.exists()) {
-            println("[GROBID Process] Warning: pdfalto binary directory not found: ${pdfaltoBinDir.absolutePath}")
-            return
+        if (System.getProperty("os.name").lowercase().contains("windows")) {
+            return  // Not needed on Windows
         }
 
-        val binaries = listOf("pdfalto", "pdfalto_server")
-        for (binaryName in binaries) {
-            val binaryFile = File(pdfaltoBinDir, binaryName)
-            if (binaryFile.exists()) {
-                val wasExecutable = binaryFile.canExecute()
-                binaryFile.setExecutable(true)
-                if (!wasExecutable) {
-                    println("[GROBID Process] Made $binaryName executable")
+        val pdfaltoDirs = listOf(
+            File(sourceDir, "grobid-home/pdfalto/lin-64"),
+            File(sourceDir, "grobid-home/pdfalto/lin-32"),
+            File(sourceDir, "grobid-home/pdfalto/mac-64"),
+            File(sourceDir, "grobid-home/pdfalto/mac_arm-64")
+        )
+
+        for (dir in pdfaltoDirs) {
+            if (dir.exists()) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile && !file.name.contains(".")) {
+                        file.setExecutable(true)
+                        println("[GROBID Process] Made executable: ${file.name}")
+                    }
                 }
-            } else {
-                println("[GROBID Process] Warning: Binary not found: ${binaryFile.absolutePath}")
             }
         }
-    }
-}
-
-/**
- * Shutdown hook to stop GROBID server on JVM exit
- */
-class GrobidShutdownHook : Thread() {
-    override fun run() {
-        GrobidProcessManager.stop()
     }
 }

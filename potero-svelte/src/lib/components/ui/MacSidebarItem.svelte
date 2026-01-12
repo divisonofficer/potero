@@ -1,9 +1,12 @@
 <script lang="ts">
-	import type { Component } from 'svelte';
+	import type { Component, ComponentType, SvelteComponent } from 'svelte';
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	type IconComponent = ComponentType<SvelteComponent<any>> | Component<any>;
 
 	interface Props {
 		active?: boolean;
-		icon?: Component;
+		icon?: IconComponent;
 		label: string;
 		badge?: number | string;
 		badgeVariant?: 'default' | 'primary' | 'warning' | 'error' | 'success';

@@ -42,13 +42,13 @@
 		closeViewer,
 		type SourceType
 	} from '$lib/stores/appState';
-	import { tabs, openPaper, openSettings, openNotesList, openNote, openRelatedWork, openSubmissionsList, openSubmissionWorkflow, openTagProfile, openJournalProfile, openAuthorProfile, isChatPanelOpen, toggleChatPanel, isNotePanelOpen, notePanelPaperId, notePanelNoteId, closeNotePanel } from '$lib/stores/tabs';
+	import { tabs, activeTab, activeTabId, openPaper, closeTab, goHome, openSettings, openNotesList, openNote, openRelatedWork, openSubmissionsList, openSubmissionWorkflow, openTagProfile, openJournalProfile, openAuthorProfile, isChatPanelOpen, toggleChatPanel, isNotePanelOpen, notePanelPaperId, notePanelNoteId, closeNotePanel } from '$lib/stores/tabs';
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
-	import type { Paper, ResearchNote } from '$lib/types';
+	import type { Paper, ResearchNote, TagProfile, AuthorProfile, JournalProfile } from '$lib/types';
 	import { createNote } from '$lib/stores/notes';
 	import { browser } from '$app/environment';
-	import { MainLayout, SourcesSidebar, PaperBrowser, InspectorPanel, StatusBar } from '$lib/components/layout';
+	import { MainLayout, SourcesSidebar, PaperBrowser, InspectorPanel, StatusBar, type LibraryFilter } from '$lib/components/layout';
 	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
 	import FloatingNotePanel from '$lib/components/notes/FloatingNotePanel.svelte';
 	import FloatingSearchModal from '$lib/components/FloatingSearchModal.svelte';
@@ -57,16 +57,21 @@
 	import LLMLogPanel from '$lib/components/LLMLogPanel.svelte';
 	import AuthorModal from '$lib/components/AuthorModal.svelte';
 	import AuthorProfileView from '$lib/components/AuthorProfileView.svelte';
+	import TagProfileView from '$lib/components/TagProfileView.svelte';
+	import JournalProfileView from '$lib/components/JournalProfileView.svelte';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import NoteList from '$lib/components/notes/NoteList.svelte';
 	import NoteViewer from '$lib/components/notes/NoteViewer.svelte';
 	import RelatedWorkView from '$lib/components/relatedWork/RelatedWorkView.svelte';
 	import { SubmissionDashboard, SubmissionsList } from '$lib/components/submission';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
-	import { Network, ChevronDown } from 'lucide-svelte';
+	import { Network, ChevronDown, X, Home, FileText, Tag, User, BookOpen, StickyNote, FolderOpen } from 'lucide-svelte';
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
+
+	// Library filter for home tab (All, Recent, Favorites, Unread)
+	let libraryFilter = $state<LibraryFilter>('all');
 
 	// Floating search modal state
 	let showFloatingSearch = $state(false);
@@ -124,13 +129,45 @@
 	// Dynamic import for PDF viewer (client-side only due to pdfjs)
 	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
 
-	// Current viewing paper (derived from appState)
+	// Current viewing paper (derived from activeTab)
 	let viewingPaper = $derived.by(() => {
-		const state = get(appState);
-		if (!state.viewerPaperId) return null;
-		const allPapers = get(papers);
-		return allPapers.find(p => p.id === state.viewerPaperId) ?? null;
+		const tab = $activeTab;
+		if (tab?.type === 'viewer' && tab.paper) {
+			return tab.paper;
+		}
+		return null;
 	});
+
+	// Filtered papers based on libraryFilter
+	let homeFilteredPapers = $derived.by(() => {
+		const allFilteredPapers = get(filteredPapers);
+		switch (libraryFilter) {
+			case 'recent':
+				return allFilteredPapers.slice(0, 30);
+			case 'favorites':
+				return allFilteredPapers.filter(p => p.favorite);
+			case 'unread':
+				return allFilteredPapers.filter(p => !p.read);
+			case 'all':
+			default:
+				return allFilteredPapers;
+		}
+	});
+
+	// Tab icon mapping
+	function getTabIcon(type: string) {
+		switch (type) {
+			case 'home': return Home;
+			case 'viewer': return FileText;
+			case 'tag': return Tag;
+			case 'author': return User;
+			case 'journal': return BookOpen;
+			case 'notes': return StickyNote;
+			case 'submissions-list': return FolderOpen;
+			case 'related-work': return Network;
+			default: return FileText;
+		}
+	}
 
 	if (browser) {
 		import('$lib/components/PdfViewer.svelte').then(module => {
@@ -192,16 +229,38 @@
 		selectPaper(paperId, multi);
 	}
 
-	// Handle opening a paper in viewer
+	// Handle opening a paper in viewer (uses tabs store)
 	function handleOpenPaper(paper: Paper) {
-		openViewer(paper.id);
+		openPaper(paper);
 		selectPaper(paper.id);
 	}
 
-	// Handle sidebar source selection
+	// Handle sidebar source selection (for home tab filtering)
 	function handleSelectSource(source: SourceType, sourceId?: string) {
 		selectSource(source, sourceId);
-		closeViewer();
+	}
+
+	// Handle library filter change (All, Recent, Favorites, Unread)
+	function handleFilterChange(filter: LibraryFilter) {
+		libraryFilter = filter;
+	}
+
+	// Handle opening a tag tab from sidebar
+	function handleOpenTag(tagName: string, paperCount: number) {
+		const tagProfile: TagProfile = { name: tagName, paperCount };
+		openTagProfile(tagProfile);
+	}
+
+	// Handle opening an author tab from sidebar
+	function handleOpenAuthor(authorName: string, paperCount: number) {
+		const authorProfile: AuthorProfile = { name: authorName, paperCount };
+		openAuthorProfile(authorProfile);
+	}
+
+	// Handle opening a journal tab from sidebar
+	function handleOpenJournal(journalName: string, paperCount: number) {
+		const journalProfile: JournalProfile = { name: journalName, paperCount };
+		openJournalProfile(journalProfile);
 	}
 
 	// Handle PDF download
@@ -496,23 +555,60 @@
 >
 	<MainLayout
 		title="Potero"
-		showSidebar={$appState.showSidebar}
-		showInspector={$appState.showInspector && !$appState.viewerPaperId}
+		showSidebar={$appState.showSidebar && $activeTab?.type === 'home'}
+		showInspector={$appState.showInspector && $activeTab?.type === 'home'}
 		onSearch={() => showFloatingSearch = true}
 		onAdd={() => showImportDialog = true}
 		onSettings={() => showSettings = true}
 	>
+		{#snippet tabBar()}
+			<div class="flex items-center gap-0.5">
+				{#each $tabs as tab (tab.id)}
+					{@const TabIcon = getTabIcon(tab.type)}
+					<button
+						class="group relative flex items-center gap-2 px-4 py-2 text-sm transition-all shrink-0 rounded-t-lg
+							{$activeTabId === tab.id
+								? 'bg-background/80 text-foreground shadow-sm'
+								: 'text-muted-foreground hover:text-foreground hover:bg-background/40'}"
+						style="-webkit-app-region: no-drag"
+						onclick={() => activeTabId.set(tab.id)}
+					>
+						<TabIcon class="h-4 w-4 shrink-0" />
+						<span class="max-w-[140px] truncate font-medium">{tab.title}</span>
+						{#if tab.id !== 'home'}
+							<button
+								class="ml-1 rounded-full p-0.5 opacity-0 group-hover:opacity-100 hover:bg-muted transition-all"
+								onclick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+							>
+								<X class="h-3.5 w-3.5" />
+							</button>
+						{/if}
+						<!-- Active indicator line -->
+						{#if $activeTabId === tab.id}
+							<div class="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full"></div>
+						{/if}
+					</button>
+				{/each}
+			</div>
+		{/snippet}
+
 		{#snippet sidebar()}
 			<SourcesSidebar
 				{sidebarData}
-				selectedSource={$appState.selectedSource}
-				selectedSourceId={$appState.selectedSourceId}
-				onSelectSource={handleSelectSource}
+				{activeTab}
+				{libraryFilter}
+				onFilterChange={handleFilterChange}
+				onGoHome={goHome}
+				onOpenTag={handleOpenTag}
+				onOpenAuthor={handleOpenAuthor}
+				onOpenJournal={handleOpenJournal}
+				onOpenSubmissions={openSubmissionsList}
+				onOpenNotes={openNotesList}
 			/>
 		{/snippet}
 
 		{#snippet content()}
-			{#if $appState.viewerPaperId && viewingPaper}
+			{#if $activeTab?.type === 'viewer' && viewingPaper}
 				<!-- PDF Viewer Mode -->
 				<div class="flex h-full flex-col">
 					<!-- Paper info bar with action buttons -->
@@ -520,11 +616,11 @@
 						<div class="flex items-center gap-2 min-w-0 flex-1">
 							<button
 								class="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-								onclick={() => closeViewer()}
-								title="Back to Library"
+								onclick={() => { if ($activeTab) closeTab($activeTab.id); }}
+								title="Close Tab"
 							>
 								<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-									<path d="M19 12H5M12 19l-7-7 7-7" />
+									<path d="M18 6L6 18M6 6l12 12" />
 								</svg>
 							</button>
 							<h2 class="truncate text-sm font-medium">{viewingPaper?.title}</h2>
@@ -659,6 +755,8 @@
 							pdfUrl={viewingPaper.pdfUrl}
 							paperId={viewingPaper.id}
 							paper={viewingPaper}
+							tabId={$activeTab?.id}
+							initialState={$activeTab?.viewerState}
 							onOpenPaper={openPaperById}
 						/>
 					{:else if viewingPaper?.pdfUrl && !PdfViewer}
@@ -697,8 +795,8 @@
 						</div>
 					{/if}
 				</div>
-			{:else}
-				<!-- Paper Browser Mode -->
+			{:else if $activeTab?.type === 'home'}
+				<!-- Home - Paper Browser Mode -->
 				<PaperBrowser
 					papers={filteredPapers}
 					selectedPaperIds={$appState.selectedPaperIds}
@@ -720,6 +818,65 @@
 						toast.success('Library refreshed');
 					}}
 				/>
+			{:else if $activeTab?.type === 'tag' && $activeTab.tag}
+				<!-- Tag Profile -->
+				<TagProfileView
+					tag={$activeTab.tag}
+					onOpenPaper={handleOpenPaper}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else if $activeTab?.type === 'author' && $activeTab.author}
+				<!-- Author Profile -->
+				<AuthorProfileView
+					author={$activeTab.author}
+					onOpenPaper={handleOpenPaper}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else if $activeTab?.type === 'journal' && $activeTab.journal}
+				<!-- Journal Profile -->
+				<JournalProfileView
+					journal={$activeTab.journal}
+					onOpenPaper={handleOpenPaper}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else if $activeTab?.type === 'notes'}
+				<!-- Notes List -->
+				<NoteList
+					onOpenNote={(note) => openNote(note)}
+					onCreateNote={async () => {
+						const newNote = await createNote({ title: 'New Note', content: '', tags: [] });
+						if (newNote) openNote(newNote);
+					}}
+				/>
+			{:else if $activeTab?.type === 'note-viewer' && $activeTab.note}
+				<!-- Note Viewer -->
+				<NoteViewer
+					note={$activeTab.note}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else if $activeTab?.type === 'related-work' && $activeTab.paper}
+				<!-- Related Work -->
+				<RelatedWorkView
+					sourcePaper={$activeTab.paper}
+					onOpenPaper={handleOpenPaper}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else if $activeTab?.type === 'submissions-list'}
+				<!-- Submissions List -->
+				<SubmissionsList
+					onOpenSubmission={(submission) => openSubmissionWorkflow(submission)}
+				/>
+			{:else if $activeTab?.type === 'submission' && $activeTab.submission}
+				<!-- Submission Dashboard -->
+				<SubmissionDashboard
+					submission={$activeTab.submission}
+					onClose={() => closeTab($activeTab?.id ?? '')}
+				/>
+			{:else}
+				<!-- Fallback -->
+				<div class="flex h-full items-center justify-center text-muted-foreground">
+					<p>Select a view from the sidebar</p>
+				</div>
 			{/if}
 		{/snippet}
 
@@ -745,7 +902,7 @@
 </div>
 
 <!-- Drop overlay -->
-{#if isDragging && !$appState.viewerPaperId}
+{#if isDragging && $activeTab?.type === 'home'}
 	<div
 		class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
 	>

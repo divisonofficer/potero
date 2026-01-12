@@ -12,6 +12,9 @@ const config = {
 			precompress: false,
 			strict: true
 		}),
+		paths: {
+			relative: true  // Use relative paths for Electron file:// protocol
+		},
 		alias: {
 			$lib: './src/lib',
 			$components: './src/lib/components',

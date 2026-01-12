@@ -29,11 +29,12 @@ class ApiClient {
 		// When running in browser, detect if we're accessing via WSL IP and use direct backend URL
 		if (typeof window !== 'undefined') {
 			const host = window.location.hostname;
+			const port = window.location.port || '18080';
 			// If accessing via IP (WSL), connect directly to backend on same host
 			if (host !== 'localhost' && host !== '127.0.0.1') {
-				this.directUploadUrl = `http://${host}:8080/api`;
+				this.directUploadUrl = `http://${host}:${port}/api`;
 			} else {
-				this.directUploadUrl = 'http://127.0.0.1:8080/api';
+				this.directUploadUrl = `http://127.0.0.1:${port}/api`;
 			}
 		} else {
 			this.directUploadUrl = '/api';

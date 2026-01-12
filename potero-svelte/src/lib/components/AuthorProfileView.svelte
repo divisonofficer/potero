@@ -1,12 +1,38 @@
 <script lang="ts">
-	import type { AuthorProfile } from '$lib/types';
-	import { goHome, openPaper } from '$lib/stores/tabs';
+	import { get } from 'svelte/store';
+	import type { AuthorProfile, Paper } from '$lib/types';
+	import { papers } from '$lib/stores/library';
+	import { goHome, openPaper as openPaperTab } from '$lib/stores/tabs';
 
 	interface Props {
 		author: AuthorProfile;
+		onOpenPaper?: (paper: Paper) => void;
+		onClose?: () => void;
 	}
 
-	let { author }: Props = $props();
+	let { author, onOpenPaper, onClose }: Props = $props();
+
+	// Get papers by this author from library
+	let authorPapers = $derived.by(() => {
+		const allPapers = get(papers);
+		return allPapers.filter(p => p.authors.some(a => a.toLowerCase() === author.name.toLowerCase()));
+	});
+
+	function handleOpenPaper(paper: Paper) {
+		if (onOpenPaper) {
+			onOpenPaper(paper);
+		} else {
+			openPaperTab(paper);
+		}
+	}
+
+	function handleClose() {
+		if (onClose) {
+			onClose();
+		} else {
+			goHome();
+		}
+	}
 
 	// Check if any external links are available
 	let hasExternalLinks = $derived(
@@ -24,7 +50,7 @@
 		<div class="px-8 py-6">
 			<button
 				class="mb-4 flex items-center gap-2 rounded-lg bg-white/20 px-3 py-1.5 text-sm text-white hover:bg-white/30"
-				onclick={() => goHome()}
+				onclick={handleClose}
 			>
 				<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 					<path d="M19 12H5M12 19l-7-7 7-7" />
@@ -57,9 +83,9 @@
 					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
 					</svg>
-					<span class="text-sm">Total Publications</span>
+					<span class="text-sm">Papers in Library</span>
 				</div>
-				<p class="mt-2 text-3xl font-bold">{author.publications.toLocaleString()}</p>
+				<p class="mt-2 text-3xl font-bold">{authorPapers.length.toLocaleString()}</p>
 			</div>
 			<div class="rounded-xl border bg-card p-4">
 				<div class="flex items-center gap-2 text-neutral-500">
@@ -68,7 +94,7 @@
 					</svg>
 					<span class="text-sm">Total Citations</span>
 				</div>
-				<p class="mt-2 text-3xl font-bold">{author.citations.toLocaleString()}</p>
+				<p class="mt-2 text-3xl font-bold">{authorPapers.reduce((sum, p) => sum + (p.citations || 0), 0).toLocaleString()}</p>
 			</div>
 			<div class="rounded-xl border bg-card p-4">
 				<div class="flex items-center gap-2 text-neutral-500">
@@ -118,12 +144,12 @@
 
 				<!-- Recent Papers -->
 				<div class="rounded-xl border bg-card p-6">
-					<h2 class="mb-4 text-lg font-semibold">Papers in Library ({author.recentPapers.length})</h2>
+					<h2 class="mb-4 text-lg font-semibold">Papers in Library ({authorPapers.length})</h2>
 					<div class="space-y-3">
-						{#each author.recentPapers as paper}
+						{#each authorPapers as paper (paper.id)}
 							<button
 								class="w-full rounded-lg border p-4 text-left hover:bg-muted transition-colors"
-								onclick={() => openPaper(paper)}
+								onclick={() => handleOpenPaper(paper)}
 							>
 								<h3 class="font-medium line-clamp-2">{paper.title}</h3>
 								<p class="mt-1 text-sm text-neutral-500">
@@ -134,12 +160,16 @@
 									{#if paper.year}
 										<span>{paper.year}</span>
 									{/if}
-									{#if paper.conference}
-										<span class="rounded bg-muted px-2 py-0.5">{paper.conference}</span>
+									{#if paper.venue}
+										<span class="rounded bg-muted px-2 py-0.5">{paper.venue}</span>
 									{/if}
-									<span>{paper.citations} citations</span>
+									{#if paper.citations}
+										<span>{paper.citations} citations</span>
+									{/if}
 								</div>
 							</button>
+						{:else}
+							<p class="text-center text-muted-foreground py-4">No papers found in library</p>
 						{/each}
 					</div>
 				</div>
