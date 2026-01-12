@@ -14,12 +14,16 @@
 		FileText,
 		Inbox
 	} from 'lucide-svelte';
-	import type { SourceType } from '$lib/stores/appState';
+	import type { Tab } from '$lib/types';
+
+	// Filter type for library view
+	export type LibraryFilter = 'all' | 'recent' | 'favorites' | 'unread';
 
 	interface SidebarDataType {
 		paperCount: number;
 		recentCount: number;
 		favoriteCount: number;
+		unreadCount?: number;
 		tags: Array<{ id: string; name: string; count: number }>;
 		authors: Array<{ name: string; count: number }>;
 		journals: Array<{ name: string; count: number }>;
@@ -27,16 +31,28 @@
 
 	interface Props {
 		sidebarData: Readable<SidebarDataType>;
-		selectedSource: SourceType;
-		selectedSourceId?: string;
-		onSelectSource: (source: SourceType, sourceId?: string) => void;
+		activeTab: Readable<Tab | undefined>;
+		libraryFilter: LibraryFilter;
+		onFilterChange: (filter: LibraryFilter) => void;
+		onGoHome: () => void;
+		onOpenTag: (tagName: string, paperCount: number) => void;
+		onOpenAuthor: (authorName: string, paperCount: number) => void;
+		onOpenJournal: (journalName: string, paperCount: number) => void;
+		onOpenSubmissions: () => void;
+		onOpenNotes: () => void;
 	}
 
 	let {
 		sidebarData,
-		selectedSource,
-		selectedSourceId,
-		onSelectSource
+		activeTab,
+		libraryFilter,
+		onFilterChange,
+		onGoHome,
+		onOpenTag,
+		onOpenAuthor,
+		onOpenJournal,
+		onOpenSubmissions,
+		onOpenNotes
 	}: Props = $props();
 
 	// Collapsible section state
@@ -44,11 +60,23 @@
 	let showAuthors = $state(false);
 	let showJournals = $state(false);
 
-	function isActive(source: SourceType, sourceId?: string): boolean {
-		if (sourceId) {
-			return selectedSource === source && selectedSourceId === sourceId;
-		}
-		return selectedSource === source;
+	// Check if home tab is active with specific filter
+	function isLibraryActive(filter: LibraryFilter): boolean {
+		return $activeTab?.type === 'home' && libraryFilter === filter;
+	}
+
+	// Check if specific tab type is active
+	function isTabActive(type: string, id?: string): boolean {
+		if (!$activeTab) return false;
+		if (type === 'tag') return $activeTab.type === 'tag' && $activeTab.tag?.name === id;
+		if (type === 'author') return $activeTab.type === 'author' && $activeTab.author?.name === id;
+		if (type === 'journal') return $activeTab.type === 'journal' && $activeTab.journal?.name === id;
+		return $activeTab.type === type;
+	}
+
+	function handleLibraryClick(filter: LibraryFilter) {
+		onGoHome();
+		onFilterChange(filter);
 	}
 </script>
 
@@ -65,29 +93,30 @@
 					icon={Library}
 					label="All Papers"
 					badge={$sidebarData.paperCount}
-					active={isActive('all')}
-					onclick={() => onSelectSource('all')}
+					active={isLibraryActive('all')}
+					onclick={() => handleLibraryClick('all')}
 				/>
 				<MacSidebarItem
 					icon={Clock}
 					label="Recent"
 					badge={$sidebarData.recentCount}
-					active={isActive('recent')}
-					onclick={() => onSelectSource('recent')}
+					active={isLibraryActive('recent')}
+					onclick={() => handleLibraryClick('recent')}
 				/>
 				<MacSidebarItem
 					icon={Star}
 					label="Favorites"
 					badge={$sidebarData.favoriteCount}
 					badgeVariant="warning"
-					active={isActive('favorites')}
-					onclick={() => onSelectSource('favorites')}
+					active={isLibraryActive('favorites')}
+					onclick={() => handleLibraryClick('favorites')}
 				/>
 				<MacSidebarItem
 					icon={Inbox}
 					label="Unread"
-					active={isActive('unread')}
-					onclick={() => onSelectSource('unread')}
+					badge={$sidebarData.unreadCount}
+					active={isLibraryActive('unread')}
+					onclick={() => handleLibraryClick('unread')}
 				/>
 			</div>
 		</div>
@@ -112,8 +141,8 @@
 							icon={Tag}
 							label={tag.name}
 							badge={tag.count}
-							active={isActive('tag', tag.id)}
-							onclick={() => onSelectSource('tag', tag.id)}
+							active={isTabActive('tag', tag.name)}
+							onclick={() => onOpenTag(tag.name, tag.count)}
 						/>
 					{/each}
 					{#if $sidebarData.tags.length > 10}
@@ -147,8 +176,8 @@
 							icon={User}
 							label={author.name}
 							badge={author.count}
-							active={isActive('author', author.name)}
-							onclick={() => onSelectSource('author', author.name)}
+							active={isTabActive('author', author.name)}
+							onclick={() => onOpenAuthor(author.name, author.count)}
 						/>
 					{/each}
 					{#if $sidebarData.authors.length > 8}
@@ -182,8 +211,8 @@
 							icon={BookOpen}
 							label={journal.name}
 							badge={journal.count}
-							active={isActive('journal', journal.name)}
-							onclick={() => onSelectSource('journal', journal.name)}
+							active={isTabActive('journal', journal.name)}
+							onclick={() => onOpenJournal(journal.name, journal.count)}
 						/>
 					{/each}
 					{#if $sidebarData.journals.length > 8}
@@ -206,14 +235,14 @@
 				<MacSidebarItem
 					icon={FolderOpen}
 					label="Submissions"
-					active={isActive('submissions')}
-					onclick={() => onSelectSource('submissions')}
+					active={isTabActive('submissions-list')}
+					onclick={onOpenSubmissions}
 				/>
 				<MacSidebarItem
 					icon={FileText}
 					label="Notes"
-					active={isActive('notes')}
-					onclick={() => onSelectSource('notes')}
+					active={isTabActive('notes')}
+					onclick={onOpenNotes}
 				/>
 			</div>
 		</div>

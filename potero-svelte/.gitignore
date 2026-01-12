@@ -1,3 +1,8 @@
 node_modules/*
 .svelte-kit/*
 build/*
+
+# Electron build outputs
+dist/*
+jre-bundle/*
+grobid-bundle/**

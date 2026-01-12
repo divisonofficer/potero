@@ -130,6 +130,7 @@ export interface PdfViewerState {
 	currentPage: number;
 	scale: number;
 	viewMode: 'single' | 'scroll';
+	contentViewMode?: 'reader' | 'blog';
 }
 
 export type ViewStyle = 'grid' | 'list' | 'compact';

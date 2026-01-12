@@ -68,6 +68,7 @@ object SettingsKeys {
 
     // Reference Extraction Engines
     const val GROBID_ENABLED = "reference.engine.grobid.enabled" // "true" | "false"
+    const val GROBID_CLOUD_URL = "reference.engine.grobid.cloudUrl" // e.g., "https://kermitt2-grobid.hf.space"
     const val PDFTOTEXT_ENABLED = "reference.engine.pdftotext.enabled" // "true" | "false"
     const val OCR_ENABLED = "ocr.enabled" // "true" | "false"
 
@@ -75,4 +76,10 @@ object SettingsKeys {
     const val OCR_LANGUAGE = "ocr.language" // "eng" | "kor" | "eng+kor"
     const val OCR_DPI = "ocr.dpi" // "150" | "300" (default: 300)
     const val OCR_ENGINE_MODE = "ocr.engineMode" // "0" (legacy) | "1" (neural) | "2" (combined) | "3" (default)
+
+    // Onboarding
+    const val ONBOARDING_COMPLETED = "onboarding.completed" // "true" | "false"
+
+    // Database Storage Path (Windows-specific)
+    const val DATABASE_PATH = "storage.databasePath"
 }

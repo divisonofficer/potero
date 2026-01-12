@@ -19,7 +19,7 @@ fun main() {
 
     embeddedServer(
         Netty,
-        port = 8080,
+        port = 18080,
         host = "0.0.0.0",  // Bind to all interfaces (required for WSL)
         module = Application::module
     ).start(wait = true)

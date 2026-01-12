@@ -14,6 +14,7 @@ data class SettingsDto(
     val llmApiKey: String? = null,
     val llmProvider: String = "gpt",
     val pdfStoragePath: String? = null,
+    val databasePath: String? = null,
     val theme: String = "system",
     val semanticScholarApiKey: String? = null,
     // SSO Authentication for POSTECH GenAI file upload
@@ -25,7 +26,9 @@ data class SettingsDto(
     // Reference Extraction Engines
     val grobidEnabled: Boolean = true,
     val pdftotextEnabled: Boolean = true,
-    val ocrEnabled: Boolean = false
+    val ocrEnabled: Boolean = false,
+    // Onboarding
+    val onboardingCompleted: Boolean = false
 )
 
 @Serializable
@@ -33,6 +36,7 @@ data class UpdateSettingsRequest(
     val llmApiKey: String? = null,
     val llmProvider: String? = null,
     val pdfStoragePath: String? = null,
+    val databasePath: String? = null,
     val theme: String? = null,
     val semanticScholarApiKey: String? = null,
     // SSO Authentication fields
@@ -44,7 +48,9 @@ data class UpdateSettingsRequest(
     // Reference Extraction Engines
     val grobidEnabled: Boolean? = null,
     val pdftotextEnabled: Boolean? = null,
-    val ocrEnabled: Boolean? = null
+    val ocrEnabled: Boolean? = null,
+    // Onboarding
+    val onboardingCompleted: Boolean? = null
 )
 
 @Serializable
@@ -122,6 +128,7 @@ fun Route.settingsRoutes() {
                         },
                         llmProvider = settings[SettingsKeys.LLM_PROVIDER] ?: "gpt",
                         pdfStoragePath = settings[SettingsKeys.PDF_STORAGE_PATH],
+                        databasePath = settings[SettingsKeys.DATABASE_PATH],
                         theme = settings[SettingsKeys.THEME] ?: "system",
                         semanticScholarApiKey = settings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
                             // Mask API key for security
@@ -133,7 +140,8 @@ fun Route.settingsRoutes() {
                         enableSciHub = settings["scihub.enabled"]?.toBoolean() ?: false,
                         grobidEnabled = settings[SettingsKeys.GROBID_ENABLED]?.equals("true", ignoreCase = true) ?: true,
                         pdftotextEnabled = settings[SettingsKeys.PDFTOTEXT_ENABLED]?.equals("true", ignoreCase = true) ?: true,
-                        ocrEnabled = settings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false
+                        ocrEnabled = settings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false,
+                        onboardingCompleted = settings[SettingsKeys.ONBOARDING_COMPLETED]?.equals("true", ignoreCase = true) ?: false
                     )
                     call.respond(ApiResponse(data = dto))
                 },
@@ -198,6 +206,16 @@ fun Route.settingsRoutes() {
                     settingsRepository.set(SettingsKeys.OCR_ENABLED, it.toString())
                 }
 
+                // Onboarding
+                request.onboardingCompleted?.let {
+                    settingsRepository.set(SettingsKeys.ONBOARDING_COMPLETED, it.toString())
+                }
+
+                // Database path
+                request.databasePath?.let {
+                    settingsRepository.set(SettingsKeys.DATABASE_PATH, it)
+                }
+
                 // Return updated settings
                 val allSettings = settingsRepository.getAll().getOrDefault(emptyMap())
                 val ssoToken = allSettings[SettingsKeys.SSO_ACCESS_TOKEN]
@@ -211,6 +229,7 @@ fun Route.settingsRoutes() {
                     },
                     llmProvider = allSettings[SettingsKeys.LLM_PROVIDER] ?: "gpt",
                     pdfStoragePath = allSettings[SettingsKeys.PDF_STORAGE_PATH],
+                    databasePath = allSettings[SettingsKeys.DATABASE_PATH],
                     theme = allSettings[SettingsKeys.THEME] ?: "system",
                     semanticScholarApiKey = allSettings[SettingsKeys.SEMANTIC_SCHOLAR_API_KEY]?.let {
                         if (it.length > 8) "${it.take(4)}****${it.takeLast(4)}" else "****"
@@ -221,7 +240,8 @@ fun Route.settingsRoutes() {
                     enableSciHub = allSettings["scihub.enabled"]?.toBoolean() ?: false,
                     grobidEnabled = allSettings[SettingsKeys.GROBID_ENABLED]?.equals("true", ignoreCase = true) ?: true,
                     pdftotextEnabled = allSettings[SettingsKeys.PDFTOTEXT_ENABLED]?.equals("true", ignoreCase = true) ?: true,
-                    ocrEnabled = allSettings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false
+                    ocrEnabled = allSettings[SettingsKeys.OCR_ENABLED]?.equals("true", ignoreCase = true) ?: false,
+                    onboardingCompleted = allSettings[SettingsKeys.ONBOARDING_COMPLETED]?.equals("true", ignoreCase = true) ?: false
                 )
                 call.respond(ApiResponse(data = dto))
             } catch (e: Exception) {

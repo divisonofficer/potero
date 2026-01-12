@@ -13,37 +13,39 @@ directories:
 # Files to include in the app
 files:
   - "electron/**/*"
-  - "build/**/*"
   - "package.json"
 
-# Extra resources (JAR and JRE) - copied to resources folder
+# Extra resources (JAR, JRE, frontend, and GROBID) - copied to resources folder
 extraResources:
   - from: "../potero-kmp/server/build/libs/potero-server.jar"
     to: "backend/potero-server.jar"
   - from: "jre-bundle/jre-win-x64"
     to: "jre"
+  - from: "build"
+    to: "frontend"
+  - from: "grobid-bundle"
+    to: "grobid"
 
 # Windows configuration
 win:
   target:
-    - target: "nsis"
+    - target: "dir"  # Unpacked directory (for testing)
       arch:
         - x64
-  icon: "build-resources/icon.ico"
-  artifactName: "${productName}-Setup-${version}.${ext}"
-
-# NSIS installer settings
-nsis:
-  oneClick: false
-  allowToChangeInstallationDirectory: true
-  installerIcon: "build-resources/icon.ico"
-  uninstallerIcon: "build-resources/icon.ico"
-  createDesktopShortcut: true
-  createStartMenuShortcut: true
-  shortcutName: "Potero"
+  icon: "build-resources/icon.png"
+  artifactName: "${productName}-${version}-portable.${ext}"
+  # Disable code signing for cross-platform build
+  signAndEditExecutable: false
 
 # Enable asar packaging for app files
 asar: true
 
 # Compression settings
 compression: "normal"
+
+# Include ffmpeg for media support
+electronDownload:
+  customDir: ""
+
+# Don't remove ffmpeg
+removePackageScripts: false

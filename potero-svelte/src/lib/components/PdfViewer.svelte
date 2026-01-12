@@ -24,6 +24,9 @@
 
 	let { pdfUrl, paperId, paper, tabId, initialState, onPageChange, onTextSelect, onOpenPaper }: Props = $props();
 
+	// Capture tabId at initialization (props can change before onDestroy runs)
+	const capturedTabId = tabId;
+
 	// Citation modal state
 	let showCitationModal = $state(false);
 	let citationQuery = $state('');
@@ -76,6 +79,10 @@
 	let viewMode = $state<'single' | 'scroll'>(initialState?.viewMode ?? 'scroll');
 	let pendingScrollRestore = $state(initialState ? { top: initialState.scrollTop, left: initialState.scrollLeft } : null);
 
+	// Track last known scroll position (for saving when scrollContainer becomes unavailable)
+	let lastScrollTop = initialState?.scrollTop ?? 0;
+	let lastScrollLeft = initialState?.scrollLeft ?? 0;
+
 	// PDF.js types
 	type PDFDocumentProxy = import('pdfjs-dist').PDFDocumentProxy;
 	type PDFPageProxy = import('pdfjs-dist').PDFPageProxy;
@@ -101,8 +108,8 @@
 	let grobidReferences = $state<GrobidReference[]>([]);
 	let isLoadingGrobidReferences = $state(false);
 
-	// Content view mode (Reader vs Blog)
-	let contentViewMode = $state<'reader' | 'blog'>('reader');
+	// Content view mode (Reader vs Blog) - restored from initialState
+	let contentViewMode = $state<'reader' | 'blog'>(initialState?.contentViewMode ?? 'reader');
 
 	// Narrative (Blog) state
 	let narratives = $state<Narrative[]>([]);
@@ -423,7 +430,10 @@
 
 			// Handle local file paths - convert to blob URL via API
 			let url = pdfUrl;
-			if (pdfUrl.startsWith('/') || pdfUrl.startsWith('~')) {
+			// Check for local file paths: Unix paths (/...), home dir (~), or Windows paths (C:\...)
+			const isLocalPath = pdfUrl.startsWith('/') || pdfUrl.startsWith('~') || /^[A-Za-z]:[\\/]/.test(pdfUrl);
+
+			if (isLocalPath) {
 				// Fetch PDF through backend API (local file)
 				const response = await fetch(`/api/pdf/file?path=${encodeURIComponent(pdfUrl)}`);
 				if (!response.ok) {
@@ -1946,6 +1956,10 @@
 	function handleScroll() {
 		if (!scrollContainer || viewMode !== 'scroll' || isUpdatingPage) return;
 
+		// Track scroll position for state persistence
+		lastScrollTop = scrollContainer.scrollTop;
+		lastScrollLeft = scrollContainer.scrollLeft;
+
 		// Update current page based on scroll position
 		const wrappers = scrollContainer.querySelectorAll('.page-wrapper');
 		if (wrappers.length === 0) return;
@@ -1979,7 +1993,7 @@
 		}
 
 		// Debounced save of scroll position
-		if (tabId) {
+		if (capturedTabId) {
 			if (scrollSaveTimer) clearTimeout(scrollSaveTimer);
 			scrollSaveTimer = setTimeout(() => {
 				saveViewerState();
@@ -2497,16 +2511,21 @@
 		return null;
 	}
 
-	// Save viewer state to tab store
+	// Save viewer state to tab store (use capturedTabId to handle prop changes before destroy)
 	function saveViewerState() {
-		if (!tabId || !scrollContainer) return;
+		if (!capturedTabId) return;
 
-		updateViewerState(tabId, {
-			scrollTop: scrollContainer.scrollTop,
-			scrollLeft: scrollContainer.scrollLeft,
+		// Use current scroll position from container if available, otherwise use last known position
+		const scrollTop = scrollContainer?.scrollTop ?? lastScrollTop;
+		const scrollLeft = scrollContainer?.scrollLeft ?? lastScrollLeft;
+
+		updateViewerState(capturedTabId, {
+			scrollTop,
+			scrollLeft,
 			currentPage,
 			scale,
-			viewMode
+			viewMode,
+			contentViewMode
 		});
 	}
 
@@ -2541,6 +2560,17 @@
 		if (pdfUrl && pdfUrl !== lastLoadedUrl) {
 			lastLoadedUrl = pdfUrl;
 			loadPdf();
+		}
+	});
+
+	// Save state when contentViewMode or scale changes
+	$effect(() => {
+		// Track contentViewMode and scale changes
+		const _viewMode = contentViewMode;
+		const _scale = scale;
+		// Save state after initial load
+		if (capturedTabId && !isLoading) {
+			saveViewerState();
 		}
 	});
 </script>

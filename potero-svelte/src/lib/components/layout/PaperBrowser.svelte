@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Readable } from 'svelte/store';
 	import type { Paper } from '$lib/types';
-	import { List, Grid, LayoutGrid, RefreshCw, Plus, Search } from 'lucide-svelte';
+	import { List, Grid, LayoutGrid, RefreshCw, Plus, Search, Image } from 'lucide-svelte';
+	import { browser } from '$app/environment';
 
 	interface Props {
 		papers: Readable<Paper[]>;
@@ -60,6 +61,27 @@
 		if (authors.length === 2) return authors.join(' & ');
 		return `${authors[0]} et al.`;
 	}
+
+	// Get thumbnail URL for a paper - always use backend API endpoint
+	// (paper.thumbnailUrl contains local file path, not accessible from browser)
+	function getThumbnailUrl(paper: Paper): string {
+		if (browser) {
+			const host = window.location.hostname;
+			const port = window.location.port || '18080';
+			// If accessing via IP (WSL), connect directly to backend
+			if (host !== 'localhost' && host !== '127.0.0.1') {
+				return `http://${host}:${port}/api/upload/thumbnail/${paper.id}`;
+			}
+		}
+		return `/api/upload/thumbnail/${paper.id}`;
+	}
+
+	// Image error handling - track papers where thumbnail failed to load
+	let imageErrors = $state<Set<string>>(new Set());
+
+	function handleImageError(paperId: string) {
+		imageErrors = new Set([...imageErrors, paperId]);
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden">
@@ -96,21 +118,22 @@
 				onclick={() => onViewModeChange?.('list')}
 				title="List view"
 			>
-				<List class="h-4 w-4" />
+				<Grid class="h-4 w-4" />
+				
 			</button>
 			<button
 				class="rounded p-1.5 transition-colors {viewMode === 'compact' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
 				onclick={() => onViewModeChange?.('compact')}
 				title="Compact view"
 			>
-				<LayoutGrid class="h-4 w-4" />
+				<List class="h-4 w-4" />
 			</button>
 			<button
 				class="rounded p-1.5 transition-colors {viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}"
 				onclick={() => onViewModeChange?.('grid')}
 				title="Grid view"
 			>
-				<Grid class="h-4 w-4" />
+				<LayoutGrid class="h-4 w-4" />
 			</button>
 		</div>
 
@@ -159,41 +182,63 @@
 				</button>
 			</div>
 		{:else if viewMode === 'list'}
-			<!-- List View -->
+			<!-- List View with Thumbnails (Email Style) -->
 			<div class="divide-y divide-border/20">
 				{#each $papers as paper (paper.id)}
 					<button
-						class="w-full px-4 py-3 text-left transition-colors hover:bg-[hsl(var(--sidebar-item-hover))] {isSelected(paper.id) ? 'bg-[hsl(var(--sidebar-item-active))]' : ''}"
+						class="w-full px-3 py-3 text-left transition-colors hover:bg-[hsl(var(--sidebar-item-hover))] {isSelected(paper.id) ? 'bg-[hsl(var(--sidebar-item-active))]' : ''}"
 						onclick={(e) => handleClick(e, paper.id)}
 						ondblclick={() => handleDoubleClick(paper)}
 					>
-						<div class="flex items-start gap-3">
-							<div class="flex-1 min-w-0">
-								<h3 class="font-medium text-sm leading-tight line-clamp-2 {isSelected(paper.id) ? 'text-primary' : 'text-foreground'}">
-									{paper.title}
-								</h3>
-								<p class="mt-1 text-xs text-muted-foreground line-clamp-1">
-									{formatAuthors(paper.authors)}
-									{#if paper.year}
-										<span class="mx-1">·</span>
-										{paper.year}
-									{/if}
-									{#if paper.venue}
-										<span class="mx-1">·</span>
-										<span class="truncate">{paper.venue}</span>
-									{/if}
-								</p>
-								{#if paper.abstract}
-									<p class="mt-1.5 text-xs text-muted-foreground/70 line-clamp-2">
-										{paper.abstract}
-									</p>
+						<div class="flex gap-3">
+							<!-- Thumbnail -->
+							<div class="shrink-0 w-16 h-20 rounded-md overflow-hidden bg-muted/30 border border-border/30">
+								{#if !imageErrors.has(paper.id)}
+									<img
+										src={getThumbnailUrl(paper)}
+										alt=""
+										class="w-full h-full object-cover"
+										onerror={() => handleImageError(paper.id)}
+									/>
+								{:else}
+									<div class="w-full h-full flex items-center justify-center bg-gradient-to-br from-muted/50 to-muted">
+										<Image class="h-6 w-6 text-muted-foreground/50" />
+									</div>
 								{/if}
 							</div>
-							<div class="shrink-0 text-right">
-								{#if paper.citations && paper.citations > 0}
-									<span class="text-xs font-medium text-muted-foreground">
-										{paper.citations.toLocaleString()}
-									</span>
+
+							<!-- Content -->
+							<div class="flex-1 min-w-0 flex flex-col justify-between py-0.5">
+								<div>
+									<h3 class="font-medium text-sm leading-tight line-clamp-2 {isSelected(paper.id) ? 'text-primary' : 'text-foreground'}">
+										{paper.title}
+									</h3>
+									<p class="mt-1 text-xs text-muted-foreground">
+										{formatAuthors(paper.authors)}
+									</p>
+								</div>
+								<div class="flex items-center gap-2 text-xs text-muted-foreground/70">
+									{#if paper.year}
+										<span>{paper.year}</span>
+									{/if}
+									{#if paper.conference}
+										<span>·</span>
+										<span class="truncate max-w-[120px]">{paper.conference}</span>
+									{/if}
+									{#if paper.citations && paper.citations > 0}
+										<span>·</span>
+										<span class="font-medium text-muted-foreground">{paper.citations.toLocaleString()} citations</span>
+									{/if}
+								</div>
+							</div>
+
+							<!-- Favorite/Read Status -->
+							<div class="shrink-0 flex flex-col items-end gap-1">
+								{#if paper.favorite}
+									<span class="text-yellow-500 text-xs">★</span>
+								{/if}
+								{#if !paper.read}
+									<span class="w-2 h-2 rounded-full bg-primary"></span>
 								{/if}
 							</div>
 						</div>
@@ -201,7 +246,7 @@
 				{/each}
 			</div>
 		{:else if viewMode === 'compact'}
-			<!-- Compact View -->
+			<!-- Compact View (No Thumbnails) -->
 			<div class="divide-y divide-border/20">
 				{#each $papers as paper (paper.id)}
 					<button
@@ -210,18 +255,28 @@
 						ondblclick={() => handleDoubleClick(paper)}
 					>
 						<div class="flex items-center gap-3">
+							<!-- Unread indicator -->
+							<div class="shrink-0 w-2">
+								{#if !paper.read}
+									<span class="block w-2 h-2 rounded-full bg-primary"></span>
+								{/if}
+							</div>
+
 							<div class="flex-1 min-w-0">
 								<h3 class="font-medium text-sm leading-tight truncate {isSelected(paper.id) ? 'text-primary' : 'text-foreground'}">
 									{paper.title}
 								</h3>
 							</div>
 							<div class="shrink-0 flex items-center gap-3 text-xs text-muted-foreground">
-								<span>{formatAuthors(paper.authors)}</span>
+								<span class="max-w-[100px] truncate">{formatAuthors(paper.authors)}</span>
 								{#if paper.year}
 									<span>{paper.year}</span>
 								{/if}
 								{#if paper.citations && paper.citations > 0}
 									<span class="font-medium">{paper.citations}</span>
+								{/if}
+								{#if paper.favorite}
+									<span class="text-yellow-500">★</span>
 								{/if}
 							</div>
 						</div>
@@ -229,28 +284,69 @@
 				{/each}
 			</div>
 		{:else}
-			<!-- Grid View -->
-			<div class="grid grid-cols-2 gap-3 p-4 lg:grid-cols-3">
+			<!-- Grid View with Large Thumbnails -->
+			<div class="grid grid-cols-2 gap-4 p-4 lg:grid-cols-3 xl:grid-cols-4">
 				{#each $papers as paper (paper.id)}
 					<button
-						class="rounded-xl p-4 text-left transition-all glass hover:shadow-glass {isSelected(paper.id) ? 'ring-2 ring-primary shadow-glass' : ''}"
+						class="group rounded-xl overflow-hidden text-left transition-all glass hover:shadow-glass {isSelected(paper.id) ? 'ring-2 ring-primary shadow-glass' : ''}"
 						onclick={(e) => handleClick(e, paper.id)}
 						ondblclick={() => handleDoubleClick(paper)}
 					>
-						<h3 class="font-medium text-sm leading-tight line-clamp-3 {isSelected(paper.id) ? 'text-primary' : 'text-foreground'}">
-							{paper.title}
-						</h3>
-						<p class="mt-2 text-xs text-muted-foreground line-clamp-1">
-							{formatAuthors(paper.authors)}
-						</p>
-						<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-							{#if paper.year}
-								<span>{paper.year}</span>
+						<!-- Thumbnail -->
+						<div class="relative aspect-[3/4] w-full overflow-hidden bg-muted/30">
+							{#if !imageErrors.has(paper.id)}
+								<img
+									src={getThumbnailUrl(paper)}
+									alt=""
+									class="w-full h-full object-cover transition-transform group-hover:scale-105"
+									onerror={() => handleImageError(paper.id)}
+								/>
+							{:else}
+								<div class="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-muted/30 to-muted/60">
+									<svg class="h-12 w-12 text-muted-foreground/30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+										<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+									</svg>
+									<span class="mt-2 text-xs text-muted-foreground/50">No preview</span>
+								</div>
 							{/if}
+
+							<!-- Overlay badges -->
+							<div class="absolute top-2 right-2 flex flex-col gap-1">
+								{#if paper.favorite}
+									<span class="bg-yellow-500/90 text-white text-xs px-1.5 py-0.5 rounded">★</span>
+								{/if}
+								{#if !paper.read}
+									<span class="bg-primary text-primary-foreground text-xs px-1.5 py-0.5 rounded">New</span>
+								{/if}
+							</div>
+
+							<!-- Citation badge -->
 							{#if paper.citations && paper.citations > 0}
-								<span>·</span>
-								<span>{paper.citations} citations</span>
+								<div class="absolute bottom-2 left-2">
+									<span class="bg-black/60 backdrop-blur-sm text-white text-xs px-2 py-0.5 rounded-full">
+										{paper.citations.toLocaleString()} citations
+									</span>
+								</div>
 							{/if}
+						</div>
+
+						<!-- Info -->
+						<div class="p-3">
+							<h3 class="font-medium text-sm leading-tight line-clamp-2 {isSelected(paper.id) ? 'text-primary' : 'text-foreground'}">
+								{paper.title}
+							</h3>
+							<p class="mt-1.5 text-xs text-muted-foreground line-clamp-1">
+								{formatAuthors(paper.authors)}
+							</p>
+							<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground/70">
+								{#if paper.year}
+									<span>{paper.year}</span>
+								{/if}
+								{#if paper.conference}
+									<span>·</span>
+									<span class="truncate">{paper.conference}</span>
+								{/if}
+							</div>
 						</div>
 					</button>
 				{/each}
