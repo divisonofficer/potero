@@ -44,8 +44,25 @@ data class LLMResponse(
 ) {
     /**
      * Get the response content (handles both "replies" and "message" fields)
+     * Also handles doubly-escaped JSON strings from backend
      */
-    fun getContent(): String = replies ?: message ?: ""
+    fun getContent(): String {
+        val raw = replies ?: message ?: ""
+
+        // Handle doubly-escaped JSON string (e.g., "\"actual content\"")
+        // This happens when backend returns JSON.stringify(JSON.stringify(content))
+        return if (raw.startsWith("\"") && raw.endsWith("\"")) {
+            try {
+                // Try to parse as JSON string to unescape
+                kotlinx.serialization.json.Json.decodeFromString<String>(raw)
+            } catch (e: Exception) {
+                // If parsing fails, just remove surrounding quotes
+                raw.removeSurrounding("\"")
+            }
+        } else {
+            raw
+        }
+    }
 }
 
 /**

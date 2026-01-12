@@ -724,6 +724,29 @@ class ApiClient {
 		return this.request('GET', '/narratives/languages');
 	}
 
+	// Reddit Thread API
+	async getRedditThread(paperId: string, language?: string): Promise<ApiResponse<any>> {
+		const langParam = language ? `?language=${language}` : '';
+		return this.request('GET', `/papers/${paperId}/reddit${langParam}`);
+	}
+
+	async addRedditComment(
+		paperId: string,
+		request: { userComment: string; parentId?: string | null }
+	): Promise<ApiResponse<any>> {
+		return this.request('POST', `/papers/${paperId}/reddit/comments`, request);
+	}
+
+	async exportRedditMarkdown(paperId: string, language?: string): Promise<ApiResponse<{ markdown: string }>> {
+		const langParam = language ? `?language=${language}` : '';
+		return this.request('GET', `/papers/${paperId}/reddit/export${langParam}`);
+	}
+
+	async getRedditStats(paperId: string, language?: string): Promise<ApiResponse<any>> {
+		const langParam = language ? `?language=${language}` : '';
+		return this.request('GET', `/papers/${paperId}/reddit/stats${langParam}`);
+	}
+
 	// Bulk Re-analyze API
 	async bulkReanalyze(request: BulkReanalyzeRequest): Promise<ApiResponse<BulkReanalyzeResponse>> {
 		return this.request('POST', '/upload/bulk-reanalyze', request);

@@ -82,8 +82,37 @@ data class NarrativeDeletedResponse(
     val deleted: Boolean
 )
 
+@Serializable
+data class AddRedditCommentRequest(
+    val userComment: String,
+    val parentId: String? = null
+)
+
+@Serializable
+data class RedditThreadResponse(
+    val narrativeId: String,
+    val thread: RedditThread,
+    val createdAt: String,
+    val updatedAt: String
+)
+
+@Serializable
+data class RedditThreadStatsResponse(
+    val opScore: Int,
+    val totalComments: Int,
+    val topLevelComments: Int,
+    val replies: Int,
+    val userComments: Int,
+    val aiReplies: Int,
+    val rolesPresent: List<String>,
+    val totalScore: Int,
+    val avgCommentScore: Int
+)
+
 fun Route.narrativeRoutes() {
     val narrativeService = ServiceLocator.narrativeEngineService
+    val redditThreadService = ServiceLocator.redditThreadService
+    val narrativeCacheService = ServiceLocator.narrativeCacheService
     val jobQueue = GlobalJobQueue.instance
 
     route("/papers/{paperId}/narratives") {
@@ -308,6 +337,204 @@ fun Route.narrativeRoutes() {
                         ApiResponse<NarrativeDeletedResponse>(success = false, error = error.message)
                     )
                 }
+            )
+        }
+    }
+
+    // ===== Reddit Thread Endpoints =====
+
+    route("/papers/{paperId}/reddit") {
+        // GET /api/papers/{paperId}/reddit?language=ko
+        // Get Reddit Thread for a paper
+        get {
+            val paperId = call.parameters["paperId"]
+                ?: return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(success = false, error = "Missing paper ID")
+                )
+
+            val languageParam = call.request.queryParameters["language"] ?: "ko"
+            val language = NarrativeLanguage.entries.find {
+                it.code == languageParam || it.name.equals(languageParam, ignoreCase = true)
+            } ?: NarrativeLanguage.KOREAN
+
+            val result = redditThreadService.getRedditThreadByPaper(paperId, language).getOrNull()
+
+            if (result != null) {
+                val (narrative, thread) = result
+                call.respond(ApiResponse(data = RedditThreadResponse(
+                    narrativeId = narrative.id,
+                    thread = thread,
+                    createdAt = narrative.createdAt.toString(),
+                    updatedAt = narrative.updatedAt.toString()
+                )))
+            } else {
+                call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<RedditThreadResponse>(
+                        success = false,
+                        error = "Reddit thread not found. Generate a REDDIT narrative first."
+                    )
+                )
+            }
+        }
+
+        // POST /api/papers/{paperId}/reddit/comments
+        // Add user comment and get AI reply
+        post("/comments") {
+            val paperId = call.parameters["paperId"]
+                ?: return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(success = false, error = "Missing paper ID")
+                )
+
+            val request = try {
+                call.receive<AddRedditCommentRequest>()
+            } catch (e: Exception) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(success = false, error = "Invalid request body")
+                )
+            }
+
+            // Get narrative
+            val languageParam = call.request.queryParameters["language"] ?: "ko"
+            val language = NarrativeLanguage.entries.find {
+                it.code == languageParam || it.name.equals(languageParam, ignoreCase = true)
+            } ?: NarrativeLanguage.KOREAN
+
+            val threadResult = redditThreadService.getRedditThreadByPaper(paperId, language).getOrNull()
+            if (threadResult == null) {
+                return@post call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<String>(success = false, error = "Reddit thread not found")
+                )
+            }
+
+            val (narrative, _) = threadResult
+
+            // Get structural understanding from cache
+            val structural = narrativeCacheService.getStructuralUnderstanding(paperId)
+                ?: return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(
+                        success = false,
+                        error = "Structural understanding not found. Paper may need reprocessing."
+                    )
+                )
+
+            // Add user comment
+            val commentResult = redditThreadService.addUserComment(
+                narrativeId = narrative.id,
+                userComment = request.userComment,
+                structural = structural,
+                parentId = request.parentId
+            ).getOrNull()
+
+            if (commentResult == null) {
+                return@post call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<String>(success = false, error = "Failed to add comment")
+                )
+            }
+
+            val (updatedNarrative, updatedThread) = commentResult
+            val userComment = updatedThread.comments.findLast { comment: com.potero.domain.model.RedditPost -> comment.author == "User" }
+            val aiReply = updatedThread.comments.last()
+
+            call.respond(
+                ApiResponse(
+                    data = mapOf<String, Any?>(
+                        "thread" to updatedThread,
+                        "userComment" to userComment,
+                        "aiReply" to aiReply,
+                        "narrativeId" to updatedNarrative.id
+                    )
+                )
+            )
+        }
+
+        // GET /api/papers/{paperId}/reddit/export
+        // Export Reddit Thread to Markdown format
+        get("/export") {
+            val paperId = call.parameters["paperId"]
+                ?: return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(success = false, error = "Missing paper ID")
+                )
+
+            val languageParam = call.request.queryParameters["language"] ?: "ko"
+            val language = NarrativeLanguage.entries.find {
+                it.code == languageParam || it.name.equals(languageParam, ignoreCase = true)
+            } ?: NarrativeLanguage.KOREAN
+
+            val threadResult = redditThreadService.getRedditThreadByPaper(paperId, language).getOrNull()
+            if (threadResult == null) {
+                return@get call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<String>(success = false, error = "Reddit thread not found")
+                )
+            }
+
+            val (narrative, _) = threadResult
+
+            val markdown = redditThreadService.exportToMarkdown(narrative.id).getOrNull()
+            if (markdown == null) {
+                return@get call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<String>(success = false, error = "Failed to export markdown")
+                )
+            }
+
+            call.respond(ApiResponse(data = mapOf("markdown" to markdown)))
+        }
+
+        // GET /api/papers/{paperId}/reddit/stats
+        // Get Reddit Thread statistics
+        get("/stats") {
+            val paperId = call.parameters["paperId"]
+                ?: return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<String>(success = false, error = "Missing paper ID")
+                )
+
+            val languageParam = call.request.queryParameters["language"] ?: "ko"
+            val language = NarrativeLanguage.entries.find {
+                it.code == languageParam || it.name.equals(languageParam, ignoreCase = true)
+            } ?: NarrativeLanguage.KOREAN
+
+            val threadResult = redditThreadService.getRedditThreadByPaper(paperId, language).getOrNull()
+            if (threadResult == null) {
+                return@get call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<String>(success = false, error = "Reddit thread not found")
+                )
+            }
+
+            val (narrative, _) = threadResult
+
+            val stats = redditThreadService.getThreadStats(narrative.id).getOrNull()
+            if (stats == null) {
+                return@get call.respond(
+                    HttpStatusCode.InternalServerError,
+                    ApiResponse<RedditThreadStatsResponse>(success = false, error = "Failed to get thread stats")
+                )
+            }
+
+            call.respond(
+                ApiResponse(
+                    data = RedditThreadStatsResponse(
+                        opScore = stats.opScore,
+                        totalComments = stats.totalComments,
+                        topLevelComments = stats.topLevelComments,
+                        replies = stats.replies,
+                        userComments = stats.userComments,
+                        aiReplies = stats.aiReplies,
+                        rolesPresent = stats.rolesPresent.map { role: com.potero.domain.model.RedditRole -> role.name },
+                        totalScore = stats.totalScore,
+                        avgCommentScore = stats.avgCommentScore
+                    )
+                )
             )
         }
     }
