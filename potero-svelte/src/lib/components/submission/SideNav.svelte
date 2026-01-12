@@ -67,25 +67,25 @@
 	}
 </script>
 
-<nav class="w-56 shrink-0 border-r bg-white overflow-y-auto">
-	<ul class="py-2">
+<nav class="w-56 shrink-0 border-r border-border/30 bg-[hsl(var(--sidebar-bg))] backdrop-blur-[var(--blur-lg)] overflow-y-auto">
+	<ul class="py-2 px-2">
 		{#each items as item}
 			{#if item.id.startsWith('divider')}
-				<li class="my-2 border-t"></li>
+				<li class="my-2 border-t border-border/30"></li>
 			{:else}
 				<li class="relative">
 					<button
-						class="w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors
+						class="w-full flex items-center justify-between px-3 py-2.5 text-sm transition-all duration-[var(--transition-fast)] rounded-lg
                                {activeItem === item.id
-							? 'bg-primary/10 text-primary font-medium'
-							: 'text-foreground hover:bg-muted'}"
+							? 'bg-[hsl(var(--sidebar-item-active))] text-primary font-medium'
+							: 'text-foreground/80 hover:bg-[hsl(var(--sidebar-item-hover))]'}"
 						onclick={() => onItemSelect(item.id)}
 						aria-pressed={activeItem === item.id}
 					>
 						<span class="flex items-center gap-3">
 							{#if getIcon(item.icon)}
 								{@const IconComponent = getIcon(item.icon)}
-								<IconComponent class="h-4 w-4 shrink-0" />
+								<IconComponent class="h-4 w-4 shrink-0 {activeItem === item.id ? 'text-primary' : 'text-muted-foreground'}" />
 							{/if}
 							<span class="truncate">{item.label}</span>
 						</span>
@@ -104,7 +104,7 @@
 					<!-- Selection indicator -->
 					{#if activeItem === item.id}
 						<div
-							class="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 rounded-r bg-primary"
+							class="absolute left-0 top-1/2 -translate-y-1/2 h-6 w-1 rounded-r bg-primary transition-all duration-[var(--transition-fast)]"
 						></div>
 					{/if}
 				</li>

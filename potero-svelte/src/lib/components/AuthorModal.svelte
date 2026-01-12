@@ -96,7 +96,7 @@
 	class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
 	onclick={handleBackdropClick}
 >
-	<div class="w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-neutral-800">
+	<div class="w-full max-w-lg overflow-hidden rounded-xl glass shadow-glass">
 		<!-- Header with gradient -->
 		<div class="bg-gradient-to-r from-violet-500 to-purple-600 px-6 py-4">
 			<div class="flex items-start justify-between">

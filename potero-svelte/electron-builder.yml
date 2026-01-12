@@ -1,0 +1,49 @@
+# Electron Builder Configuration for Windows
+# Build command: npm run electron:build:win
+
+appId: "com.potero.app"
+productName: "Potero"
+copyright: "Copyright (c) 2024 Potero Team"
+
+# Directory settings
+directories:
+  buildResources: "build-resources"
+  output: "dist"
+
+# Files to include in the app
+files:
+  - "electron/**/*"
+  - "build/**/*"
+  - "package.json"
+
+# Extra resources (JAR and JRE) - copied to resources folder
+extraResources:
+  - from: "../potero-kmp/server/build/libs/potero-server.jar"
+    to: "backend/potero-server.jar"
+  - from: "jre-bundle/jre-win-x64"
+    to: "jre"
+
+# Windows configuration
+win:
+  target:
+    - target: "nsis"
+      arch:
+        - x64
+  icon: "build-resources/icon.ico"
+  artifactName: "${productName}-Setup-${version}.${ext}"
+
+# NSIS installer settings
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: "build-resources/icon.ico"
+  uninstallerIcon: "build-resources/icon.ico"
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "Potero"
+
+# Enable asar packaging for app files
+asar: true
+
+# Compression settings
+compression: "normal"

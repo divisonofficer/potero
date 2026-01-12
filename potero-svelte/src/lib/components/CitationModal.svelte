@@ -162,7 +162,7 @@
 	class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
 	onclick={handleBackdropClick}
 >
-	<div class="w-full max-w-2xl max-h-[80vh] overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-neutral-800 flex flex-col">
+	<div class="w-full max-w-2xl max-h-[80vh] overflow-hidden rounded-xl glass shadow-glass flex flex-col">
 		<!-- Header -->
 		<div class="border-b dark:border-neutral-700">
 			<div class="flex items-center justify-between px-6 py-4">

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { tabs, activeTab, activeTabId, closeTab, openSettings, isChatPanelOpen, toggleChatPanel, openPaper, updateTabPaper, openNotesList, openNote, isNotePanelOpen, notePanelPaperId, notePanelNoteId, openNotePanel, closeNotePanel, openRelatedWork, openSubmissionsList, openSubmissionWorkflow } from '$lib/stores/tabs';
+	import { get } from 'svelte/store';
 	import {
 		papers,
-		filteredPapers,
+		filteredPapers as libraryFilteredPapers,
 		isLoading,
 		error,
 		searchQuery,
@@ -24,11 +24,31 @@
 		searchOnlineIfNeeded,
 		importFromSearchResult
 	} from '$lib/stores/library';
+	import {
+		appState,
+		filteredPapers,
+		selectedPaper,
+		sidebarData,
+		selectSource,
+		selectPaper,
+		clearPaperSelection,
+		setViewMode,
+		setSortBy,
+		toggleSortDirection,
+		setSearchQuery,
+		toggleInspector,
+		toggleSidebar,
+		openViewer,
+		closeViewer,
+		type SourceType
+	} from '$lib/stores/appState';
+	import { tabs, openPaper, openSettings, openNotesList, openNote, openRelatedWork, openSubmissionsList, openSubmissionWorkflow, openTagProfile, openJournalProfile, openAuthorProfile, isChatPanelOpen, toggleChatPanel, isNotePanelOpen, notePanelPaperId, notePanelNoteId, closeNotePanel } from '$lib/stores/tabs';
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
 	import type { Paper, ResearchNote } from '$lib/types';
 	import { createNote } from '$lib/stores/notes';
 	import { browser } from '$app/environment';
+	import { MainLayout, SourcesSidebar, PaperBrowser, InspectorPanel, StatusBar } from '$lib/components/layout';
 	import FloatingChatPanel from '$lib/components/chat/FloatingChatPanel.svelte';
 	import FloatingNotePanel from '$lib/components/notes/FloatingNotePanel.svelte';
 	import FloatingSearchModal from '$lib/components/FloatingSearchModal.svelte';
@@ -43,37 +63,7 @@
 	import RelatedWorkView from '$lib/components/relatedWork/RelatedWorkView.svelte';
 	import { SubmissionDashboard, SubmissionsList } from '$lib/components/submission';
 	import { formatVenue } from '$lib/utils/venueAbbreviation';
-	import { online } from 'svelte/reactivity/window';
-	import {
-		Library,
-		FileText,
-		Settings as SettingsIcon,
-		User,
-		Tag,
-		Building2,
-		Search,
-		X,
-		ChevronDown,
-		BookOpen,
-		Network,
-		Send,
-		ClipboardList
-	} from 'lucide-svelte';
-
-	// Tab icon mapping
-	const tabIcons: Record<string, typeof Library> = {
-		home: Library,
-		viewer: FileText,
-		settings: SettingsIcon,
-		author: User,
-		tag: Tag,
-		journal: Building2,
-		notes: BookOpen,
-		'note-viewer': FileText,
-		'related-work': Network,
-		'submissions-list': ClipboardList,
-		'submission': Send
-	};
+	import { Network, ChevronDown } from 'lucide-svelte';
 
 	// LLM log panel state
 	let showLLMLogPanel = $state(false);
@@ -81,77 +71,19 @@
 	// Floating search modal state
 	let showFloatingSearch = $state(false);
 
-	// Settings tab state
+	// Settings panel state
+	let showSettings = $state(false);
 	let settingsActiveTab = $state<'llm' | 'search' | 'system'>('llm');
 
-	// Analyze dropdown state (per tab)
+	// Analyze dropdown state (per paper)
 	let analyzeDropdownOpen = $state<Record<string, boolean>>({});
 
 	// Preprocessing status cache (per paper)
 	let preprocessingStatusCache = $state<Record<string, { hasCache: boolean; status: string | null }>>({});
 
-	// Fetch preprocessing status for a paper
-	async function fetchPreprocessingStatus(paperId: string) {
-		try {
-			const response = await fetch(`/api/upload/preprocessing-status/${paperId}`);
-			if (response.ok) {
-				const data = await response.json();
-				preprocessingStatusCache[paperId] = {
-					hasCache: data.data.hasCache,
-					status: data.data.status
-				};
-			}
-		} catch (error) {
-			console.error('Failed to fetch preprocessing status:', error);
-		}
-	}
-
 	// Author modal state
 	let selectedAuthorName = $state<string | null>(null);
 	let selectedAuthorPapers = $state<Paper[]>([]);
-
-	function openAuthorModal(authorName: string) {
-		// Find all papers by this author
-		const authorPapers = $papers.filter((p) =>
-			p.authors.some((a) => a.toLowerCase() === authorName.toLowerCase())
-		);
-		selectedAuthorName = authorName;
-		selectedAuthorPapers = authorPapers;
-	}
-
-	function closeAuthorModal() {
-		selectedAuthorName = null;
-		selectedAuthorPapers = [];
-	}
-
-	// Open a paper by ID (used by CitationModal when paper exists in library)
-	async function openPaperById(paperId: string) {
-		// First check if paper is in current papers list
-		let paper = $papers.find(p => p.id === paperId);
-
-		if (!paper) {
-			// Paper not in local state, try to fetch from API
-			const response = await api.getPaper(paperId);
-			if (response.success && response.data) {
-				paper = response.data as Paper;
-			}
-		}
-
-		if (paper) {
-			openPaper(paper);
-		} else {
-			toast.error('Paper not found');
-		}
-	}
-
-	// Dynamic import for PDF viewer (client-side only due to pdfjs)
-	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
-
-	if (browser) {
-		import('$lib/components/PdfViewer.svelte').then(module => {
-			PdfViewer = module.default;
-		});
-	}
 
 	// Import dialog state
 	let showImportDialog = $state(false);
@@ -166,19 +98,6 @@
 	// Delete confirmation state
 	let paperToDelete = $state<Paper | null>(null);
 	let isDeleting = $state(false);
-
-	async function handleDeletePaper() {
-		if (!paperToDelete) return;
-		isDeleting = true;
-		const success = await deletePaper(paperToDelete.id);
-		if (success) {
-			toast.success(`Deleted "${paperToDelete.title}"`);
-		} else {
-			toast.error('Failed to delete paper');
-		}
-		paperToDelete = null;
-		isDeleting = false;
-	}
 
 	// Settings state
 	let settings = $state<Settings>({
@@ -202,35 +121,100 @@
 	// Bulk reanalyze state
 	let isBulkReanalyzing = $state(false);
 
-	/**
-	 * Download PDF for a paper from online sources
-	 */
+	// Dynamic import for PDF viewer (client-side only due to pdfjs)
+	let PdfViewer: typeof import('$lib/components/PdfViewer.svelte').default | null = $state(null);
+
+	// Current viewing paper (derived from appState)
+	let viewingPaper = $derived.by(() => {
+		const state = get(appState);
+		if (!state.viewerPaperId) return null;
+		const allPapers = get(papers);
+		return allPapers.find(p => p.id === state.viewerPaperId) ?? null;
+	});
+
+	if (browser) {
+		import('$lib/components/PdfViewer.svelte').then(module => {
+			PdfViewer = module.default;
+		});
+	}
+
+	// Fetch preprocessing status for a paper
+	async function fetchPreprocessingStatus(paperId: string) {
+		try {
+			const response = await fetch(`/api/upload/preprocessing-status/${paperId}`);
+			if (response.ok) {
+				const data = await response.json();
+				preprocessingStatusCache[paperId] = {
+					hasCache: data.data.hasCache,
+					status: data.data.status
+				};
+			}
+		} catch (error) {
+			console.error('Failed to fetch preprocessing status:', error);
+		}
+	}
+
+	function openAuthorModal(authorName: string) {
+		const allPapers = get(papers);
+		const authorPapers = allPapers.filter((p) =>
+			p.authors.some((a) => a.toLowerCase() === authorName.toLowerCase())
+		);
+		selectedAuthorName = authorName;
+		selectedAuthorPapers = authorPapers;
+	}
+
+	function closeAuthorModal() {
+		selectedAuthorName = null;
+		selectedAuthorPapers = [];
+	}
+
+	// Open a paper by ID (used by CitationModal when paper exists in library)
+	async function openPaperById(paperId: string) {
+		const allPapers = get(papers);
+		let paper = allPapers.find(p => p.id === paperId);
+
+		if (!paper) {
+			const response = await api.getPaper(paperId);
+			if (response.success && response.data) {
+				paper = response.data as Paper;
+			}
+		}
+
+		if (paper) {
+			handleOpenPaper(paper);
+		} else {
+			toast.error('Paper not found');
+		}
+	}
+
+	// Handle paper selection from sidebar or browser
+	function handleSelectPaper(paperId: string, multi = false) {
+		selectPaper(paperId, multi);
+	}
+
+	// Handle opening a paper in viewer
+	function handleOpenPaper(paper: Paper) {
+		openViewer(paper.id);
+		selectPaper(paper.id);
+	}
+
+	// Handle sidebar source selection
+	function handleSelectSource(source: SourceType, sourceId?: string) {
+		selectSource(source, sourceId);
+		closeViewer();
+	}
+
+	// Handle PDF download
 	async function handleDownloadPdf(paperId: string) {
 		isDownloadingPdf = true;
 		downloadingPaperId = paperId;
 
 		try {
-			console.log(`[Download PDF] Attempting to download for paper: ${paperId}`);
-
 			const result = await api.downloadPdf(paperId);
 
 			if (result.success && result.data) {
 				toast.success('PDF downloaded successfully');
-
-				// Reload papers to update UI
 				await loadPapers();
-
-				// Update the current tab's paper if it's the same paper
-				const currentTab = $tabs.find(t => t.type === 'viewer' && t.paper?.id === paperId);
-				if (currentTab) {
-					// Get updated paper info
-					const updatedPaper = await api.getPaper(paperId);
-					if (updatedPaper.success && updatedPaper.data) {
-						updateTabPaper(currentTab.id, updatedPaper.data);
-					}
-				}
-
-				console.log(`[Download PDF] Success: ${result.data.pdfPath}`);
 			} else {
 				throw new Error(result.error || 'Failed to download PDF');
 			}
@@ -242,6 +226,20 @@
 			isDownloadingPdf = false;
 			downloadingPaperId = null;
 		}
+	}
+
+	async function handleDeletePaper() {
+		if (!paperToDelete) return;
+		isDeleting = true;
+		const success = await deletePaper(paperToDelete.id);
+		if (success) {
+			toast.success(`Deleted "${paperToDelete.title}"`);
+			clearPaperSelection();
+		} else {
+			toast.error('Failed to delete paper');
+		}
+		paperToDelete = null;
+		isDeleting = false;
 	}
 
 	async function handleBulkReanalyzeAll() {
@@ -283,8 +281,9 @@
 
 	// Trigger online search when local results are few
 	$effect(() => {
-		const query = $searchQuery;
-		const localCount = $filteredPapers.length;
+		const state = get(appState);
+		const query = state.searchQuery;
+		const localCount = get(filteredPapers).length;
 		searchOnlineIfNeeded(query, localCount);
 	});
 
@@ -303,12 +302,10 @@
 			enableSciHub: settings.enableSciHub
 		};
 
-		// Only send API key if user entered a new one
 		if (newApiKey.trim()) {
 			updateData.llmApiKey = newApiKey;
 		}
 
-		// Only send Semantic Scholar API key if user entered a new one
 		if (newSemanticScholarApiKey.trim()) {
 			updateData.semanticScholarApiKey = newSemanticScholarApiKey;
 		}
@@ -347,17 +344,11 @@
 		isSavingSSO = false;
 	}
 
-	/**
-	 * Handle SSO login flow
-	 * - In Electron: Opens modal window with auto token extraction
-	 * - In Browser: Redirects to SSO login page
-	 */
 	async function handleSSOLogin() {
 		isSavingSSO = true;
 		const result = await api.loginSSO();
 
 		if (result.success && result.accessToken) {
-			// In Electron: Token was extracted automatically
 			const expiresAt = result.expiresIn
 				? Date.now() + result.expiresIn * 1000
 				: undefined;
@@ -377,7 +368,6 @@
 		} else if (result.error) {
 			toast.error(`SSO login failed: ${result.error}`);
 		}
-		// If browser redirect, this code won't execute
 
 		isSavingSSO = false;
 	}
@@ -412,7 +402,6 @@
 			}
 			isImporting = false;
 		}
-		// Reset input
 		target.value = '';
 	}
 
@@ -428,7 +417,6 @@
 	function handleDragLeave(event: DragEvent) {
 		event.preventDefault();
 		event.stopPropagation();
-		// Only set isDragging to false if we're leaving the main container
 		const relatedTarget = event.relatedTarget as Node | null;
 		const currentTarget = event.currentTarget as Node;
 		if (!relatedTarget || !currentTarget.contains(relatedTarget)) {
@@ -447,7 +435,6 @@
 				(f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
 			);
 			if (pdfFiles.length > 0) {
-				// Check file sizes before upload (50MB limit)
 				const maxSize = 50 * 1024 * 1024;
 				const oversizedFiles = pdfFiles.filter((f) => f.size > maxSize);
 				if (oversizedFiles.length > 0) {
@@ -460,13 +447,31 @@
 				const result = await uploadPdfs(pdfFiles);
 				if (result.successCount > 0) {
 					toast.success(`Successfully uploaded ${result.successCount} file${result.successCount > 1 ? 's' : ''}`);
-				} else if ($error) {
-					toast.error($error);
+				} else if (get(error)) {
+					toast.error(get(error)!);
 				}
 			} else {
 				toast.warning('Please drop PDF files only');
 			}
 		}
+	}
+
+	// Quick actions from inspector
+	function handleOpenRelatedWork() {
+		const paper = get(selectedPaper);
+		if (paper) {
+			openRelatedWork(paper);
+		}
+	}
+
+	function handleOpenChat() {
+		toggleChatPanel();
+	}
+
+	function handleOpenNotes(paperId: string) {
+		import('$lib/stores/tabs').then(({ openNotePanel }) => {
+			openNotePanel(paperId);
+		});
 	}
 </script>
 
@@ -480,10 +485,284 @@
 	class="hidden"
 />
 
+<!-- Main Layout -->
+<div
+	ondragenter={handleDragOver}
+	ondragover={handleDragOver}
+	ondragleave={handleDragLeave}
+	ondrop={handleDrop}
+	role="region"
+	aria-label="Drop zone for PDF files"
+>
+	<MainLayout
+		title="Potero"
+		showSidebar={$appState.showSidebar}
+		showInspector={$appState.showInspector && !$appState.viewerPaperId}
+		onSearch={() => showFloatingSearch = true}
+		onAdd={() => showImportDialog = true}
+		onSettings={() => showSettings = true}
+	>
+		{#snippet sidebar()}
+			<SourcesSidebar
+				{sidebarData}
+				selectedSource={$appState.selectedSource}
+				selectedSourceId={$appState.selectedSourceId}
+				onSelectSource={handleSelectSource}
+			/>
+		{/snippet}
+
+		{#snippet content()}
+			{#if $appState.viewerPaperId && viewingPaper}
+				<!-- PDF Viewer Mode -->
+				<div class="flex h-full flex-col">
+					<!-- Paper info bar with action buttons -->
+					<div class="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
+						<div class="flex items-center gap-2 min-w-0 flex-1">
+							<button
+								class="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+								onclick={() => closeViewer()}
+								title="Back to Library"
+							>
+								<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<path d="M19 12H5M12 19l-7-7 7-7" />
+								</svg>
+							</button>
+							<h2 class="truncate text-sm font-medium">{viewingPaper?.title}</h2>
+							{#if viewingPaper?.year}
+								<span class="shrink-0 text-xs text-muted-foreground">({viewingPaper.year})</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-1 shrink-0">
+							<!-- Chat toggle button -->
+							<button
+								class="rounded px-2 py-1 text-xs transition-colors flex items-center gap-1 {$isChatPanelOpen
+									? 'bg-primary text-primary-foreground'
+									: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
+								onclick={() => toggleChatPanel()}
+								title={$isChatPanelOpen ? 'Close Chat' : 'Chat with Paper'}
+							>
+								<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+									<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+								</svg>
+								Chat
+							</button>
+
+							<!-- Related Work Button -->
+							<button
+								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
+								onclick={() => {
+									if (viewingPaper) {
+										openRelatedWork(viewingPaper);
+									}
+								}}
+								title="Find and compare related work"
+							>
+								<Network class="h-4 w-4" />
+								Related
+							</button>
+
+							<!-- Actions Dropdown Menu -->
+							<div class="relative">
+								<button
+									class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
+									onclick={() => {
+										const paperId = viewingPaper?.id ?? '';
+										analyzeDropdownOpen[paperId] = !analyzeDropdownOpen[paperId];
+										if (analyzeDropdownOpen[paperId] && paperId) {
+											fetchPreprocessingStatus(paperId);
+										}
+									}}
+									title="PDF 작업 옵션"
+								>
+									<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<path d="M1 4v6h6M23 20v-6h-6" />
+										<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+									</svg>
+									Actions
+									<ChevronDown class="h-3 w-3" />
+								</button>
+
+								{#if viewingPaper && analyzeDropdownOpen[viewingPaper.id]}
+									<div
+										class="absolute right-0 mt-1 w-48 rounded-md shadow-lg glass shadow-glass border z-50"
+										onclick={() => { if (viewingPaper) analyzeDropdownOpen[viewingPaper.id] = false; }}
+									>
+										<div class="py-1">
+											<button
+												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
+												onclick={async (e) => {
+													e.stopPropagation();
+													if (!viewingPaper?.id) return;
+													analyzeDropdownOpen[viewingPaper.id] = false;
+													const jobId = await reanalyzePaper(viewingPaper.id);
+													if (jobId) {
+														toast.info('Analysis started. Check progress in the task panel.');
+													} else {
+														toast.error('Failed to start analysis');
+													}
+												}}
+											>
+												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<path d="M1 4v6h6M23 20v-6h-6" />
+													<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+												</svg>
+												<div>
+													<div class="font-medium">Re-analyze</div>
+													<div class="text-muted-foreground">Update metadata & refs</div>
+												</div>
+											</button>
+											<button
+												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
+												onclick={async (e) => {
+													e.stopPropagation();
+													if (!viewingPaper?.id) return;
+													analyzeDropdownOpen[viewingPaper.id] = false;
+													const jobId = await reextractPaper(viewingPaper.id);
+													if (jobId) {
+														toast.info('Re-extraction started. Check progress in the task panel.');
+													} else {
+														toast.error('Failed to start re-extraction');
+													}
+												}}
+											>
+												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+													<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+													<polyline points="7 10 12 15 17 10" />
+													<line x1="12" y1="15" x2="12" y2="3" />
+												</svg>
+												<div class="flex-1">
+													<div class="font-medium">Re-extract</div>
+													<div class="text-muted-foreground">Force OCR & text extraction</div>
+												</div>
+												{#if viewingPaper?.id && preprocessingStatusCache[viewingPaper.id]}
+													{@const status = preprocessingStatusCache[viewingPaper.id]}
+													<div
+														class="w-2 h-2 rounded-full"
+														class:bg-green-500={status.hasCache && status.status === 'completed'}
+														class:bg-yellow-500={status.hasCache && status.status === 'processing'}
+														class:bg-red-500={status.hasCache && status.status === 'failed'}
+														class:bg-gray-400={!status.hasCache}
+														title={status.hasCache ? `Cached (${status.status})` : 'Not cached'}
+													></div>
+												{/if}
+											</button>
+										</div>
+									</div>
+								{/if}
+							</div>
+						</div>
+					</div>
+
+					{#if viewingPaper?.pdfUrl && PdfViewer}
+						<svelte:component
+							this={PdfViewer}
+							pdfUrl={viewingPaper.pdfUrl}
+							paperId={viewingPaper.id}
+							paper={viewingPaper}
+							onOpenPaper={openPaperById}
+						/>
+					{:else if viewingPaper?.pdfUrl && !PdfViewer}
+						<div class="flex flex-1 items-center justify-center bg-muted/20">
+							<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
+						</div>
+					{:else}
+						<div class="flex flex-1 flex-col items-center justify-center bg-muted/20">
+							<svg class="mb-4 h-16 w-16 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+							</svg>
+							<h2 class="mb-2 text-xl font-semibold">{viewingPaper?.title}</h2>
+							<p class="text-muted-foreground">No PDF file attached</p>
+							{#if viewingPaper?.abstract}
+								<p class="mt-4 max-w-2xl text-center text-sm text-muted-foreground">
+									{viewingPaper.abstract}
+								</p>
+							{/if}
+							<div class="mt-4 flex gap-2">
+								<button
+									class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+									onclick={() => handleDownloadPdf(viewingPaper?.id ?? '')}
+									disabled={isDownloadingPdf && downloadingPaperId === viewingPaper?.id}
+								>
+									{isDownloadingPdf && downloadingPaperId === viewingPaper?.id ? 'Downloading...' : 'Download PDF'}
+								</button>
+								<button
+									class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted"
+									onclick={() => {
+										toast.info('PDF upload for existing papers coming soon');
+									}}
+								>
+									Upload PDF
+								</button>
+							</div>
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<!-- Paper Browser Mode -->
+				<PaperBrowser
+					papers={filteredPapers}
+					selectedPaperIds={$appState.selectedPaperIds}
+					viewMode={$appState.viewMode}
+					sortBy={$appState.sortBy}
+					sortDirection={$appState.sortDirection}
+					searchQuery={$appState.searchQuery}
+					isLoading={$isLoading}
+					onSelectPaper={handleSelectPaper}
+					onOpenPaper={handleOpenPaper}
+					onDeletePaper={(paper) => paperToDelete = paper}
+					onViewModeChange={setViewMode}
+					onSortChange={setSortBy}
+					onToggleSortDirection={toggleSortDirection}
+					onSearchChange={setSearchQuery}
+					onAddPaper={() => showImportDialog = true}
+					onRefresh={async () => {
+						await loadPapers(false);
+						toast.success('Library refreshed');
+					}}
+				/>
+			{/if}
+		{/snippet}
+
+		{#snippet inspector()}
+			<InspectorPanel
+				paper={selectedPaper}
+				onOpenPdf={handleOpenPaper}
+				onOpenRelatedWork={handleOpenRelatedWork}
+				onOpenChat={handleOpenChat}
+				onOpenNotes={handleOpenNotes}
+				onTagClick={(tag) => handleSelectSource('tag', tag)}
+				onAuthorClick={openAuthorModal}
+			/>
+		{/snippet}
+
+		{#snippet statusBar()}
+			<StatusBar
+				totalCount={$sidebarData.paperCount}
+				selectedCount={$appState.selectedPaperIds.length}
+			/>
+		{/snippet}
+	</MainLayout>
+</div>
+
+<!-- Drop overlay -->
+{#if isDragging && !$appState.viewerPaperId}
+	<div
+		class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+	>
+		<div class="flex flex-col items-center rounded-2xl border-4 border-dashed border-primary bg-background p-12 shadow-2xl">
+			<svg class="mb-4 h-16 w-16 text-primary animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+			</svg>
+			<p class="text-xl font-bold text-foreground">Drop PDF files here</p>
+			<p class="mt-2 text-sm text-muted-foreground">Files will be added to your library</p>
+		</div>
+	</div>
+{/if}
+
 <!-- Import Dialog -->
 {#if showImportDialog}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-		<div class="w-full max-w-md rounded-lg bg-background p-6 shadow-xl">
+		<div class="w-full max-w-md rounded-xl glass shadow-glass-lg p-6">
 			<h2 class="mb-4 text-lg font-semibold">Add Paper</h2>
 
 			<div class="mb-4 flex gap-2">
@@ -570,1079 +849,24 @@
 	</div>
 {/if}
 
-<!-- Drop overlay - shows only on Library (home) tab when dragging files -->
-{#if isDragging && $activeTab?.type === 'home'}
-	<div
-		class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-	>
-		<div class="flex flex-col items-center rounded-2xl border-4 border-dashed border-primary bg-background p-12 shadow-2xl">
-			<svg class="mb-4 h-16 w-16 text-primary animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
-			</svg>
-			<p class="text-xl font-bold text-foreground">Drop PDF files here</p>
-			<p class="mt-2 text-sm text-muted-foreground">Files will be added to your library</p>
-		</div>
-	</div>
-{/if}
-
-<div
-	class="flex h-full flex-col"
-	ondragenter={handleDragOver}
-	ondragover={handleDragOver}
-	ondragleave={handleDragLeave}
-	ondrop={handleDrop}
-	role="region"
-	aria-label="Drop zone for PDF files"
->
-	<!-- Tab Bar -->
-	<div class="flex h-10 items-center border-b bg-muted/50 px-2">
-		{#each $tabs as tab (tab.id)}
-			<button
-				class="flex h-8 items-center gap-1.5 rounded-t-md border-b-2 px-3 text-sm transition-colors
-					{$activeTabId === tab.id
-					? 'border-primary bg-background text-foreground'
-					: 'border-transparent text-muted-foreground hover:text-foreground'}"
-				onclick={() => activeTabId.set(tab.id)}
-			>
-				{#if tabIcons[tab.type]}
-					<svelte:component this={tabIcons[tab.type]} class="h-4 w-4 shrink-0" />
-				{/if}
-				<span class="max-w-32 truncate">{tab.title}</span>
-				{#if tab.id !== 'home'}
-					<button
-						class="ml-1 rounded p-0.5 hover:bg-muted"
-						onclick={(e) => {
-							e.stopPropagation();
-							closeTab(tab.id);
-						}}
-					>
-						<X class="h-3 w-3" />
-					</button>
-				{/if}
-			</button>
-		{/each}
-
-		<!-- Chat toggle button (only show when PDF viewer is active) -->
-		{#if $activeTab?.type === 'viewer'}
-			<button
-				class="ml-auto rounded p-1.5 transition-colors {$isChatPanelOpen
-					? 'bg-primary text-primary-foreground'
-					: 'text-muted-foreground hover:bg-muted hover:text-foreground'}"
-				onclick={() => toggleChatPanel()}
-				title={$isChatPanelOpen ? 'Close Chat' : 'Chat with Paper'}
-			>
-				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-				</svg>
-			</button>
-		{:else}
-			<div class="ml-auto"></div>
-		{/if}
-
-		<!-- Quick Search button -->
-		<button
-			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-			onclick={() => showFloatingSearch = true}
-			title="Quick Search (Ctrl+K)"
-		>
-			<Search class="h-5 w-5" />
-		</button>
-
-		<!-- Submissions button -->
-		<button
-			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-			onclick={() => openSubmissionsList()}
-			title="Submissions"
-		>
-			<ClipboardList class="h-5 w-5" />
-		</button>
-
-		<!-- Notes button -->
-		<button
-			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-			onclick={() => openNotesList()}
-			title="Research Notes"
-		>
-			<BookOpen class="h-5 w-5" />
-		</button>
-
-		<!-- Settings button -->
-		<button
-			class="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-			onclick={() => openSettings()}
-			title="Settings"
-		>
-			<SettingsIcon class="h-5 w-5" />
-		</button>
-	</div>
-
-	<!-- Content Area -->
-	<div class="flex-1 overflow-hidden">
-		<!-- Home tab -->
-		<div class="h-full {$activeTab?.type === 'home' ? '' : 'hidden'}">
-			<div class="h-full overflow-auto p-6">
-				<h1 class="mb-6 text-2xl font-bold">Paper Library</h1>
-
-				<!-- Search and filters -->
-				<div class="mb-6 flex gap-4">
-					<input
-						type="text"
-						placeholder="Search papers..."
-						bind:value={$searchQuery}
-						class="flex-1 rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-					/>
-
-					<!-- Sort dropdown -->
-					<select
-						bind:value={$sortBy}
-						class="rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-					>
-						<option value="recent">Most Recent</option>
-						<option value="citations">Most Cited</option>
-						<option value="title">Title A-Z</option>
-					</select>
-
-					<!-- View style buttons -->
-					<div class="flex rounded-md border">
-						<button
-							class="px-3 py-2 text-sm transition-colors {$viewStyle === 'grid'
-								? 'bg-primary text-primary-foreground'
-								: 'hover:bg-muted'}"
-							onclick={() => viewStyle.set('grid')}
-							title="Grid view"
-						>
-							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-								<rect x="3" y="3" width="7" height="7" rx="1" />
-								<rect x="14" y="3" width="7" height="7" rx="1" />
-								<rect x="3" y="14" width="7" height="7" rx="1" />
-								<rect x="14" y="14" width="7" height="7" rx="1" />
-							</svg>
-						</button>
-						<button
-							class="px-3 py-2 text-sm transition-colors {$viewStyle === 'list'
-								? 'bg-primary text-primary-foreground'
-								: 'hover:bg-muted'}"
-							onclick={() => viewStyle.set('list')}
-							title="List view"
-						>
-							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-								<rect x="3" y="4" width="18" height="4" rx="1" />
-								<rect x="3" y="10" width="18" height="4" rx="1" />
-								<rect x="3" y="16" width="18" height="4" rx="1" />
-							</svg>
-						</button>
-						<button
-							class="px-3 py-2 text-sm transition-colors {$viewStyle === 'compact'
-								? 'bg-primary text-primary-foreground'
-								: 'hover:bg-muted'}"
-							onclick={() => viewStyle.set('compact')}
-							title="Compact view"
-						>
-							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
-								<rect x="3" y="5" width="18" height="2" rx="1" />
-								<rect x="3" y="9" width="18" height="2" rx="1" />
-								<rect x="3" y="13" width="18" height="2" rx="1" />
-								<rect x="3" y="17" width="18" height="2" rx="1" />
-							</svg>
-						</button>
-					</div>
-
-					<button
-						class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted flex items-center gap-2"
-						onclick={async () => {
-							await loadPapers(false);
-							toast.success('Library refreshed');
-						}}
-						title="Refresh library from database"
-					>
-						<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-							<path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-						</svg>
-						Refresh
-					</button>
-
-					<button
-						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
-						onclick={() => (showImportDialog = true)}
-					>
-						Add Paper
-					</button>
-				</div>
-
-				<!-- Loading state -->
-				{#if $isLoading}
-					<div class="flex items-center justify-center py-12">
-						<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
-					</div>
-				{:else if $filteredPapers.length === 0 && $onlineSearchResults.length === 0}
-					<div
-						class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-16 text-muted-foreground transition-colors
-							{isDragging ? 'border-primary bg-primary/10' : 'border-muted-foreground/25'}"
-					>
-						<svg class="mb-4 h-16 w-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-							<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-						</svg>
-						<p class="text-lg font-medium">No papers yet</p>
-						<p class="mt-1 text-sm">Drop PDF files here or click Add Paper to get started</p>
-						<button
-							class="mt-4 rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
-							onclick={() => (showImportDialog = true)}
-						>
-							Add Paper
-						</button>
-					</div>
-				{:else}
-					<!-- Compact/Table View -->
-					{#if $viewStyle === 'compact'}
-						<div class="overflow-x-auto rounded-lg border">
-							<table class="w-full text-sm">
-								<thead class="border-b bg-muted/50 text-left text-xs uppercase text-muted-foreground">
-									<tr>
-										<th class="w-8 p-3"></th>
-										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('title')}>
-											<span class="flex items-center gap-1">
-												Title
-												{#if $sortBy === 'title'}
-													<ChevronDown class="h-3 w-3" />
-												{/if}
-											</span>
-										</th>
-										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('recent')}>
-											Author
-										</th>
-										<th class="p-3 hidden md:table-cell">Conference</th>
-										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('recent')}>
-											<span class="flex items-center gap-1">
-												Year
-												{#if $sortBy === 'recent'}
-													<ChevronDown class="h-3 w-3" />
-												{/if}
-											</span>
-										</th>
-										<th class="p-3 cursor-pointer hover:text-foreground transition-colors" onclick={() => sortBy.set('citations')}>
-											<span class="flex items-center gap-1">
-												Citations
-												{#if $sortBy === 'citations'}
-													<ChevronDown class="h-3 w-3" />
-												{/if}
-											</span>
-										</th>
-										<th class="w-10 p-3"></th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each $filteredPapers as paper (paper.id)}
-										<tr
-											class="group cursor-pointer border-b transition-colors hover:bg-muted/50"
-											onclick={() => {
-												import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-											}}
-										>
-											<td class="p-3">
-												{#if paper.pdfUrl}
-													<svg class="h-4 w-4 text-primary" viewBox="0 0 24 24" fill="currentColor">
-														<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" />
-													</svg>
-												{:else}
-													<FileText class="h-4 w-4 text-muted-foreground" />
-												{/if}
-											</td>
-											<td class="p-3">
-												<div class="font-medium line-clamp-1">{paper.title}</div>
-												{#if paper.subject && paper.subject.length > 0}
-													<div class="mt-0.5 flex gap-1">
-														{#each paper.subject.slice(0, 2) as tag}
-															<button
-																class="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded hover:bg-primary/20 transition-colors"
-																onclick={(e) => {
-																	e.stopPropagation();
-																	import('$lib/stores/tabs').then(({ openTagProfile }) => {
-																		const _papers = $papers.filter(p => p.subject.includes(tag));
-																		openTagProfile({
-																			name: tag,
-																			color: '#6366f1',
-																			paperCount: _papers.length,
-																			papers: _papers,
-																			relatedTags: []
-																		});
-																	});
-																}}
-															>{tag}</button>
-														{/each}
-													</div>
-												{/if}
-											</td>
-											<td class="p-3">
-												{#if paper.authors && paper.authors.length > 0}
-													<button
-														class="text-muted-foreground hover:text-primary hover:underline"
-														onclick={(e) => {
-															e.stopPropagation();
-															openAuthorModal(paper.authors[0]);
-														}}
-													>
-														{paper.authors[0]}
-													</button>
-													{#if paper.authors.length > 1}
-														<span class="text-xs text-muted-foreground">+{paper.authors.length - 1}</span>
-													{/if}
-												{:else}
-													<span class="text-muted-foreground">Unknown</span>
-												{/if}
-											</td>
-											<td class="p-3 hidden md:table-cell">
-												{#if paper.conference}
-													{@const venueInfo = formatVenue(paper.conference)}
-													<button
-														class="rounded bg-muted px-2 py-0.5 text-xs hover:bg-muted/80 transition-colors"
-														title={venueInfo.full ?? undefined}
-														onclick={(e) => {
-															e.stopPropagation();
-															import('$lib/stores/tabs').then(({ openJournalProfile }) => {
-																const conferencePapers = $papers.filter(p => p.conference === paper.conference);
-																const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
-																openJournalProfile({
-																	name: venueInfo.full ?? paper.conference ?? '',
-																	abbreviation: venueInfo.display ?? null,
-																	paperCount: conferencePapers.length,
-																	papers: conferencePapers,
-																	years
-																});
-															});
-														}}
-													>{venueInfo.display}</button>
-												{:else}
-													<span class="text-muted-foreground">-</span>
-												{/if}
-											</td>
-											<td class="p-3">
-												{#if paper.year}
-													<button
-														class="hover:text-primary hover:underline"
-														onclick={(e) => {
-															e.stopPropagation();
-															activeTabId.set('home');
-															selectedYear.set(paper.year);
-														}}
-													>
-														{paper.year}
-													</button>
-												{:else}
-													<span>-</span>
-												{/if}
-											</td>
-											<td class="p-3">
-												{#if paper.citations}
-													<span class="text-muted-foreground">{paper.citations}</span>
-												{:else}
-													<span class="text-muted-foreground">-</span>
-												{/if}
-											</td>
-											<td class="p-3">
-												<button
-													class="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-													onclick={(e) => {
-														e.stopPropagation();
-														paperToDelete = paper;
-													}}
-													title="Delete paper"
-												>
-													<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-														<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-													</svg>
-												</button>
-											</td>
-										</tr>
-									{/each}
-								</tbody>
-							</table>
-						</div>
-					{:else}
-						<!-- Paper grid/list -->
-						<div
-							class={$viewStyle === 'grid'
-								? 'grid grid-cols-3 gap-4 md:grid-cols-4 lg:grid-cols-5'
-								: 'flex flex-col gap-3'}
-						>
-						{#each $filteredPapers as paper (paper.id)}
-							{#if $viewStyle === 'grid'}
-								<!-- Grid view card with thumbnail -->
-								<div
-									class="group relative cursor-pointer rounded-lg border bg-card overflow-hidden transition-shadow hover:shadow-md"
-									onclick={() => {
-										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-									}}
-								>
-									<!-- Thumbnail -->
-									{#if paper.thumbnailUrl}
-										<div class="relative h-32 w-full bg-muted overflow-hidden">
-											<img
-												src={api.getThumbnailUrl(paper.id)}
-												alt=""
-												class="h-full w-full object-cover"
-												onerror={(e) => {
-													const target = e.currentTarget as HTMLImageElement;
-													target.style.display = 'none';
-												}}
-											/>
-										</div>
-									{:else if paper.pdfUrl}
-										<!-- Placeholder for papers with PDF but no thumbnail yet -->
-										<div class="relative h-32 w-full bg-gradient-to-br from-neutral-100 to-neutral-200 dark:from-neutral-800 dark:to-neutral-700 flex items-center justify-center">
-											<svg class="h-12 w-12 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-												<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-											</svg>
-										</div>
-									{/if}
-									<!-- Content -->
-									<div class="p-4">
-										<!-- Delete button (appears on hover) -->
-										<button
-											class="absolute right-2 top-2 rounded p-1 text-muted-foreground bg-background/80 opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-											onclick={(e) => {
-												e.stopPropagation();
-												paperToDelete = paper;
-											}}
-											title="Delete paper"
-										>
-											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-												<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-											</svg>
-										</button>
-										<h3 class="mb-2 line-clamp-2 pr-6 font-semibold">{paper.title}</h3>
-										<p class="mb-2 text-sm text-muted-foreground">
-											{#each paper.authors.slice(0, 3) as author, i}
-												<button
-													class="hover:text-primary hover:underline"
-													onclick={(e) => {
-														e.stopPropagation();
-														openAuthorModal(author);
-													}}
-												>
-													{author}
-												</button>{#if i < Math.min(paper.authors.length, 3) - 1}, {/if}
-											{/each}
-											{#if paper.authors.length > 3}
-												<span> +{paper.authors.length - 3}</span>
-											{/if}
-										</p>
-										<div class="flex items-center gap-2 text-xs text-muted-foreground">
-											{#if paper.year}
-												<button
-													class="hover:text-primary hover:underline"
-													onclick={(e) => {
-														e.stopPropagation();
-														activeTabId.set('home');
-														selectedYear.set(paper.year);
-													}}
-												>
-													{paper.year}
-												</button>
-											{/if}
-											{#if paper.conference}
-												{@const venueInfo = formatVenue(paper.conference)}
-												<button
-													class="rounded bg-muted px-2 py-0.5 hover:bg-muted/80 transition-colors"
-													title={venueInfo.full ?? undefined}
-													onclick={(e) => {
-														e.stopPropagation();
-														import('$lib/stores/tabs').then(({ openJournalProfile }) => {
-															const conferencePapers = $papers.filter(p => p.conference === paper.conference);
-															const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
-															openJournalProfile({
-																name: venueInfo.full ?? paper.conference ?? '',
-																abbreviation: venueInfo.display ?? null,
-																paperCount: conferencePapers.length,
-																papers: conferencePapers,
-																years
-															});
-														});
-													}}
-												>
-													{venueInfo.display}
-												</button>
-											{/if}
-											{#if paper.pdfUrl}
-												<span class="ml-auto text-primary">PDF</span>
-											{:else}
-												<span class="ml-auto">{paper.citations} citations</span>
-											{/if}
-										</div>
-										{#if paper.subject.length > 0}
-											<div class="mt-2 flex flex-wrap gap-1">
-												{#each paper.subject.slice(0, 3) as tag}
-													<button
-														class="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary hover:bg-primary/20 transition-colors"
-														onclick={(e) => {
-															e.stopPropagation();
-															import('$lib/stores/tabs').then(({ openTagProfile }) => {
-																const tagPapers = $papers.filter(p => p.subject.includes(tag));
-																openTagProfile({
-																	name: tag,
-																	color: '#6366f1',
-																	paperCount: tagPapers.length,
-																	papers: tagPapers,
-																	relatedTags: []
-																});
-															});
-														}}
-													>
-														{tag}
-													</button>
-												{/each}
-											</div>
-										{/if}
-									</div>
-								</div>
-							{:else if $viewStyle === 'list'}
-								<!-- List view with small thumbnail -->
-								<div
-									class="group flex cursor-pointer items-center gap-4 rounded-lg border bg-card p-3 transition-shadow hover:shadow-md"
-									onclick={() => {
-										import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-									}}
-								>
-									<!-- Small thumbnail -->
-									<div class="shrink-0 h-20 w-14 rounded overflow-hidden bg-muted">
-										{#if paper.thumbnailUrl}
-											<img
-												src={api.getThumbnailUrl(paper.id)}
-												alt=""
-												class="h-full w-full object-cover"
-												onerror={(e) => {
-													const target = e.currentTarget as HTMLImageElement;
-													target.style.display = 'none';
-												}}
-											/>
-										{:else}
-											<div class="h-full w-full flex items-center justify-center bg-gradient-to-br from-neutral-100 to-neutral-200 dark:from-neutral-800 dark:to-neutral-700">
-												<svg class="h-6 w-6 text-neutral-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-													<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-												</svg>
-											</div>
-										{/if}
-									</div>
-									<div class="flex-1 min-w-0">
-										<h3 class="font-semibold truncate">{paper.title}</h3>
-										<p class="mt-0.5 text-sm text-muted-foreground truncate">
-											{#if paper.authors && paper.authors.length > 0}
-												{#each paper.authors.slice(0, 3) as author, i}
-													<button
-														class="hover:text-primary hover:underline"
-														onclick={(e) => {
-															e.stopPropagation();
-															openAuthorModal(author);
-														}}
-													>
-														{author}
-													</button>{#if i < Math.min(paper.authors.length, 3) - 1}, {/if}
-												{/each}
-												{#if paper.authors.length > 3}
-													<span> +{paper.authors.length - 3}</span>
-												{/if}
-											{:else}
-												<span>Unknown authors</span>
-											{/if}
-										</p>
-										{#if paper.abstract}
-											<p class="mt-1 text-xs text-muted-foreground/70 line-clamp-2">
-												{paper.abstract}
-											</p>
-										{/if}
-									</div>
-									<div class="flex items-center gap-4 text-sm text-muted-foreground shrink-0">
-										{#if paper.year}
-											<button
-												class="hover:text-primary hover:underline"
-												onclick={(e) => {
-													e.stopPropagation();
-													activeTabId.set('home');
-													selectedYear.set(paper.year);
-												}}
-											>
-												{paper.year}
-											</button>
-										{/if}
-										{#if paper.conference}
-											{@const venueInfo = formatVenue(paper.conference)}
-											<button
-												class="rounded bg-muted px-2 py-0.5 hover:bg-muted/80 transition-colors"
-												title={venueInfo.full ?? undefined}
-												onclick={(e) => {
-													e.stopPropagation();
-													import('$lib/stores/tabs').then(({ openJournalProfile }) => {
-														const conferencePapers = $papers.filter(p => p.conference === paper.conference);
-														const years = conferencePapers.map(p => p.year).filter((y): y is number => y !== null);
-														openJournalProfile({
-															name: venueInfo.full ?? paper.conference ?? '',
-															abbreviation: venueInfo.display ?? null,
-															paperCount: conferencePapers.length,
-															papers: conferencePapers,
-															years
-														});
-													});
-												}}
-											>{venueInfo.display}</button>
-										{/if}
-										{#if paper.pdfUrl}
-											<span class="text-primary">PDF</span>
-										{:else}
-											<span>{paper.citations} citations</span>
-										{/if}
-										<!-- Delete button -->
-										<button
-											class="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-											onclick={(e) => {
-												e.stopPropagation();
-												paperToDelete = paper;
-											}}
-											title="Delete paper"
-										>
-											<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-												<path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-											</svg>
-										</button>
-									</div>
-								</div>
-							{/if}
-						{/each}
-						</div>
-					{/if}
-
-					<!-- Online Search Results Section -->
-					{#if $searchQuery.length >= 3 && $filteredPapers.length < 5}
-						<div class="mt-8">
-							<div class="mb-4 flex items-center justify-between">
-								<h2 class="text-lg font-medium">Available to Download</h2>
-								{#if $isSearchingOnline}
-									<div class="flex items-center gap-2 text-sm text-muted-foreground">
-										<div class="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
-										Searching online...
-									</div>
-								{/if}
-							</div>
-							
-							{#if $onlineSearchResults.length > 0}
-								<div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-									{#each $onlineSearchResults.slice(0, 6) as result}
-										<div class="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4">
-											<h3 class="mb-2 line-clamp-2 font-medium text-sm">{result.title}</h3>
-											<p class="mb-2 text-xs text-muted-foreground">
-												{result.authors.slice(0, 2).join(', ')}
-												{result.authors.length > 2 ? ` +${result.authors.length - 2}` : ''}
-											</p>
-											<div class="flex items-center gap-2 text-xs text-muted-foreground">
-												{#if result.year}
-													<span>{result.year}</span>
-												{/if}
-												{#if result.venue}
-													<span class="rounded bg-muted px-1.5 py-0.5">{result.venue}</span>
-												{/if}
-												{#if result.citationCount}
-													<span>{result.citationCount} citations</span>
-												{/if}
-											</div>
-											<div class="mt-3 flex items-center gap-2">
-												<button
-													class="flex-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90"
-													onclick={async () => {
-														const paper = await importFromSearchResult(result);
-														if (paper) {
-															toast.success(`Added "${paper.title}" to library`);
-														} else {
-															toast.error('Failed to import paper');
-														}
-													}}
-												>
-													Add to Library
-												</button>
-												{#if result.pdfUrl}
-													<a
-														href={result.pdfUrl}
-														target="_blank"
-														rel="noopener noreferrer"
-														class="rounded border px-3 py-1.5 text-xs hover:bg-muted"
-														onclick={(e) => e.stopPropagation()}
-													>
-														PDF
-													</a>
-												{/if}
-											</div>
-										</div>
-									{/each}
-								</div>
-							{:else if !$isSearchingOnline}
-								<p class="text-sm text-muted-foreground">No online results found for "{$searchQuery}"</p>
-							{/if}
-						</div>
-					{/if}
-				{/if}
-			</div>
-		</div>
-
-		<!-- PDF Viewer tabs - render all, hide inactive -->
-		{#each $tabs.filter(t => t.type === 'viewer') as tab (tab.id)}
-			<div class="flex h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				<!-- PDF Viewer -->
-				<div class="flex flex-1 flex-col">
-					<!-- Paper info bar with action buttons -->
-					<div class="flex items-center justify-between border-b bg-muted/30 px-4 py-2">
-						<div class="flex items-center gap-2 min-w-0 flex-1">
-							<h2 class="truncate text-sm font-medium">{tab.paper?.title}</h2>
-							{#if tab.paper?.year}
-								<span class="shrink-0 text-xs text-muted-foreground">({tab.paper.year})</span>
-							{/if}
-						</div>
-						<div class="flex items-center gap-1 shrink-0">
-							<!-- Related Work Button -->
-							<button
-								class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
-								onclick={() => {
-									if (tab.paper) {
-										openRelatedWork(tab.paper);
-									}
-								}}
-								title="Find and compare related work"
-							>
-								<Network class="h-4 w-4" />
-								Related Work
-							</button>
-
-							<!-- 작업 Dropdown Menu -->
-							<div class="relative">
-								<button
-									class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground flex items-center gap-1"
-									onclick={() => {
-										analyzeDropdownOpen[tab.id] = !analyzeDropdownOpen[tab.id];
-										// Fetch preprocessing status when dropdown opens
-										if (!analyzeDropdownOpen[tab.id] && tab.paper?.id) {
-											fetchPreprocessingStatus(tab.paper.id);
-										}
-									}}
-									title="PDF 작업 옵션"
-								>
-									<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-										<path d="M1 4v6h6M23 20v-6h-6" />
-										<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-									</svg>
-									작업
-									<ChevronDown class="h-3 w-3" />
-								</button>
-
-								{#if analyzeDropdownOpen[tab.id]}
-									<div
-										class="absolute right-0 mt-1 w-48 rounded-md shadow-lg bg-background border z-50"
-										onclick={() => { analyzeDropdownOpen[tab.id] = false; }}
-									>
-										<div class="py-1">
-											<button
-												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
-												onclick={async (e) => {
-													e.stopPropagation();
-													if (!tab.paper?.id) return;
-													analyzeDropdownOpen[tab.id] = false;
-													const jobId = await reanalyzePaper(tab.paper.id);
-													if (jobId) {
-														toast.info('Analysis started (metadata, references, tags). Check progress in the task panel.');
-													} else {
-														toast.error('Failed to start analysis');
-													}
-												}}
-											>
-												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-													<path d="M1 4v6h6M23 20v-6h-6" />
-													<path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-												</svg>
-												<div>
-													<div class="font-medium">Re-analyze</div>
-													<div class="text-muted-foreground">Update metadata & extract references</div>
-												</div>
-											</button>
-											<button
-												class="w-full text-left px-4 py-2 text-xs hover:bg-muted flex items-center gap-2"
-												onclick={async (e) => {
-													e.stopPropagation();
-													if (!tab.paper?.id) return;
-													analyzeDropdownOpen[tab.id] = false;
-													const jobId = await reextractPaper(tab.paper.id);
-													if (jobId) {
-														toast.info('Re-extraction started (force OCR & text extraction). Check progress in the task panel.');
-													} else {
-														toast.error('Failed to start re-extraction');
-													}
-												}}
-											>
-												<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-													<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-													<polyline points="7 10 12 15 17 10" />
-													<line x1="12" y1="15" x2="12" y2="3" />
-												</svg>
-												<div class="flex-1">
-													<div class="font-medium">Re-extract</div>
-													<div class="text-muted-foreground">Force re-run OCR & text extraction</div>
-												</div>
-												<!-- Cache status indicator -->
-												{#if tab.paper?.id && preprocessingStatusCache[tab.paper.id]}
-													{@const status = preprocessingStatusCache[tab.paper.id]}
-													<div
-														class="w-2 h-2 rounded-full"
-														class:bg-green-500={status.hasCache && status.status === 'completed'}
-														class:bg-yellow-500={status.hasCache && status.status === 'processing'}
-														class:bg-red-500={status.hasCache && status.status === 'failed'}
-														class:bg-gray-400={!status.hasCache}
-														title={status.hasCache ? `Cached (${status.status})` : 'Not cached'}
-													></div>
-												{/if}
-											</button>
-										</div>
-									</div>
-								{/if}
-							</div>
-						</div>
-					</div>
-
-					{#if tab.paper?.pdfUrl && PdfViewer}
-						<svelte:component
-							this={PdfViewer}
-							pdfUrl={tab.paper.pdfUrl}
-							paperId={tab.paper.id}
-							paper={tab.paper}
-							tabId={tab.id}
-							initialState={tab.viewerState}
-							onOpenPaper={openPaperById}
-						/>
-					{:else if tab.paper?.pdfUrl && !PdfViewer}
-						<div class="flex flex-1 items-center justify-center bg-muted/20">
-							<div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
-						</div>
-					{:else}
-						<div class="flex flex-1 flex-col items-center justify-center bg-muted/20">
-							<svg class="mb-4 h-16 w-16 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-								<path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-							</svg>
-							<h2 class="mb-2 text-xl font-semibold">{tab.paper?.title}</h2>
-							<p class="text-muted-foreground">No PDF file attached</p>
-							{#if tab.paper?.abstract}
-								<p class="mt-4 max-w-2xl text-center text-sm text-muted-foreground">
-									{tab.paper.abstract}
-								</p>
-							{/if}
-							<div class="mt-4 flex gap-2">
-								<button
-									class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-									onclick={() => handleDownloadPdf(tab.paper?.id ?? '')}
-									disabled={isDownloadingPdf && downloadingPaperId === tab.paper?.id}
-								>
-									{isDownloadingPdf && downloadingPaperId === tab.paper?.id ? 'Downloading...' : 'Download PDF'}
-								</button>
-								<button
-									class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted"
-									onclick={() => {
-										toast.info('PDF upload for existing papers coming soon');
-									}}
-								>
-									Upload PDF
-								</button>
-							</div>
-						</div>
-					{/if}
-				</div>
+<!-- Settings Panel -->
+{#if showSettings}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+		<div class="w-full max-w-3xl max-h-[85vh] rounded-xl glass shadow-glass-lg overflow-hidden flex flex-col">
+			<div class="border-b bg-muted/30 px-6 py-4 flex items-center justify-between">
+				<h1 class="text-lg font-bold">Settings</h1>
+				<button
+					class="rounded p-1 hover:bg-muted"
+					onclick={() => showSettings = false}
+				>
+					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M18 6L6 18M6 6l12 12" />
+					</svg>
+				</button>
 			</div>
 
-			<!-- Floating Chat Panel (rendered outside main container) -->
-			{#if $isChatPanelOpen}
-				<FloatingChatPanel
-					paper={tab.paper ?? null}
-					onClose={() => toggleChatPanel()}
-				/>
-			{/if}
-		{/each}
-
-		<!-- Author profile tabs -->
-		{#each $tabs.filter(t => t.type === 'author') as tab (tab.id)}
-			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.author}
-					<AuthorProfileView author={tab.author} />
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Notes list tab -->
-		{#if $activeTab?.type === 'notes'}
-			<NoteList
-				onSelectNote={(note) => openNote(note)}
-				onCreateNote={async () => {
-					const title = prompt('Note title:');
-					if (!title) return;
-					const note = await createNote(title, '', null);
-					if (note) openNote(note);
-				}}
-			/>
-		{/if}
-
-		<!-- Note viewer tabs -->
-		{#each $tabs.filter(t => t.type === 'note-viewer') as tab (tab.id)}
-			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.note}
-					<NoteViewer
-						noteId={tab.note.id}
-						onBack={() => openNotesList()}
-						onNavigateToNote={async (id) => {
-							const res = await api.getNote(id);
-							if (res.success && res.data) {
-								openNote(res.data.note);
-							}
-						}}
-						onNavigateToPaper={async (id) => {
-							const res = await api.getPaper(id);
-							if (res.success && res.data) {
-								openPaper(res.data as Paper);
-							}
-						}}
-					/>
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Tag profile tabs -->
-		{#each $tabs.filter(t => t.type === 'tag') as tab (tab.id)}
-			<div class="h-full overflow-auto p-6 {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.tag}
-					<div class="mb-6">
-						<div class="flex items-center gap-3 mb-2">
-							<Tag class="h-6 w-6 text-primary" />
-							<h1 class="text-2xl font-bold">{tab.tag.name}</h1>
-							<span class="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
-								{tab.tag.paperCount} papers
-							</span>
-						</div>
-					</div>
-
-					<!-- Papers with this tag -->
-					<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-						{#each tab.tag.papers as paper (paper.id)}
-							<div
-								class="cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
-								onclick={() => {
-									import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-								}}
-							>
-								<h3 class="font-medium line-clamp-2">{paper.title}</h3>
-								<p class="mt-1 text-sm text-muted-foreground line-clamp-1">
-									{paper.authors.join(', ')}
-								</p>
-								<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-									{#if paper.year}
-										<span>{paper.year}</span>
-									{/if}
-									{#if paper.conference}
-										<span class="rounded bg-muted px-1.5 py-0.5">{paper.conference}</span>
-									{/if}
-								</div>
-							</div>
-						{/each}
-					</div>
-
-					{#if tab.tag.papers.length === 0}
-						<div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
-							<Tag class="h-12 w-12 mb-4" />
-							<p>No papers with this tag yet</p>
-						</div>
-					{/if}
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Journal/Conference profile tabs -->
-		{#each $tabs.filter(t => t.type === 'journal') as tab (tab.id)}
-			<div class="h-full overflow-auto p-6 {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.journal}
-					<div class="mb-6">
-						<div class="flex items-center gap-3 mb-2">
-							<Building2 class="h-6 w-6 text-primary" />
-							<div>
-								<h1 class="text-2xl font-bold">{tab.journal.name}</h1>
-								{#if tab.journal.abbreviation && tab.journal.abbreviation !== tab.journal.name}
-									<p class="text-sm text-muted-foreground">{tab.journal.abbreviation}</p>
-								{/if}
-							</div>
-							<span class="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
-								{tab.journal.paperCount} papers
-							</span>
-						</div>
-						{#if tab.journal.years.length > 0}
-							<p class="text-sm text-muted-foreground">
-								Years: {Math.min(...tab.journal.years)} - {Math.max(...tab.journal.years)}
-							</p>
-						{/if}
-					</div>
-
-					<!-- Papers from this venue -->
-					<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-						{#each tab.journal.papers as paper (paper.id)}
-							<div
-								class="cursor-pointer rounded-lg border bg-card p-4 transition-shadow hover:shadow-md"
-								onclick={() => {
-									import('$lib/stores/tabs').then(({ openPaper }) => openPaper(paper));
-								}}
-							>
-								<h3 class="font-medium line-clamp-2">{paper.title}</h3>
-								<p class="mt-1 text-sm text-muted-foreground line-clamp-1">
-									{paper.authors.join(', ')}
-								</p>
-								<div class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-									{#if paper.year}
-										<span>{paper.year}</span>
-									{/if}
-									{#if paper.citations}
-										<span>{paper.citations} citations</span>
-									{/if}
-								</div>
-							</div>
-						{/each}
-					</div>
-
-					{#if tab.journal.papers.length === 0}
-						<div class="flex flex-col items-center justify-center py-12 text-muted-foreground">
-							<Building2 class="h-12 w-12 mb-4" />
-							<p>No papers from this venue yet</p>
-						</div>
-					{/if}
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Related Work tabs -->
-		{#each $tabs.filter(t => t.type === 'related-work') as tab (tab.id)}
-			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.paper}
-					<RelatedWorkView paper={tab.paper} tabId={tab.id} />
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Submissions List tab -->
-		{#each $tabs.filter(t => t.type === 'submissions-list') as tab (tab.id)}
-			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				<SubmissionsList onOpenSubmission={openSubmissionWorkflow} />
-			</div>
-		{/each}
-
-		<!-- Submission Workflow tabs -->
-		{#each $tabs.filter(t => t.type === 'submission') as tab (tab.id)}
-			<div class="h-full {$activeTabId === tab.id ? '' : 'hidden'}">
-				{#if tab.submission}
-					<SubmissionDashboard submission={tab.submission} tabId={tab.id} />
-				{/if}
-			</div>
-		{/each}
-
-		<!-- Settings tab -->
-		<div class="h-full flex flex-col {$activeTab?.type === 'settings' ? '' : 'hidden'}">
-			<div class="border-b bg-muted/30 px-6 py-4">
-				<h1 class="mb-4 text-2xl font-bold">Settings</h1>
-
-				<!-- Settings Tabs -->
+			<!-- Settings Tabs -->
+			<div class="border-b bg-muted/30 px-6">
 				<div class="flex gap-1">
 					<button
 						class="rounded-t-md px-4 py-2 text-sm font-medium transition-colors {settingsActiveTab === 'llm'
@@ -1675,301 +899,225 @@
 			<div class="flex-1 overflow-auto p-6">
 				<!-- LLM & API Tab -->
 				{#if settingsActiveTab === 'llm'}
-					<!-- LLM Configuration -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">LLM Configuration</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<div>
-						<label for="api-key" class="mb-2 block text-sm font-medium">API Key</label>
-						<input
-							id="api-key"
-							type="password"
-							placeholder={settings.llmApiKey ? 'API key is set (enter new to change)' : 'Enter your POSTECH GenAI API key'}
-							bind:value={newApiKey}
-							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						/>
-						{#if settings.llmApiKey}
-							<p class="mt-1 text-xs text-muted-foreground">
-								Current key: {settings.llmApiKey}
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">LLM Configuration</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<div>
+								<label for="api-key" class="mb-2 block text-sm font-medium">API Key</label>
+								<input
+									id="api-key"
+									type="password"
+									placeholder={settings.llmApiKey ? 'API key is set (enter new to change)' : 'Enter your POSTECH GenAI API key'}
+									bind:value={newApiKey}
+									class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+								/>
+								{#if settings.llmApiKey}
+									<p class="mt-1 text-xs text-muted-foreground">
+										Current key: {settings.llmApiKey}
+									</p>
+								{:else}
+									<p class="mt-1 text-xs text-muted-foreground">
+										Get your API key from POSTECH GenAI Portal
+									</p>
+								{/if}
+							</div>
+
+							<div>
+								<label for="model" class="mb-2 block text-sm font-medium">Model</label>
+								<select
+									id="model"
+									bind:value={settings.llmProvider}
+									class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+								>
+									<option value="gpt">GPT</option>
+									<option value="gemini">Gemini</option>
+									<option value="claude">Claude</option>
+								</select>
+							</div>
+
+							<button
+								class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+								disabled={isSavingSettings}
+								onclick={saveSettings}
+							>
+								{isSavingSettings ? 'Saving...' : 'Save Settings'}
+							</button>
+						</div>
+					</section>
+
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">POSTECH SSO Authentication</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<p class="text-sm text-muted-foreground">
+								Authenticate with POSTECH SSO to enable file attachments in chat.
 							</p>
-						{:else}
-							<p class="mt-1 text-xs text-muted-foreground">
-								Get your API key from POSTECH GenAI Portal
-							</p>
-						{/if}
-					</div>
 
-					<div>
-						<label for="model" class="mb-2 block text-sm font-medium">Model</label>
-						<select
-							id="model"
-							bind:value={settings.llmProvider}
-							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						>
-							<option value="gpt">GPT</option>
-							<option value="gemini">Gemini</option>
-							<option value="claude">Claude</option>
-						</select>
-					</div>
-
-					<button
-						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-						disabled={isSavingSettings}
-						onclick={saveSettings}
-					>
-						{isSavingSettings ? 'Saving...' : 'Save Settings'}
-					</button>
-				</div>
-			</section>
-
-			<!-- POSTECH SSO Authentication -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">POSTECH SSO Authentication</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						Authenticate with POSTECH SSO to enable file attachments in chat. Files will be uploaded directly to the GenAI server for better analysis.
-					</p>
-
-					{#if settings.ssoConfigured}
-						<div class="flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/20 dark:text-green-400">
-							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-								<path d="M5 13l4 4L19 7" />
-							</svg>
-							<span>SSO Connected</span>
-							{#if settings.ssoTokenExpiresAt}
-								<span class="text-xs opacity-75">
-									(expires {new Date(settings.ssoTokenExpiresAt).toLocaleDateString()})
-								</span>
+							{#if settings.ssoConfigured}
+								<div class="flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-900/20 dark:text-green-400">
+									<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<path d="M5 13l4 4L19 7" />
+									</svg>
+									<span>SSO Connected</span>
+									{#if settings.ssoTokenExpiresAt}
+										<span class="text-xs opacity-75">
+											(expires {new Date(settings.ssoTokenExpiresAt).toLocaleDateString()})
+										</span>
+									{/if}
+								</div>
+							{:else}
+								<div class="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
+									<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+									</svg>
+									<span>Not connected - file attachments disabled</span>
+								</div>
 							{/if}
+
+							<div>
+								<label for="sso-token" class="mb-2 block text-sm font-medium">Access Token</label>
+								<input
+									id="sso-token"
+									type="password"
+									placeholder="Paste your SSO access token here"
+									bind:value={ssoAccessToken}
+									class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+								/>
+							</div>
+
+							<div class="flex gap-2">
+								<button
+									class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+									disabled={isSavingSSO}
+									onclick={handleSSOLogin}
+								>
+									{isSavingSSO ? 'Logging in...' : 'Login with SSO'}
+								</button>
+								<button
+									class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+									disabled={isSavingSSO || !ssoAccessToken.trim()}
+									onclick={saveSSO}
+								>
+									{isSavingSSO ? 'Saving...' : 'Save Token Manually'}
+								</button>
+							</div>
 						</div>
-					{:else}
-						<div class="flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-							<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-								<path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-							</svg>
-							<span>Not connected - file attachments disabled</span>
+					</section>
+
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">LLM Usage</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<p class="text-sm text-muted-foreground">
+								View LLM API usage logs for debugging and monitoring.
+							</p>
+							<button
+								class="rounded-md border px-4 py-2 text-sm hover:bg-muted"
+								onclick={() => (showLLMLogPanel = true)}
+							>
+								View LLM Logs
+							</button>
 						</div>
-					{/if}
-
-					<div>
-						<label for="sso-token" class="mb-2 block text-sm font-medium">Access Token</label>
-						<input
-							id="sso-token"
-							type="password"
-							placeholder="Paste your SSO access token here"
-							bind:value={ssoAccessToken}
-							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						/>
-						<p class="mt-1 text-xs text-muted-foreground">
-							Get token from GenAI callback URL after SSO login (look for <code class="rounded bg-muted px-1">access_token=...</code> in the URL fragment)
-						</p>
-					</div>
-
-					<div>
-						<label for="sso-site-name" class="mb-2 block text-sm font-medium">Site Name</label>
-						<input
-							id="sso-site-name"
-							type="text"
-							placeholder="robi-gpt-dev"
-							bind:value={ssoSiteName}
-							class="w-full rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						/>
-						<p class="mt-1 text-xs text-muted-foreground">
-							Site name for file upload API (default: robi-gpt-dev)
-						</p>
-					</div>
-
-					<div class="flex gap-2">
-						<button
-							class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-							disabled={isSavingSSO}
-							onclick={handleSSOLogin}
-						>
-							{isSavingSSO ? 'Logging in...' : 'Login with SSO'}
-						</button>
-						<button
-							class="rounded-md border bg-background px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
-							disabled={isSavingSSO || !ssoAccessToken.trim()}
-							onclick={saveSSO}
-						>
-							{isSavingSSO ? 'Saving...' : 'Save Token Manually'}
-						</button>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						<strong>Tip:</strong> "Login with SSO" will open a popup window and automatically extract the token (Electron) or redirect to SSO login (browser).
-					</p>
-				</div>
-			</section>
-
-			<!-- LLM Usage Log -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">LLM Usage</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						View LLM API usage logs for debugging and monitoring.
-					</p>
-					<button
-						class="rounded-md border px-4 py-2 text-sm hover:bg-muted"
-						onclick={() => (showLLMLogPanel = true)}
-					>
-						View LLM Logs
-					</button>
-				</div>
-			</section>
+					</section>
 				{/if}
 
 				<!-- Search Engines Tab -->
 				{#if settingsActiveTab === 'search'}
-					<!-- Academic Search APIs -->
 					<SettingsPanel />
 
-					<!-- PDF Download Options -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">PDF Download Options</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						Configure which sources to use when downloading PDFs from online search results.
-					</p>
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">PDF Download Options</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<div class="flex items-center justify-between rounded-lg border bg-background p-4">
+								<div class="flex-1">
+									<p class="font-medium">Enable Sci-Hub</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										Use Sci-Hub as a fallback for finding PDFs.
+									</p>
+								</div>
+								<label class="relative inline-flex cursor-pointer items-center">
+									<input
+										type="checkbox"
+										class="peer sr-only"
+										checked={settings.enableSciHub ?? false}
+										onchange={(e) => {
+											settings = { ...settings, enableSciHub: e.currentTarget.checked };
+										}}
+									/>
+									<div class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary peer-focus:ring-offset-2 dark:border-gray-600 dark:bg-gray-700"></div>
+								</label>
+							</div>
 
-					<div class="flex items-center justify-between rounded-lg border bg-background p-4">
-						<div class="flex-1">
-							<p class="font-medium">Enable Sci-Hub</p>
-							<p class="mt-1 text-sm text-muted-foreground">
-								Use Sci-Hub as a fallback for finding PDFs. Legal gray area - use at your own risk.
-							</p>
+							<button
+								class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+								onclick={saveSettings}
+							>
+								Save Settings
+							</button>
 						</div>
-						<label class="relative inline-flex cursor-pointer items-center">
-							<input
-								type="checkbox"
-								class="peer sr-only"
-								checked={settings.enableSciHub ?? false}
-								onchange={(e) => {
-									settings = { ...settings, enableSciHub: e.currentTarget.checked };
-								}}
-							/>
-							<div class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary peer-focus:ring-offset-2 dark:border-gray-600 dark:bg-gray-700"></div>
-						</label>
-					</div>
-
-					<div class="text-xs text-muted-foreground">
-						<p class="font-medium mb-1">Download priority order:</p>
-						<ol class="list-decimal list-inside space-y-0.5">
-							<li>arXiv (if available)</li>
-							<li>Direct URL from search results</li>
-							<li>Unpaywall (legal open access)</li>
-							<li>Semantic Scholar</li>
-							<li>Sci-Hub (if enabled above)</li>
-						</ol>
-					</div>
-
-					<button
-						class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
-						onclick={saveSettings}
-					>
-						Save Settings
-					</button>
-				</div>
-			</section>
+					</section>
 				{/if}
 
 				<!-- System Tab -->
 				{#if settingsActiveTab === 'system'}
-					<!-- Storage -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">Storage</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<div>
-						<label for="pdf-path" class="mb-2 block text-sm font-medium">PDF Storage Path</label>
-						<div class="flex gap-2">
-							<input
-								id="pdf-path"
-								type="text"
-								placeholder="~/.potero/pdfs"
-								value={settings.pdfStoragePath ?? '~/.potero/pdfs'}
-								class="flex-1 rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-								readonly
-							/>
-							<button class="rounded-md border px-4 py-2 text-sm hover:bg-muted">Browse</button>
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">Storage</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<div>
+								<label for="pdf-path" class="mb-2 block text-sm font-medium">PDF Storage Path</label>
+								<div class="flex gap-2">
+									<input
+										id="pdf-path"
+										type="text"
+										placeholder="~/.potero/pdfs"
+										value={settings.pdfStoragePath ?? '~/.potero/pdfs'}
+										class="flex-1 rounded-md border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+										readonly
+									/>
+									<button class="rounded-md border px-4 py-2 text-sm hover:bg-muted">Browse</button>
+								</div>
+							</div>
 						</div>
-					</div>
+					</section>
 
-					<div>
-						<p class="text-sm font-medium">Database</p>
-						<p class="mt-1 text-sm text-muted-foreground">~/.potero/potero.db</p>
-					</div>
-				</div>
-			</section>
+					<section class="mb-8">
+						<h2 class="mb-4 text-lg font-semibold">Library Maintenance</h2>
+						<div class="space-y-4 rounded-lg border bg-card p-4">
+							<p class="text-sm text-muted-foreground">
+								Re-analyze all papers to update metadata, generate thumbnails, extract references, and auto-generate tags.
+							</p>
+							<div class="flex flex-wrap gap-2">
+								<button
+									class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+									disabled={isBulkReanalyzing}
+									onclick={handleBulkReanalyzeAll}
+								>
+									{isBulkReanalyzing ? 'Analyzing...' : 'Analyze All Papers'}
+								</button>
+								<button
+									class="rounded-md border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+									disabled={isBulkReanalyzing}
+									onclick={handleBulkReanalyzeMissing}
+								>
+									Analyze Missing Only
+								</button>
+							</div>
+						</div>
+					</section>
 
-			<!-- Sync (Future) -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">Cloud Sync</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						Cloud sync with Google Drive and OneDrive coming soon.
-					</p>
-					<button
-						class="rounded-md border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
-						disabled
-					>
-						Connect Google Drive
-					</button>
-				</div>
-			</section>
-
-			<!-- Library Maintenance -->
-			<section class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold">Library Maintenance</h2>
-				<div class="space-y-4 rounded-lg border bg-card p-4">
-					<p class="text-sm text-muted-foreground">
-						Re-analyze all papers to update metadata, generate thumbnails, extract references, and auto-generate tags.
-					</p>
-					<div class="flex flex-wrap gap-2">
-						<button
-							class="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-							disabled={isBulkReanalyzing}
-							onclick={handleBulkReanalyzeAll}
-						>
-							{#if isBulkReanalyzing}
-								<span class="flex items-center gap-2">
-									<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-										<circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="20" />
-									</svg>
-									Analyzing...
-								</span>
-							{:else}
-								Analyze All Papers
-							{/if}
-						</button>
-						<button
-							class="rounded-md border px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
-							disabled={isBulkReanalyzing}
-							onclick={handleBulkReanalyzeMissing}
-						>
-							Analyze Missing Only
-						</button>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						This will run in the background. Check progress in the task panel.
-					</p>
-				</div>
-			</section>
-
-			<!-- About -->
-			<section>
-				<h2 class="mb-4 text-lg font-semibold">About</h2>
-				<div class="rounded-lg border bg-card p-4">
-					<p class="font-medium">Potero</p>
-					<p class="mt-1 text-sm text-muted-foreground">
-						Serverless Research Reference Manager
-					</p>
-					<p class="mt-2 text-xs text-muted-foreground">Version 0.1.0 (Development)</p>
-				</div>
-			</section>
+					<section>
+						<h2 class="mb-4 text-lg font-semibold">About</h2>
+						<div class="rounded-lg border bg-card p-4">
+							<p class="font-medium">Potero</p>
+							<p class="mt-1 text-sm text-muted-foreground">
+								Serverless Research Reference Manager
+							</p>
+							<p class="mt-2 text-xs text-muted-foreground">Version 0.1.0 (Development)</p>
+						</div>
+					</section>
 				{/if}
 			</div>
 		</div>
 	</div>
-</div>
+{/if}
 
 <!-- Search Results Dialog for metadata confirmation -->
 {#if $pendingUploadAnalysis}
@@ -1993,13 +1141,13 @@
 <!-- Delete Confirmation Dialog -->
 {#if paperToDelete}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-		<div class="w-full max-w-md rounded-lg bg-background p-6 shadow-xl">
+		<div class="w-full max-w-md rounded-xl glass shadow-glass-lg p-6">
 			<h2 class="mb-2 text-lg font-semibold">Delete Paper</h2>
 			<p class="mb-4 text-sm text-muted-foreground">
 				Are you sure you want to delete <span class="font-medium text-foreground">"{paperToDelete.title}"</span>?
 			</p>
 			<p class="mb-6 text-xs text-destructive">
-				This will permanently remove the paper and its PDF file from your library. This action cannot be undone.
+				This will permanently remove the paper and its PDF file from your library.
 			</p>
 			<div class="flex justify-end gap-2">
 				<button
@@ -2024,7 +1172,7 @@
 <!-- LLM Log Panel Modal -->
 {#if showLLMLogPanel}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-		<div class="relative h-[80vh] w-full max-w-4xl rounded-lg bg-background shadow-xl overflow-hidden">
+		<div class="relative h-[80vh] w-full max-w-4xl rounded-xl glass shadow-glass-lg overflow-hidden">
 			<button
 				class="absolute right-4 top-4 z-10 rounded p-1 hover:bg-muted"
 				onclick={() => (showLLMLogPanel = false)}
@@ -2053,6 +1201,14 @@
 		paperId={$notePanelPaperId}
 		initialNoteId={$notePanelNoteId}
 		onClose={closeNotePanel}
+	/>
+{/if}
+
+<!-- Floating Chat Panel -->
+{#if $isChatPanelOpen && viewingPaper}
+	<FloatingChatPanel
+		paper={viewingPaper}
+		onClose={() => toggleChatPanel()}
 	/>
 {/if}
 

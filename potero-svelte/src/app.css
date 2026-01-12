@@ -8,15 +8,20 @@
 @import 'prismjs/themes/prism-tomorrow.css';
 
 :root {
-	--background: 0 0% 100%;
+	/* === Base Colors === */
+	--background: 220 20% 97%;
 	--foreground: 222.2 84% 4.9%;
 	--card: 0 0% 100%;
 	--card-foreground: 222.2 84% 4.9%;
 	--popover: 0 0% 100%;
 	--popover-foreground: 222.2 84% 4.9%;
+
 	/* Vivid blue primary (matches submission workflow design #1677FF) */
 	--primary: 217 91% 55%;
 	--primary-foreground: 0 0% 100%;
+	--primary-hover: 217 91% 48%;
+	--primary-glow: 217 91% 55% / 0.25;
+
 	--secondary: 210 40% 96.1%;
 	--secondary-foreground: 222.2 47.4% 11.2%;
 	--muted: 210 40% 96.1%;
@@ -30,6 +35,49 @@
 	--ring: 217 91% 55%;
 	--radius: 0.5rem;
 
+	/* === Glass Surface Colors (macOS Glassmorphism) === */
+	--glass-bg: 0 0% 100% / 0.8;
+	--glass-bg-hover: 0 0% 100% / 0.88;
+	--glass-bg-active: 0 0% 100% / 0.94;
+	--glass-border: 0 0% 100% / 0.6;
+	--glass-shadow: 220 60% 50% / 0.1;
+
+	/* === Blur Levels === */
+	--blur-sm: 12px;
+	--blur-md: 20px;
+	--blur-lg: 32px;
+	--blur-xl: 48px;
+
+	/* === Sidebar === */
+	--sidebar-bg: 220 20% 96% / 0.85;
+	--sidebar-item-hover: 0 0% 0% / 0.04;
+	--sidebar-item-active: 217 91% 55% / 0.12;
+	--sidebar-width: 240px;
+	--sidebar-collapsed-width: 64px;
+
+	/* === Card & Panel === */
+	--card-bg: 0 0% 100% / 0.72;
+	--card-border: 0 0% 100% / 0.3;
+	--card-radius: 16px;
+
+	/* === Window === */
+	--window-radius: 12px;
+	--window-header-height: 52px;
+
+	/* === Animation === */
+	--transition-fast: 120ms ease-out;
+	--transition-normal: 200ms ease-out;
+	--transition-slow: 300ms ease-out;
+	--spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+	/* === Spacing Scale === */
+	--space-xs: 4px;
+	--space-sm: 8px;
+	--space-md: 16px;
+	--space-lg: 24px;
+	--space-xl: 32px;
+	--space-2xl: 48px;
+
 	/* Workflow-specific colors */
 	--workflow-active: 217 91% 55%;
 	--workflow-completed: 142 76% 45%;
@@ -39,15 +87,19 @@
 }
 
 .dark {
-	--background: 222.2 84% 4.9%;
+	--background: 222 47% 8%;
 	--foreground: 210 40% 98%;
 	--card: 222.2 84% 4.9%;
 	--card-foreground: 210 40% 98%;
 	--popover: 222.2 84% 4.9%;
 	--popover-foreground: 210 40% 98%;
+
 	/* Keep vivid blue in dark mode */
 	--primary: 217 91% 60%;
 	--primary-foreground: 0 0% 100%;
+	--primary-hover: 217 91% 55%;
+	--primary-glow: 217 91% 60% / 0.3;
+
 	--secondary: 217.2 32.6% 17.5%;
 	--secondary-foreground: 210 40% 98%;
 	--muted: 217.2 32.6% 17.5%;
@@ -59,6 +111,20 @@
 	--border: 217.2 32.6% 17.5%;
 	--input: 217.2 32.6% 17.5%;
 	--ring: 217 91% 60%;
+
+	/* === Dark Mode Glass === */
+	--glass-bg: 220 15% 25% / 0.75;
+	--glass-bg-hover: 220 15% 30% / 0.82;
+	--glass-bg-active: 220 15% 35% / 0.9;
+	--glass-border: 0 0% 100% / 0.18;
+	--glass-shadow: 0 0% 0% / 0.5;
+
+	--sidebar-bg: 222 47% 10% / 0.85;
+	--sidebar-item-hover: 0 0% 100% / 0.04;
+	--sidebar-item-active: 217 91% 55% / 0.2;
+
+	--card-bg: 222 47% 12% / 0.72;
+	--card-border: 0 0% 100% / 0.06;
 
 	/* Workflow-specific colors (dark mode) */
 	--workflow-active: 217 91% 60%;
@@ -88,4 +154,194 @@ canvas.hiddenCanvasElement {
 	overflow: hidden !important;
 	visibility: hidden !important;
 	pointer-events: none !important;
+}
+
+/* ============================================
+   macOS Glassmorphism Utility Classes
+   ============================================ */
+
+/* === Glass Surfaces === */
+.glass {
+	background: hsl(var(--glass-bg));
+	backdrop-filter: blur(var(--blur-md));
+	-webkit-backdrop-filter: blur(var(--blur-md));
+	border: 1px solid hsl(var(--glass-border));
+}
+
+.glass-subtle {
+	background: hsl(var(--glass-bg));
+	backdrop-filter: blur(var(--blur-sm));
+	-webkit-backdrop-filter: blur(var(--blur-sm));
+}
+
+.glass-strong {
+	background: hsl(var(--glass-bg-active));
+	backdrop-filter: blur(var(--blur-xl));
+	-webkit-backdrop-filter: blur(var(--blur-xl));
+	border: 1px solid hsl(var(--glass-border));
+}
+
+/* === Glass Shadows === */
+.shadow-glass {
+	box-shadow:
+		0 8px 32px -8px rgba(0, 0, 0, 0.15),
+		0 4px 16px -4px rgba(0, 0, 0, 0.1),
+		inset 0 1px 0 0 rgba(255, 255, 255, 0.5);
+}
+
+.shadow-glass-lg {
+	box-shadow:
+		0 16px 48px -12px rgba(0, 0, 0, 0.2),
+		0 8px 24px -8px rgba(0, 0, 0, 0.12),
+		inset 0 1px 0 0 rgba(255, 255, 255, 0.6);
+}
+
+.shadow-glass-inset {
+	box-shadow:
+		inset 0 1px 0 0 rgba(255, 255, 255, 0.3),
+		inset 0 -1px 0 0 rgba(0, 0, 0, 0.05),
+		0 4px 16px -4px rgba(0, 0, 0, 0.12);
+}
+
+/* === Typography Scale === */
+.text-display {
+	font-size: 2.25rem;
+	font-weight: 700;
+	letter-spacing: -0.025em;
+	line-height: 1.2;
+}
+
+.text-title {
+	font-size: 1.5rem;
+	font-weight: 600;
+	letter-spacing: -0.02em;
+	line-height: 1.3;
+}
+
+.text-headline {
+	font-size: 1.125rem;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.text-body {
+	font-size: 0.9375rem;
+	line-height: 1.5;
+}
+
+.text-caption {
+	font-size: 0.8125rem;
+	color: hsl(var(--muted-foreground));
+	line-height: 1.4;
+}
+
+.text-label {
+	font-size: 0.75rem;
+	font-weight: 500;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+/* === Hover Effects === */
+.hover-lift {
+	transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.hover-lift:hover {
+	transform: translateY(-2px);
+}
+
+.hover-lift:active {
+	transform: translateY(0);
+}
+
+/* === Press Effect === */
+.press-effect {
+	transition: transform var(--transition-fast);
+}
+
+.press-effect:active {
+	transform: scale(0.98);
+}
+
+/* === Animations === */
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@keyframes fadeInScale {
+	from {
+		opacity: 0;
+		transform: scale(0.95);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes slideInFromRight {
+	from {
+		opacity: 0;
+		transform: translateX(16px);
+	}
+	to {
+		opacity: 1;
+		transform: translateX(0);
+	}
+}
+
+@keyframes slideInFromBottom {
+	from {
+		opacity: 0;
+		transform: translateY(16px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.animate-fade-in {
+	animation: fadeIn var(--transition-normal) ease-out;
+}
+
+.animate-fade-in-scale {
+	animation: fadeInScale var(--transition-normal) ease-out;
+}
+
+.animate-slide-in-right {
+	animation: slideInFromRight var(--transition-normal) ease-out;
+}
+
+.animate-slide-in-bottom {
+	animation: slideInFromBottom var(--transition-normal) ease-out;
+}
+
+/* === Reduced Motion === */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* === Focus Styles === */
+.focus-ring {
+	outline: none;
+}
+
+.focus-ring:focus-visible {
+	outline: 2px solid hsl(var(--ring));
+	outline-offset: 2px;
 }

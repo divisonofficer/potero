@@ -50,7 +50,7 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true">
-	<div class="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-background shadow-xl">
+	<div class="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl glass shadow-glass">
 		<!-- Header -->
 		<div class="border-b p-4">
 			<h2 class="text-lg font-semibold">Select Matching Paper</h2>

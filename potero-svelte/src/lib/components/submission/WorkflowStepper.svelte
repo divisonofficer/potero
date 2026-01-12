@@ -27,24 +27,24 @@
 <div class="flex items-center">
 	{#each stages as stage, i}
 		<button
-			class="relative flex items-center focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded-full"
+			class="relative flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-full transition-all duration-[var(--transition-fast)]"
 			onclick={() => handleStageClick(stage.key)}
 			aria-current={i === currentIndex ? 'step' : undefined}
 			aria-label="{stage.label} step {i <= currentIndex ? '(completed)' : '(pending)'}"
 		>
 			<!-- Step pill -->
 			<div
-				class="flex items-center gap-2 px-4 py-2.5 transition-colors
+				class="flex items-center gap-2 px-4 py-2.5 transition-all duration-[var(--transition-fast)]
                        {i === 0 ? 'rounded-l-full' : ''}
                        {i === stages.length - 1 ? 'rounded-r-full' : ''}
                        {i <= currentIndex
-					? 'bg-primary text-primary-foreground'
-					: 'bg-white text-muted-foreground border border-border'}"
+					? 'bg-primary text-primary-foreground shadow-[0_2px_8px_hsl(var(--primary-glow))]'
+					: 'glass text-muted-foreground hover:bg-[hsl(var(--glass-bg-hover))]'}"
 			>
 				<!-- Step number circle -->
 				<span
-					class="flex h-6 w-6  items-center justify-center rounded-full text-sm font-medium
-                          {i <= currentIndex ? 'bg-white/20' : 'bg-muted'}"
+					class="flex h-6 w-6 items-center justify-center rounded-full text-sm font-medium transition-colors
+                          {i <= currentIndex ? 'bg-white/20' : 'bg-muted/80'}"
 				>
 					{i + 1}
 				</span>
@@ -54,19 +54,19 @@
 			<!-- Chevron connector (not for last item) -->
 			{#if i < stages.length - 1}
 				<svg
-					class="h-11 w-5 -ml-px -mr-px relative z-10"
+					class="h-11 w-5 -ml-px -mr-px relative z-10 transition-colors duration-[var(--transition-fast)]"
 					viewBox="0 0 20 44"
 					preserveAspectRatio="none"
 				>
 					<!-- Background chevron (border) -->
 					<path
 						d="M0,0 L15,22 L0,44 L20,44 L5,22 L20,0 Z"
-						fill={i < currentIndex ? 'hsl(var(--primary))' : 'hsl(var(--border))'}
+						fill={i < currentIndex ? 'hsl(var(--primary))' : 'hsl(var(--glass-border))'}
 					/>
 					<!-- Foreground chevron -->
 					<path
 						d="M1,1 L14,22 L1,43 L18,43 L6,22 L18,1 Z"
-						fill={i < currentIndex ? 'hsl(var(--primary))' : 'white'}
+						fill={i < currentIndex ? 'hsl(var(--primary))' : 'hsl(var(--glass-bg))'}
 					/>
 				</svg>
 			{/if}
@@ -76,6 +76,9 @@
 
 <style>
 	button:hover:not([aria-current='step']) {
-		filter: brightness(0.95);
+		transform: translateY(-1px);
+	}
+	button:active {
+		transform: translateY(0);
 	}
 </style>

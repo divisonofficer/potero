@@ -430,7 +430,7 @@
 />
 
 <div
-	class="fixed bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col z-50"
+	class="fixed glass-strong shadow-glass rounded-2xl overflow-hidden flex flex-col z-50"
 	style="left: {position.x}px; top: {position.y}px; width: {widthStyle}; height: {heightStyle}; cursor: {isDragging ? 'grabbing' : 'default'};"
 >
 	<!-- Header -->
