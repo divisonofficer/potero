@@ -95,10 +95,24 @@ class GrobidProcessor(
      * @param pdfPath Absolute path to the PDF file
      * @return Result with processing statistics or error
      */
-    suspend fun process(paperId: String, pdfPath: String): Result<GrobidProcessingStats> {
+    suspend fun process(paperId: String, pdfPath: String, forceReprocess: Boolean = false): Result<GrobidProcessingStats> {
         val startTime = System.currentTimeMillis()
 
         return runCatching {
+            // Skip if already processed (unless forced)
+            if (!forceReprocess) {
+                val existingRefs = grobidRepository.getReferencesByPaperId(paperId).getOrNull()
+                if (!existingRefs.isNullOrEmpty()) {
+                    log("[GrobidProcessor] Already processed $paperId (${existingRefs.size} refs), skipping")
+                    val existingSpans = grobidRepository.getCitationSpansByPaperId(paperId).getOrNull() ?: emptyList()
+                    return Result.success(GrobidProcessingStats(
+                        citationSpansExtracted = existingSpans.size,
+                        referencesExtracted = existingRefs.size,
+                        processingTimeMs = 0
+                    ))
+                }
+            }
+
             log("[GrobidProcessor] Starting processing for paper: $paperId")
 
             // Step 1: Try GROBID first (if enabled)

@@ -1,6 +1,8 @@
 package com.potero.server.routes
 
 import com.potero.domain.model.Author
+import com.potero.domain.model.NarrativeLanguage
+import com.potero.domain.model.NarrativeStyle
 import com.potero.domain.model.Paper
 import com.potero.domain.model.Tag
 import com.potero.server.di.ServiceLocator
@@ -62,6 +64,14 @@ data class ImportByDoiRequest(
 @Serializable
 data class ImportByArxivRequest(
     val arxivId: String
+)
+
+@Serializable
+data class QuickSummaryDto(
+    val paperId: String,
+    val title: String,
+    val summary: String,
+    val estimatedReadTime: Int
 )
 
 // Extension to convert domain Paper to DTO
@@ -160,8 +170,13 @@ fun Route.paperRoutes() {
                     println("[Paper Create] Attempting to download PDF from: ${request.pdfUrl}")
 
                     val pdfDownloadService = ServiceLocator.pdfDownloadService
-                    val pdfPath = pdfDownloadService.downloadPdf(
+                    val identity = ServiceLocator.identifierEnricher.enrich(insertedPaper)
+                    val pdfPath = pdfDownloadService.downloadPdfWithPipeline(
                         paper = insertedPaper,
+                        identity = identity,
+                        providers = ServiceLocator.pdfCandidateProviders,
+                        verifier = ServiceLocator.pdfUrlVerifier,
+                        scorer = ServiceLocator.candidateScorer,
                         directUrl = request.pdfUrl
                     ).getOrNull()
 
@@ -370,6 +385,30 @@ fun Route.paperRoutes() {
             )
         }
 
+        // GET /api/papers/{id}/quick-summary - Get AI summary from existing narrative
+        get("/{id}/quick-summary") {
+            val id = call.parameters["id"]
+                ?: return@get call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiResponse<QuickSummaryDto>(success = false, error = "Missing paper ID")
+                )
+
+            val narrative = ServiceLocator.narrativeRepository
+                .getByPaperStyleLanguage(id, NarrativeStyle.BLOG, NarrativeLanguage.KOREAN)
+                .getOrNull()
+                ?: return@get call.respond(
+                    HttpStatusCode.NotFound,
+                    ApiResponse<QuickSummaryDto>(success = false, error = "Summary not yet generated")
+                )
+
+            call.respond(ApiResponse(data = QuickSummaryDto(
+                paperId = id,
+                title = narrative.title,
+                summary = narrative.summary,
+                estimatedReadTime = narrative.estimatedReadTime
+            )))
+        }
+
         // PATCH /api/papers/{id} - Update paper
         patch("/{id}") {
             val id = call.parameters["id"]
@@ -546,9 +585,21 @@ fun Route.paperRoutes() {
                 }
             }
 
-            // Try to download PDF
+            // Enrich paper identity (normalize doi/arxivId, recover missing ones, infer CVF venue)
+            val identity = ServiceLocator.identifierEnricher.enrich(paper)
+
+            // Try to download PDF using the new pipeline (parallel candidate discovery + verification)
             val pdfDownloadService = ServiceLocator.pdfDownloadService
-            val pdfPath = pdfDownloadService.downloadPdf(paper).getOrNull()
+            val directUrl = paper.url?.takeIf { it.isNotBlank() && (it.startsWith("http://") || it.startsWith("https://")) }
+            val downloadResult = pdfDownloadService.downloadPdfWithPipeline(
+                paper = paper,
+                identity = identity,
+                providers = ServiceLocator.pdfCandidateProviders,
+                verifier = ServiceLocator.pdfUrlVerifier,
+                scorer = ServiceLocator.candidateScorer,
+                directUrl = directUrl
+            )
+            val pdfPath = downloadResult.getOrNull()
 
             if (pdfPath != null) {
                 // Update paper with PDF path
@@ -594,11 +645,14 @@ fun Route.paperRoutes() {
                     ))
                 )
             } else {
+                val reason = downloadResult.exceptionOrNull()?.message
+                    ?: "Could not download PDF from available sources"
+                // Use 200 + success=false instead of 404 to avoid StatusPages overriding the message
                 call.respond(
-                    HttpStatusCode.NotFound,
+                    HttpStatusCode.OK,
                     ApiResponse<Map<String, String>>(
                         success = false,
-                        error = "Could not download PDF from available sources (Semantic Scholar, arXiv, DOI)"
+                        error = reason
                     )
                 )
             }

@@ -113,6 +113,7 @@ fun Route.narrativeRoutes() {
     val narrativeService = ServiceLocator.narrativeEngineService
     val redditThreadService = ServiceLocator.redditThreadService
     val narrativeCacheService = ServiceLocator.narrativeCacheService
+    val preprocessedPdfProvider = ServiceLocator.preprocessedPdfProvider
     val jobQueue = GlobalJobQueue.instance
 
     route("/papers/{paperId}/narratives") {
@@ -139,6 +140,17 @@ fun Route.narrativeRoutes() {
                     ApiResponse<Map<String, String>>(
                         success = false,
                         error = "Narrative generation already in progress for this paper"
+                    )
+                )
+            }
+
+            // Check if preprocessing is complete
+            if (!preprocessedPdfProvider.isPreprocessed(paperId)) {
+                return@post call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiResponse<String>(
+                        success = false,
+                        error = "PDF preprocessing is not complete yet. Please wait for preprocessing to finish before generating narratives."
                     )
                 )
             }

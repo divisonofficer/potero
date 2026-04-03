@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Readable } from 'svelte/store';
 	import type { Paper } from '$lib/types';
+	import QuickSummaryCard from '../QuickSummaryCard.svelte';
 	import {
 		FileText,
 		ExternalLink,
@@ -18,6 +19,7 @@
 	interface Props {
 		paper: Readable<Paper | null>;
 		onOpenPdf?: (paper: Paper) => void;
+		onDownloadPdf?: (paperId: string) => void;
 		onOpenChat?: () => void;
 		onOpenRelatedWork?: () => void;
 		onOpenNotes?: (paperId: string) => void;
@@ -25,8 +27,12 @@
 		onAuthorClick?: (author: string) => void;
 	}
 
-	let { paper, onOpenPdf, onOpenChat, onOpenRelatedWork, onOpenNotes, onTagClick, onAuthorClick }: Props =
+	let { paper, onOpenPdf, onDownloadPdf, onOpenChat, onOpenRelatedWork, onOpenNotes, onTagClick, onAuthorClick }: Props =
 		$props();
+
+	function hasPdf(p: Paper): boolean {
+		return !!p.pdfUrl && !p.pdfUrl.startsWith('http://') && !p.pdfUrl.startsWith('https://');
+	}
 
 	let showFullAbstract = $state(false);
 </script>
@@ -110,6 +116,14 @@
 				</div>
 			{/if}
 
+			<!-- Quick Summary Card -->
+			<div class="mt-4">
+				<QuickSummaryCard
+					paperId={$paper.id}
+					onGenerateNarrative={onOpenChat}
+				/>
+			</div>
+
 			<!-- Abstract -->
 			{#if $paper.abstract}
 				<div class="mt-4">
@@ -161,6 +175,7 @@
 		<!-- Quick Actions -->
 		<div class="shrink-0 border-t border-border/30 p-3">
 			<div class="grid grid-cols-1 gap-2">
+				{#if $paper && hasPdf($paper)}
 				<button
 					class="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[0_2px_8px_hsl(var(--primary-glow))] hover:bg-primary/90 transition-colors"
 					onclick={() => $paper && onOpenPdf?.($paper)}
@@ -168,6 +183,15 @@
 					<FileText class="h-4 w-4" />
 					Open PDF
 				</button>
+				{:else}
+				<button
+					class="flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-[0_2px_8px_hsl(var(--primary-glow))] hover:bg-primary/90 transition-colors"
+					onclick={() => $paper && onDownloadPdf?.($paper.id)}
+				>
+					<FileText class="h-4 w-4" />
+					Find / Download PDF
+				</button>
+				{/if}
 				<div class="grid grid-cols-3 gap-2">
 					<button
 						class="flex items-center justify-center gap-1 rounded-lg glass px-2 py-2 text-xs font-medium text-foreground hover:bg-[hsl(var(--glass-bg-hover))] transition-colors"

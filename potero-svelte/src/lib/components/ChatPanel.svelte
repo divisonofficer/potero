@@ -4,6 +4,7 @@
 	import type { Paper } from '$lib/types';
 	import { Paperclip, X } from 'lucide-svelte';
 	import { generateUUID } from '$lib/utils/uuid';
+	import { pdfHighlightRequest } from '$lib/stores/tabs';
 
 	interface Props {
 		paper: Paper | null;
@@ -14,6 +15,16 @@
 		role: 'user' | 'assistant';
 		content: string;
 		isLoading?: boolean;
+		quotes?: string[];
+	}
+
+	function extractQuotes(text: string): string[] {
+		const results: string[] = [];
+		const doubleQuoted = [...text.matchAll(/"([^"]{8,120})"/g)].map(m => m[1]);
+		results.push(...doubleQuoted);
+		const backtick = [...text.matchAll(/`([^`]{8,80})`/g)].map(m => m[1]);
+		results.push(...backtick);
+		return [...new Set(results)];
 	}
 
 	let { paper }: Props = $props();
@@ -146,9 +157,14 @@
 							finalMessageId = doneData.messageId;
 							accumulatedContent = doneData.content;
 
+							const quotes = extractQuotes(accumulatedContent);
+							if (quotes.length > 0) {
+								pdfHighlightRequest.set({ snippets: quotes });
+							}
+
 							messages = messages.map((msg) =>
 								msg.id === assistantId
-									? { id: finalMessageId, role: 'assistant' as const, content: accumulatedContent, isLoading: false }
+									? { id: finalMessageId, role: 'assistant' as const, content: accumulatedContent, isLoading: false, quotes: quotes.length > 0 ? quotes : undefined }
 									: msg
 							);
 

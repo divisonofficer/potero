@@ -5,6 +5,7 @@ import com.potero.data.repository.GrobidRepositoryImpl
 import com.potero.data.repository.NarrativeRepositoryImpl
 import com.potero.data.repository.PaperRepositoryImpl
 import com.potero.data.repository.PdfPreprocessingRepositoryImpl
+import com.potero.data.repository.PdfResolutionRepositoryImpl
 import com.potero.data.repository.ReferenceRepositoryImpl
 import com.potero.data.repository.ResearchNoteRepositoryImpl
 import com.potero.data.repository.SettingsRepositoryImpl
@@ -15,6 +16,7 @@ import com.potero.domain.repository.GrobidRepository
 import com.potero.domain.repository.NarrativeRepository
 import com.potero.domain.repository.PaperRepository
 import com.potero.domain.repository.PdfPreprocessingRepository
+import com.potero.domain.repository.PdfResolutionRepository
 import com.potero.domain.repository.ReferenceRepository
 import com.potero.domain.repository.ResearchNoteRepository
 import com.potero.domain.repository.SettingsKeys
@@ -52,6 +54,16 @@ import com.potero.service.grobid.GrobidRestEngine
 import com.potero.service.grobid.DisabledGrobidEngine
 import com.potero.service.grobid.LLMReferenceParser
 import com.potero.service.pdf.PdfDownloadService
+import com.potero.service.pdf.PdfUrlVerifier
+import com.potero.service.pdf.CandidateScorer
+import com.potero.service.pdf.PdfCandidateProvider
+import com.potero.service.pdf.DefaultIdentifierEnricher
+import com.potero.service.pdf.IdentifierEnricher
+import com.potero.service.pdf.candidates.ArxivCandidateProvider
+import com.potero.service.pdf.candidates.OpenAlexCandidateProvider
+import com.potero.service.pdf.candidates.UnpaywallCandidateProvider
+import com.potero.service.pdf.candidates.CVFCandidateProvider
+import com.potero.service.pdf.candidates.SemanticScholarCandidateProvider
 import com.potero.service.metadata.UnpaywallResolver
 import com.potero.service.metadata.SciHubResolver
 import com.potero.service.metadata.CVFOpenAccessResolver
@@ -188,6 +200,10 @@ object ServiceLocator {
                     "gemini" -> LLMProvider.GEMINI
                     else -> LLMProvider.GPT
                 }
+            },
+            bearerTokenProvider = {
+                // Dynamically load SSO bearer token from settings database
+                settingsRepository.get(SettingsKeys.SSO_ACCESS_TOKEN).getOrNull() ?: ""
             }
         )
     }
@@ -343,13 +359,44 @@ object ServiceLocator {
         )
     }
 
+    val pdfResolutionRepository: PdfResolutionRepository by lazy {
+        PdfResolutionRepositoryImpl(database)
+    }
+
+    val identifierEnricher: IdentifierEnricher by lazy {
+        DefaultIdentifierEnricher(
+            openAlexResolver = openAlexResolver,
+            semanticScholarResolver = semanticScholarResolver
+        )
+    }
+
+    val pdfUrlVerifier: PdfUrlVerifier by lazy {
+        PdfUrlVerifier(httpClient)
+    }
+
+    val candidateScorer: CandidateScorer by lazy {
+        CandidateScorer()
+    }
+
+    val pdfCandidateProviders: List<PdfCandidateProvider> by lazy {
+        listOfNotNull(
+            ArxivCandidateProvider(),
+            CVFCandidateProvider(cvfOpenAccessResolver),
+            OpenAlexCandidateProvider(openAlexResolver),
+            UnpaywallCandidateProvider(unpaywallResolver),
+            SemanticScholarCandidateProvider(semanticScholarResolver)
+        )
+    }
+
     val pdfDownloadService: PdfDownloadService by lazy {
         PdfDownloadService(
             httpClient = httpClient,
             semanticScholarResolver = semanticScholarResolver,
             cvfResolver = cvfOpenAccessResolver,
             unpaywallResolver = unpaywallResolver,
-            sciHubResolver = sciHubResolver
+            sciHubResolver = sciHubResolver,
+            openAlexResolver = openAlexResolver,
+            resolutionRepository = pdfResolutionRepository
         )
     }
 

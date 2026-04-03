@@ -46,6 +46,7 @@
 	import { api, type Settings } from '$lib/api/client';
 	import { toast } from '$lib/stores/toast';
 	import type { Paper, ResearchNote, TagProfile, AuthorProfile, JournalProfile } from '$lib/types';
+	import { getErrorMessage } from '$lib/types';
 	import { createNote } from '$lib/stores/notes';
 	import { browser } from '$app/environment';
 	import { MainLayout, SourcesSidebar, PaperBrowser, InspectorPanel, StatusBar, type LibraryFilter } from '$lib/components/layout';
@@ -280,7 +281,7 @@
 				toast.success('PDF downloaded successfully');
 				await loadPapers();
 			} else {
-				throw new Error(result.error || 'Failed to download PDF');
+				throw new Error(getErrorMessage(result.error) || 'Failed to download PDF');
 			}
 		} catch (err) {
 			console.error('[Download PDF] Error:', err);
@@ -904,6 +905,7 @@
 			<InspectorPanel
 				paper={selectedPaper}
 				onOpenPdf={handleOpenPaper}
+				onDownloadPdf={handleDownloadPdf}
 				onOpenRelatedWork={handleOpenRelatedWork}
 				onOpenChat={handleOpenChat}
 				onOpenNotes={handleOpenNotes}
@@ -1405,3 +1407,19 @@
 		showFloatingSearch = true;
 	}
 }} />
+
+<!-- Toast Container -->
+<div class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+	{#each $toast as t (t.id)}
+		<div
+			class="pointer-events-auto flex items-start gap-3 rounded-lg px-4 py-3 text-sm shadow-lg max-w-sm
+				{t.type === 'success' ? 'bg-green-600 text-white' :
+				 t.type === 'error'   ? 'bg-destructive text-destructive-foreground' :
+				 t.type === 'warning' ? 'bg-yellow-500 text-white' :
+				                       'bg-foreground text-background'}"
+		>
+			<span class="flex-1">{t.message}</span>
+			<button class="shrink-0 opacity-70 hover:opacity-100" onclick={() => toast.remove(t.id)}>✕</button>
+		</div>
+	{/each}
+</div>

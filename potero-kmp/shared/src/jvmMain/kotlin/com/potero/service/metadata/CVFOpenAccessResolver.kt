@@ -67,7 +67,22 @@ class CVFOpenAccessResolver(
             val pdfUrl = "$CVF_BASE/content/$conference$year/papers/${firstAuthor}_${titleWords}_${conference}_${year}_paper.pdf"
 
             println("[CVF] Constructed PDF URL: $pdfUrl")
-            return pdfUrl // PdfDownloadService will validate by attempting download
+
+            // Validate the constructed URL before returning — fall through to Strategy 2 if 404
+            try {
+                val headResponse = httpClient.request(pdfUrl) {
+                    method = io.ktor.http.HttpMethod.Head
+                    header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                }
+                if (headResponse.status.value in 200..299) {
+                    println("[CVF] URL validated OK: $pdfUrl")
+                    return pdfUrl
+                } else {
+                    println("[CVF] Constructed URL returned ${headResponse.status.value}, falling through to page scrape")
+                }
+            } catch (e: Exception) {
+                println("[CVF] HEAD check failed (${e.message}), falling through to page scrape")
+            }
         }
 
         // Strategy 2: Try to access papers list page with proper headers

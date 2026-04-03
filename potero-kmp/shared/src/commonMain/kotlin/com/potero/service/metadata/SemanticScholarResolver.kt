@@ -35,15 +35,19 @@ class SemanticScholarResolver(
         private const val AUTHOR_PAPERS_FIELDS = "paperId,title,year,venue,citationCount"
 
         // API key header name
-        private const val API_KEY_HEADER = "x-api-key"
+        private const val API_KEY_HEADER = "X-Api-Key"
     }
 
     /**
      * Helper to add API key header if available
      */
     private suspend fun io.ktor.client.request.HttpRequestBuilder.addApiKeyIfAvailable() {
-        apiKeyProvider?.invoke()?.takeIf { it.isNotBlank() }?.let { apiKey ->
-            header(API_KEY_HEADER, apiKey)
+        val key = apiKeyProvider?.invoke()
+        if (!key.isNullOrBlank()) {
+            println("[SemanticScholar] API key attached: ${key.take(4)}****${key.takeLast(4)}")
+            header(API_KEY_HEADER, key)
+        } else {
+            println("[SemanticScholar] No API key — running without key (strict rate limit)")
         }
     }
 
@@ -87,7 +91,16 @@ class SemanticScholarResolver(
                     return@repeat
                 }
 
+                if (response.status.value == 403) {
+                    // Forbidden - API key invalid/missing, skip entirely without retrying
+                    val body = runCatching { response.body<String>() }.getOrDefault("")
+                    println("[SemanticScholar] 403 Forbidden — skipping source (check API key). Body: $body")
+                    return emptyList()
+                }
+
                 if (!response.status.isSuccess()) {
+                    val body = runCatching { response.body<String>() }.getOrDefault("")
+                    println("[SemanticScholar] Error ${response.status.value}: $body")
                     throw MetadataResolutionException(
                         "Semantic Scholar API error: ${response.status}",
                         query
@@ -188,6 +201,12 @@ class SemanticScholarResolver(
                     kotlinx.coroutines.delay(delayMs)
                     delayMs *= 2
                     return@repeat
+                }
+
+                if (response.status.value == 403) {
+                    val body = runCatching { response.body<String>() }.getOrDefault("")
+                    println("[SemanticScholar] Author search 403 Forbidden — skipping (check API key). Body: $body")
+                    return emptyList()
                 }
 
                 if (!response.status.isSuccess()) {

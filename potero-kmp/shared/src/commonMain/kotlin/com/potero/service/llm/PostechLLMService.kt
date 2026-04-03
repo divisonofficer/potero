@@ -17,7 +17,8 @@ import kotlinx.coroutines.flow.flow
 class PostechLLMService(
     private val httpClient: HttpClient,
     private val apiKeyProvider: suspend () -> String,
-    private val providerProvider: suspend () -> LLMProvider = { LLMProvider.GPT }
+    private val providerProvider: suspend () -> LLMProvider = { LLMProvider.GPT },
+    private val bearerTokenProvider: suspend () -> String = { "" }
 ) : LLMService {
 
     // Secondary constructor for backward compatibility
@@ -37,8 +38,9 @@ class PostechLLMService(
     }
 
     override suspend fun chat(message: String): Result<String> = runCatching {
-        // Get API key and provider dynamically from settings
+        // Get API key, bearer token, and provider dynamically from settings
         val apiKey = apiKeyProvider()
+        val bearerToken = bearerTokenProvider()
         val currentProvider = _providerOverride ?: providerProvider()
 
         // Update last used provider for accurate logging
@@ -50,26 +52,24 @@ class PostechLLMService(
         println("[LLM] Endpoint: ${currentProvider.endpoint}")
         println("[LLM] API Key configured: ${apiKey.isNotBlank()}")
         println("[LLM] API Key (first 10 chars): ${apiKey.take(10)}...")
+        println("[LLM] Bearer token configured: ${bearerToken.isNotBlank()}")
         println("[LLM] Message length: ${message.length} chars")
         println("[LLM] Message preview: ${message.take(200)}...")
         println("[LLM] ----------------------------------------")
 
-        if (apiKey.isBlank()) {
-            println("[LLM] ERROR: API key is empty!")
-            throw LLMException("LLM API key is not configured. Please set it in Settings.")
+        if (apiKey.isBlank() && bearerToken.isBlank()) {
+            println("[LLM] ERROR: Neither API key nor bearer token is configured!")
+            throw LLMException("LLM credentials are not configured. Please set API key or SSO token in Settings.")
         }
 
-        val requestBody = LLMRequest(
-            message = message,
-            stream = false,
-            files = emptyList() // MVP: No file upload, using text extraction
-        )
+        val requestBody = LLMRequest(input = message)
 
         println("[LLM] Sending request to: ${currentProvider.endpoint}")
 
         val response = httpClient.post(currentProvider.endpoint) {
             contentType(ContentType.Application.Json)
-            header("X-Api-Key", apiKey)
+            if (apiKey.isNotBlank()) header("X-Api-Key", apiKey)
+            if (bearerToken.isNotBlank()) header("Authorization", "Bearer $bearerToken")
             setBody(requestBody)
         }
 
@@ -95,6 +95,16 @@ class PostechLLMService(
             rawBody.trim().removeSurrounding("\"")
         }
 
+        // Detect API-level error responses wrapped in HTTP 200
+        // e.g. {"detail":"Required headers missing"} from POSTECH proxy errors
+        if (responseMessage.startsWith("{") &&
+            (responseMessage.contains("\"detail\"") || responseMessage.contains("\"error\""))) {
+            val detail = Regex(""""detail"\s*:\s*"([^"]+)"""").find(responseMessage)?.groupValues?.get(1)
+                ?: Regex(""""error"\s*:\s*"([^"]+)"""").find(responseMessage)?.groupValues?.get(1)
+            println("[LLM] ERROR: API returned error in body: $responseMessage")
+            throw LLMException("LLM API error: ${detail ?: responseMessage}")
+        }
+
         if (responseMessage.isBlank()) {
             throw LLMException("LLM returned empty response")
         }
@@ -107,8 +117,9 @@ class PostechLLMService(
     }
 
     override suspend fun chatWithFiles(message: String, files: List<FileAttachment>): Result<String> = runCatching {
-        // Get API key and provider dynamically from settings
+        // Get API key, bearer token, and provider dynamically from settings
         val apiKey = apiKeyProvider()
+        val bearerToken = bearerTokenProvider()
         val currentProvider = _providerOverride ?: providerProvider()
 
         // Update last used provider for accurate logging
@@ -119,6 +130,7 @@ class PostechLLMService(
         println("[LLM] Provider: ${currentProvider.name}")
         println("[LLM] Endpoint: ${currentProvider.endpoint}")
         println("[LLM] API Key configured: ${apiKey.isNotBlank()}")
+        println("[LLM] Bearer token configured: ${bearerToken.isNotBlank()}")
         println("[LLM] Message length: ${message.length} chars")
         println("[LLM] Files attached: ${files.size}")
         files.forEachIndexed { idx, file ->
@@ -126,22 +138,19 @@ class PostechLLMService(
         }
         println("[LLM] ----------------------------------------")
 
-        if (apiKey.isBlank()) {
-            println("[LLM] ERROR: API key is empty!")
-            throw LLMException("LLM API key is not configured. Please set it in Settings.")
+        if (apiKey.isBlank() && bearerToken.isBlank()) {
+            println("[LLM] ERROR: Neither API key nor bearer token is configured!")
+            throw LLMException("LLM credentials are not configured. Please set API key or SSO token in Settings.")
         }
 
-        val requestBody = LLMRequest(
-            message = message,
-            stream = false,
-            files = files  // Now actually passing files!
-        )
+        val requestBody = LLMRequest(input = message)
 
         println("[LLM] Sending request with ${files.size} file(s) to: ${currentProvider.endpoint}")
 
         val response = httpClient.post(currentProvider.endpoint) {
             contentType(ContentType.Application.Json)
-            header("X-Api-Key", apiKey)
+            if (apiKey.isNotBlank()) header("X-Api-Key", apiKey)
+            if (bearerToken.isNotBlank()) header("Authorization", "Bearer $bearerToken")
             setBody(requestBody)
         }
 
@@ -165,6 +174,15 @@ class PostechLLMService(
             println("[LLM] Failed to parse as LLMResponse: ${e.message}")
             // Fallback: use raw body
             rawBody.trim().removeSurrounding("\"")
+        }
+
+        // Detect API-level error responses wrapped in HTTP 200
+        if (responseMessage.startsWith("{") &&
+            (responseMessage.contains("\"detail\"") || responseMessage.contains("\"error\""))) {
+            val detail = Regex(""""detail"\s*:\s*"([^"]+)"""").find(responseMessage)?.groupValues?.get(1)
+                ?: Regex(""""error"\s*:\s*"([^"]+)"""").find(responseMessage)?.groupValues?.get(1)
+            println("[LLM] ERROR: API returned error in body: $responseMessage")
+            throw LLMException("LLM API error: ${detail ?: responseMessage}")
         }
 
         if (responseMessage.isBlank()) {

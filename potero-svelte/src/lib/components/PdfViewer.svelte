@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { updateViewerState, openNotePanel, openAuthorProfile, openJournalProfile, activeTabId } from '$lib/stores/tabs';
+	import { updateViewerState, openNotePanel, openAuthorProfile, openJournalProfile, activeTabId, pdfHighlightRequest } from '$lib/stores/tabs';
 	import { selectedYear } from '$lib/stores/library';
 	import type { PdfViewerState, Paper, AuthorProfile, JournalProfile } from '$lib/types';
+	import CitationCard from './CitationCard.svelte';
 	import CitationModal from './CitationModal.svelte';
 	import FloatingOutline from './FloatingOutline.svelte';
 	import RedditThreadView from './RedditThreadView.svelte';
@@ -31,6 +32,11 @@
 	let showCitationModal = $state(false);
 	let citationQuery = $state('');
 	let citationLinkedRefs = $state<import('$lib/api/client').LinkedReference[] | undefined>(undefined);
+
+	// Smart Citation Card state
+	let showCitationCard = $state(false);
+	let citationCardPos = $state({ x: 0, y: 0 });
+	let citationCardLinkedRef = $state<import('$lib/api/client').LinkedReference | null>(null);
 
 	// Outline panel state
 	let showOutlinePanel = $state(false);
@@ -110,6 +116,9 @@
 
 	// Content view mode (Reader vs Blog) - restored from initialState
 	let contentViewMode = $state<'reader' | 'blog'>(initialState?.contentViewMode ?? 'reader');
+
+	// Auto Highlight state
+	let autoHighlightEnabled = $state(false);
 
 	// Narrative (Blog) state
 	let narratives = $state<Narrative[]>([]);
@@ -1582,9 +1591,20 @@
 
 					// Handle citation reference clicks
 					if (target.classList.contains('citation-ref')) {
-						const citationText = target.textContent || '';
-						showCitationModal = true;
+						const citationText = (target.textContent || '').trim();
 						citationQuery = citationText;
+
+						// Try to find linked reference data from GROBID citationSpans
+						const matchingSpan = citationSpans.find(s => s.rawText.trim() === citationText);
+						const linkedRef = matchingSpan?.linkedReferences?.[0] ?? null;
+
+						if (linkedRef && linkedRef.title) {
+							citationCardLinkedRef = linkedRef;
+							citationCardPos = clampCardPosition(e.clientX, e.clientY);
+							showCitationCard = true;
+						} else {
+							showCitationModal = true;
+						}
 						e.stopPropagation();
 					}
 
@@ -1785,7 +1805,102 @@
 				}
 			}
 		}
+
+		// === Auto Highlight ===
+		if (autoHighlightEnabled && !isInReferencesSection) {
+			for (const line of lines) {
+				const lineText = line.map(s => s.text).join('');
+				for (const [category, patterns] of Object.entries(AUTO_HIGHLIGHT_PATTERNS)) {
+					for (const pattern of patterns) {
+						pattern.lastIndex = 0;
+						const match = pattern.exec(lineText);
+						if (match) {
+							applyClassToSpansInRange(
+								line,
+								match.index,
+								match.index + match[0].length,
+								`hl-${category}`,
+								'',
+								undefined
+							);
+						}
+					}
+				}
+			}
+		}
 	}
+
+	function clampCardPosition(x: number, y: number): { x: number; y: number } {
+		const cardW = 380;
+		const cardH = 220;
+		const pad = 12;
+		let cx = x + 16;
+		let cy = y - 80;
+		if (cx + cardW > window.innerWidth - pad) cx = x - cardW - 16;
+		if (cy < pad) cy = y + 24;
+		if (cy + cardH > window.innerHeight - pad) cy = window.innerHeight - cardH - pad;
+		return { x: cx, y: cy };
+	}
+
+	function reAnnotateAllVisiblePages() {
+		if (!scrollContainer) return;
+		const textLayers = scrollContainer.querySelectorAll<HTMLElement>('.textLayer');
+		textLayers.forEach((layer) => {
+			// Remove existing auto-highlight classes before re-applying
+			layer.querySelectorAll<HTMLElement>('.hl-novelty, .hl-method, .hl-result, .hl-limit').forEach(el => {
+				el.classList.remove('hl-novelty', 'hl-method', 'hl-result', 'hl-limit');
+			});
+			const pageWrapper = layer.closest<HTMLElement>('[data-page]');
+			const pageNum = pageWrapper ? parseInt(pageWrapper.dataset.page ?? '1', 10) : 1;
+			annotateTextLayer(layer, pageNum, true);
+		});
+	}
+
+	$effect(() => {
+		// Re-annotate whenever auto-highlight is toggled
+		// Accessing autoHighlightEnabled registers it as a reactive dependency
+		void autoHighlightEnabled;
+		reAnnotateAllVisiblePages();
+	});
+
+	function highlightTextSnippets(snippets: string[]) {
+		if (!scrollContainer || snippets.length === 0) return;
+
+		const textLayers = scrollContainer.querySelectorAll<HTMLElement>('.textLayer');
+		const highlightedSpans: HTMLElement[] = [];
+
+		for (const layer of textLayers) {
+			const lines = aggregateSpansToLines(layer);
+			for (const line of lines) {
+				const lineText = line.map(s => s.text).join('');
+				for (const snippet of snippets) {
+					if (snippet.length < 8) continue;
+					const idx = lineText.toLowerCase().indexOf(snippet.toLowerCase());
+					if (idx === -1) continue;
+
+					applyClassToSpansInRange(line, idx, idx + snippet.length, 'grounded-highlight', '');
+					line
+						.filter(s => s.endPos > idx && s.startPos < idx + snippet.length)
+						.forEach(s => highlightedSpans.push(s.span));
+				}
+			}
+		}
+
+		if (highlightedSpans.length > 0) {
+			highlightedSpans[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+		}
+
+		setTimeout(() => {
+			highlightedSpans.forEach(el => el.classList.remove('grounded-highlight'));
+		}, 3500);
+	}
+
+	$effect(() => {
+		const req = $pdfHighlightRequest;
+		if (!req) return;
+		if (req.tabId && req.tabId !== tabId) return;
+		highlightTextSnippets(req.snippets);
+	});
 
 	async function renderSinglePage(pageNum: number) {
 		if (!pdfDoc || !scrollContainer) return;
@@ -2099,6 +2214,41 @@
 		/^\d+\.\s/,      // 1. Author...
 		/^\(\d+\)/,      // (1) Author...
 	];
+
+	// Auto highlight patterns by category
+	const AUTO_HIGHLIGHT_PATTERNS: Record<string, RegExp[]> = {
+		novelty: [
+			/\bwe propose\b/i,
+			/\bwe present\b/i,
+			/\bnovel\b/i,
+			/\bfirst to\b/i,
+			/\bto the best of our knowledge\b/i,
+			/\bour (?:key )?contribution[s]?\b/i,
+			/\bwe introduce\b/i,
+		],
+		method: [
+			/\bour (?:proposed )?method\b/i,
+			/\bour approach\b/i,
+			/\bour (?:model|framework|architecture|system)\b/i,
+			/\bwe (?:use|adopt|employ|design|train)\b/i,
+		],
+		result: [
+			/\bstate-of-the-art\b/i,
+			/\bstate of the art\b/i,
+			/\bSOTA\b/,
+			/\boutperform[s]?\b/i,
+			/\bsignificantly (?:better|improve[sd]?)\b/i,
+			/\bimprove[sd]? (?:by|over)\b/i,
+			/\bachieve[sd]? (?:state|best|new)\b/i,
+		],
+		limit: [
+			/\blimitation[s]?\b/i,
+			/\bfuture work\b/i,
+			/\bdoes not\b/i,
+			/\bfail[s]? to\b/i,
+			/\bcannot\b/i,
+		],
+	};
 
 	// Figure location index (built after PDF load)
 	interface FigureLocation {
@@ -2706,6 +2856,52 @@
 			0% { background-color: rgba(251, 191, 36, 0.6); }
 			100% { background-color: transparent; }
 		}
+
+		/* Auto Highlight — novelty / method / result / limit */
+		.textLayer span.hl-novelty {
+			background-color: rgba(251, 191, 36, 0.20);
+			border-bottom: 1.5px solid rgba(251, 191, 36, 0.65);
+		}
+		.textLayer span.hl-novelty:hover {
+			background-color: rgba(251, 191, 36, 0.35);
+		}
+
+		.textLayer span.hl-method {
+			background-color: rgba(59, 130, 246, 0.12);
+			border-bottom: 1.5px solid rgba(59, 130, 246, 0.5);
+		}
+		.textLayer span.hl-method:hover {
+			background-color: rgba(59, 130, 246, 0.25);
+		}
+
+		.textLayer span.hl-result {
+			background-color: rgba(34, 197, 94, 0.12);
+			border-bottom: 1.5px solid rgba(34, 197, 94, 0.5);
+		}
+		.textLayer span.hl-result:hover {
+			background-color: rgba(34, 197, 94, 0.25);
+		}
+
+		.textLayer span.hl-limit {
+			background-color: rgba(239, 68, 68, 0.10);
+			border-bottom: 1.5px solid rgba(239, 68, 68, 0.4);
+		}
+		.textLayer span.hl-limit:hover {
+			background-color: rgba(239, 68, 68, 0.22);
+		}
+
+		/* Grounded answer highlight */
+		.textLayer span.grounded-highlight {
+			background-color: rgba(52, 211, 153, 0.35);
+			border-bottom: 2px solid rgba(52, 211, 153, 0.8);
+			animation: grounded-pulse 3.5s ease-out forwards;
+		}
+
+		@keyframes grounded-pulse {
+			0%   { background-color: rgba(52, 211, 153, 0.5); }
+			70%  { background-color: rgba(52, 211, 153, 0.35); }
+			100% { background-color: transparent; border-bottom-color: transparent; }
+		}
 	</style>
 </svelte:head>
 
@@ -2827,6 +3023,23 @@
 				Fit Page
 			</button>
 		</div>
+
+		<div class="mx-2 h-5 w-px bg-neutral-300 dark:bg-neutral-600"></div>
+
+		<!-- Auto Highlight toggle -->
+		<button
+			class="flex items-center gap-1.5 rounded px-2 py-1 text-sm transition-colors {autoHighlightEnabled
+				? 'bg-amber-100 font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+				: 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-700 dark:hover:text-neutral-200'}"
+			onclick={() => { autoHighlightEnabled = !autoHighlightEnabled; }}
+			title="Auto Highlight — marks novelty, method, result, and limitation sentences"
+		>
+			<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<path d="M12 20h9" />
+				<path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+			</svg>
+			<span class="hidden sm:inline">Highlight</span>
+		</button>
 
 		<!-- References and Citations detection status -->
 		<div class="flex items-center gap-2">
@@ -3331,6 +3544,17 @@
 	</div>
 	{/if}
 </div>
+
+<!-- Smart Citation Card -->
+{#if showCitationCard && citationCardLinkedRef}
+	<CitationCard
+		linkedRef={citationCardLinkedRef}
+		pos={citationCardPos}
+		onClose={() => { showCitationCard = false; citationCardLinkedRef = null; }}
+		onOpenModal={() => { showCitationModal = true; }}
+		onOpenPaper={(id) => { onOpenPaper?.(id); }}
+	/>
+{/if}
 
 <!-- Citation Lookup Modal -->
 {#if showCitationModal}

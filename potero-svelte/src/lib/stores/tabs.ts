@@ -1,4 +1,11 @@
 import { writable, derived, get } from 'svelte/store';
+
+export interface PdfHighlightRequest {
+	snippets: string[];
+	tabId?: string;
+}
+
+export const pdfHighlightRequest = writable<PdfHighlightRequest | null>(null);
 import type {
 	Tab,
 	Paper,

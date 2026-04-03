@@ -1,15 +1,24 @@
 package com.potero.service.pdf
 
 import com.potero.domain.model.Paper
+import com.potero.domain.model.PdfResolutionRecord
+import com.potero.domain.repository.PdfResolutionRepository
 import com.potero.service.metadata.SemanticScholarResolver
 import com.potero.service.metadata.UnpaywallResolver
 import com.potero.service.metadata.SciHubResolver
 import com.potero.service.metadata.CVFOpenAccessResolver
+import com.potero.service.metadata.OpenAlexResolver
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
+import kotlinx.datetime.Clock
 import java.io.File
+import java.util.UUID
 
 /**
  * Service for downloading PDF files from various sources
@@ -27,7 +36,9 @@ class PdfDownloadService(
     private val semanticScholarResolver: SemanticScholarResolver,
     private val cvfResolver: CVFOpenAccessResolver,
     private val unpaywallResolver: UnpaywallResolver? = null,
-    private val sciHubResolver: SciHubResolver? = null
+    private val sciHubResolver: SciHubResolver? = null,
+    private val openAlexResolver: OpenAlexResolver? = null,
+    private val resolutionRepository: PdfResolutionRepository? = null
 ) {
 
     companion object {
@@ -60,14 +71,17 @@ class PdfDownloadService(
 
         // Try 1: arXiv first (most reliable for CS papers)
         if (paper.arxivId != null) {
+            val arxivUrl = buildArxivPdfUrl(paper.arxivId)
             try {
-                val arxivUrl = buildArxivPdfUrl(paper.arxivId)
                 println("[PdfDownload] Trying arXiv: $arxivUrl")
-                return@runCatching downloadFromUrl(arxivUrl, paperId, fileName)
+                val path = downloadFromUrl(arxivUrl, paperId, fileName)
+                recordResolution(paperId, "arxiv", arxivUrl, "success")
+                return@runCatching path
             } catch (e: Exception) {
                 val error = "arXiv failed: ${e.message}"
                 println("[PdfDownload] $error")
                 errors.add(error)
+                recordResolution(paperId, "arxiv", arxivUrl, "failed", "DOWNLOAD_ERROR")
             }
         }
 
@@ -83,11 +97,14 @@ class PdfDownloadService(
             if (cvfUrl != null) {
                 try {
                     println("[PdfDownload] Trying CVF Open Access: $cvfUrl")
-                    return@runCatching downloadFromUrl(cvfUrl, paperId, fileName)
+                    val path = downloadFromUrl(cvfUrl, paperId, fileName)
+                    recordResolution(paperId, "cvf", cvfUrl, "success")
+                    return@runCatching path
                 } catch (e: Exception) {
                     val error = "CVF Open Access failed: ${e.message}"
                     println("[PdfDownload] $error")
                     errors.add(error)
+                    recordResolution(paperId, "cvf", cvfUrl, "failed", "DOWNLOAD_ERROR")
                 }
             }
         }
@@ -96,70 +113,110 @@ class PdfDownloadService(
         if (directUrl != null) {
             try {
                 println("[PdfDownload] Trying direct URL: $directUrl")
-                return@runCatching downloadFromUrl(directUrl, paperId, fileName)
+                val path = downloadFromUrl(directUrl, paperId, fileName)
+                recordResolution(paperId, "direct_url", directUrl, "success")
+                return@runCatching path
             } catch (e: Exception) {
                 val error = "Direct URL failed: ${e.message}"
                 println("[PdfDownload] $error")
                 errors.add(error)
+                recordResolution(paperId, "direct_url", directUrl, "failed", "DOWNLOAD_ERROR")
             }
         }
 
-        // Try 4: Unpaywall (legal open access finder)
+        // Try 4: OpenAlex (200M+ works, OA URL, DOI or title search)
+        val oaUrl = tryOpenAlex(paper)
+        if (!oaUrl.isNullOrBlank()) {
+            try {
+                println("[PdfDownload] Trying OpenAlex: $oaUrl")
+                val path = downloadFromUrl(oaUrl, paperId, fileName)
+                recordResolution(paperId, "openalex", oaUrl, "success")
+                return@runCatching path
+            } catch (e: Exception) {
+                val error = "OpenAlex failed: ${e.message}"
+                println("[PdfDownload] $error")
+                errors.add(error)
+                recordResolution(paperId, "openalex", oaUrl, "failed", "DOWNLOAD_ERROR")
+            }
+        } else {
+            println("[PdfDownload] OpenAlex returned no PDF URL")
+            recordResolution(paperId, "openalex", null, "skipped", "NO_OA_URL")
+        }
+
+        // Try 5: Unpaywall (legal open access finder)
         if (unpaywallResolver != null && paper.doi != null) {
             val unpaywallUrl = unpaywallResolver.findOpenAccessPdf(paper.doi)
             if (unpaywallUrl != null) {
                 try {
                     println("[PdfDownload] Trying Unpaywall: $unpaywallUrl")
-                    return@runCatching downloadFromUrl(unpaywallUrl, paperId, fileName)
+                    val path = downloadFromUrl(unpaywallUrl, paperId, fileName)
+                    recordResolution(paperId, "unpaywall", unpaywallUrl, "success")
+                    return@runCatching path
                 } catch (e: Exception) {
                     val error = "Unpaywall failed: ${e.message}"
                     println("[PdfDownload] $error")
                     errors.add(error)
+                    recordResolution(paperId, "unpaywall", unpaywallUrl, "failed", "DOWNLOAD_ERROR")
                 }
+            } else {
+                recordResolution(paperId, "unpaywall", null, "skipped", "NO_OA_LOCATION")
             }
         }
 
-        // Try 5: Semantic Scholar API
+        // Try 6: Semantic Scholar API
         val ssUrl = trySemanticScholar(paper.title, paper.authors.map { it.name })
         if (!ssUrl.isNullOrBlank()) {
             try {
                 println("[PdfDownload] Trying Semantic Scholar: $ssUrl")
-                return@runCatching downloadFromUrl(ssUrl, paperId, fileName)
+                val path = downloadFromUrl(ssUrl, paperId, fileName)
+                recordResolution(paperId, "semantic_scholar", ssUrl, "success")
+                return@runCatching path
             } catch (e: Exception) {
                 val error = "Semantic Scholar failed: ${e.message}"
                 println("[PdfDownload] $error")
                 errors.add(error)
+                recordResolution(paperId, "semantic_scholar", ssUrl, "failed", "DOWNLOAD_ERROR")
             }
         } else {
             println("[PdfDownload] Semantic Scholar returned no PDF URL")
+            recordResolution(paperId, "semantic_scholar", null, "skipped", "NO_OA_URL")
         }
 
-        // Try 6: Sci-Hub (if enabled - legal gray area)
+        // Try 7: Sci-Hub (if enabled - legal gray area)
         if (sciHubResolver != null && paper.doi != null) {
             val sciHubUrl = sciHubResolver.findPdf(paper.doi)
             if (sciHubUrl != null) {
                 try {
                     println("[PdfDownload] Trying Sci-Hub: $sciHubUrl")
-                    return@runCatching downloadFromUrl(sciHubUrl, paperId, fileName)
+                    val path = downloadFromUrl(sciHubUrl, paperId, fileName)
+                    recordResolution(paperId, "scihub", sciHubUrl, "success")
+                    return@runCatching path
                 } catch (e: Exception) {
                     val error = "Sci-Hub failed: ${e.message}"
                     println("[PdfDownload] $error")
                     errors.add(error)
+                    recordResolution(paperId, "scihub", sciHubUrl, "failed", "DOWNLOAD_ERROR")
                 }
             }
         }
 
         val errorMessage = if (errors.isEmpty()) {
-            "No open access PDF found. This paper may be behind a paywall.\n" +
-            "Sources tried: ${listOfNotNull(
+            val tried = listOfNotNull(
                 paper.arxivId?.let { "arXiv" },
                 directUrl?.let { "Direct URL" },
+                if (openAlexResolver != null) "OpenAlex" else null,
                 if (unpaywallResolver != null && paper.doi != null) "Unpaywall" else null,
                 "Semantic Scholar",
                 if (sciHubResolver != null && paper.doi != null) "Sci-Hub" else null
-            ).joinToString(", ")}"
+            ).joinToString(", ")
+            "PDF를 찾지 못했습니다. 페이월 논문일 수 있습니다. (시도: $tried)"
         } else {
-            "Failed to download PDF:\n" + errors.joinToString("\n")
+            val summary = errors.joinToString(" / ") { err ->
+                // Shorten each error: "arXiv failed: ..." → "arXiv: ..."
+                err.replace(Regex("^(\\w+) failed: "), "$1: ")
+                   .take(60)
+            }
+            "PDF 다운로드 실패 — $summary"
         }
 
         throw PdfDownloadException(errorMessage)
@@ -179,6 +236,47 @@ class PdfDownloadService(
 
         println("[PdfDownload] Downloading arXiv PDF: $arxivUrl")
         downloadFromUrl(arxivUrl, "arxiv-fallback-${System.currentTimeMillis()}", fileName)
+    }
+
+    /**
+     * Record a resolution attempt (success or failure) to the repository
+     */
+    private suspend fun recordResolution(
+        paperId: String,
+        source: String,
+        candidateUrl: String?,
+        status: String,
+        failureReason: String? = null,
+        httpStatus: Int? = null
+    ) {
+        resolutionRepository?.insert(
+            PdfResolutionRecord(
+                id = UUID.randomUUID().toString(),
+                paperId = paperId,
+                source = source,
+                candidateUrl = candidateUrl,
+                status = status,
+                failureReason = failureReason,
+                httpStatus = httpStatus,
+                resolvedAt = Clock.System.now()
+            )
+        )
+    }
+
+    /**
+     * Try to find PDF URL using OpenAlex API
+     * Uses DOI lookup first (exact), then title search as fallback
+     */
+    private suspend fun tryOpenAlex(paper: Paper): String? {
+        val resolver = openAlexResolver ?: return null
+        return try {
+            val identifier = paper.doi ?: paper.title
+            val metadata = resolver.resolve(identifier).getOrNull()
+            metadata?.pdfUrl
+        } catch (e: Exception) {
+            println("[PdfDownload] OpenAlex search failed: ${e.message}")
+            null
+        }
     }
 
     /**
@@ -221,8 +319,9 @@ class PdfDownloadService(
         println("[PdfDownload] Downloading from: $url")
 
         val response = httpClient.get(url) {
-            // Follow redirects
-            header(HttpHeaders.UserAgent, "Potero/1.0 (Research Paper Manager)")
+            header(HttpHeaders.UserAgent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            header(HttpHeaders.Accept, "application/pdf,*/*;q=0.9")
+            header("Referer", "https://www.google.com/")
         }
 
         if (!response.status.isSuccess()) {
@@ -304,6 +403,98 @@ class PdfDownloadService(
         val union = words1.union(words2).size
 
         return if (union > 0) intersection.toDouble() / union else 0.0
+    }
+
+    // ==================== Pipeline API ====================
+
+    /**
+     * New pipeline-based download: uses PdfCandidateProvider + PdfUrlVerifier + CandidateScorer.
+     * Collects candidates from all providers in parallel, verifies URLs, scores, then downloads best.
+     *
+     * Falls back to legacy [downloadPdf] if no verified candidates are found.
+     */
+    suspend fun downloadPdfWithPipeline(
+        paper: Paper,
+        identity: PaperIdentity,
+        providers: List<PdfCandidateProvider>,
+        verifier: PdfUrlVerifier,
+        scorer: CandidateScorer,
+        directUrl: String? = null
+    ): Result<String> = runCatching {
+        val paperId = paper.id
+        val fileName = sanitizeFileName(paper.title)
+
+        // 1. Collect candidates in parallel (each provider gets 10s timeout)
+        val candidates: List<PdfCandidate> = coroutineScope {
+            providers.map { provider ->
+                async {
+                    try {
+                        withTimeout(10_000L) {
+                            provider.findCandidates(identity, paper)
+                        }
+                    } catch (e: Exception) {
+                        println("[PdfDownload][Pipeline] ${provider.source.label} timed out/failed: ${e.message}")
+                        emptyList<PdfCandidate>()
+                    }
+                }
+            }.awaitAll().flatten()
+        }
+
+        // Add directUrl as a candidate if provided
+        val allCandidates: List<PdfCandidate> = if (directUrl != null) {
+            candidates + PdfCandidate(
+                url = directUrl,
+                source = PdfSource.DIRECT_URL,
+                confidence = 0.70,
+                directPdfHint = false
+            )
+        } else {
+            candidates
+        }
+
+        println("[PdfDownload][Pipeline] ${allCandidates.size} candidates from ${providers.size} providers")
+
+        if (allCandidates.isEmpty()) {
+            throw PdfDownloadException("No PDF candidates found from any source")
+        }
+
+        // 2. Score and sort
+        val scored: List<Pair<PdfCandidate, Double>> = allCandidates
+            .map { candidate -> candidate to scorer.score(candidate, identity) }
+            .sortedByDescending { it.second }
+
+        // 3. Verify and download in score order
+        for (pair in scored) {
+            val candidate = pair.first
+            val score = pair.second
+            println("[PdfDownload][Pipeline] Trying ${candidate.source.label} (score=${"%.2f".format(score)}): ${candidate.url}")
+
+            val verification = verifier.verify(candidate.url)
+            when (verification) {
+                is VerificationResult.Success -> {
+                    val downloadPath = try {
+                        downloadFromUrl(candidate.url, paperId, fileName)
+                    } catch (e: Exception) {
+                        recordResolution(paperId, candidate.source.label, candidate.url, "failed", "DOWNLOAD_ERROR")
+                        println("[PdfDownload][Pipeline] Download failed after verification: ${e.message}")
+                        null
+                    }
+                    if (downloadPath != null) {
+                        recordResolution(paperId, candidate.source.label, candidate.url, "success")
+                        return@runCatching downloadPath
+                    }
+                }
+                is VerificationResult.Failure -> {
+                    println("[PdfDownload][Pipeline] ${candidate.source.label} verification failed: ${verification.reason} (${verification.httpStatus})")
+                    recordResolution(
+                        paperId, candidate.source.label, candidate.url, "failed",
+                        verification.reason.name, verification.httpStatus
+                    )
+                }
+            }
+        }
+
+        throw PdfDownloadException("No valid PDF found after checking ${allCandidates.size} candidates")
     }
 }
 

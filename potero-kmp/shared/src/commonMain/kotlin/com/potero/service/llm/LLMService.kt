@@ -1,30 +1,31 @@
 package com.potero.service.llm
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * LLM Provider endpoints for POSTECH GenAI API
+ * LLM Provider endpoints for POSTECH GenAI API (OpenAI Responses API compatible)
+ * Base URL format: https://genai.postech.ac.kr/agent/api/a{idx}
+ * Path: /openai/responses
  */
 enum class LLMProvider(val endpoint: String, val displayName: String) {
-    GPT("https://genai.postech.ac.kr/agent/api/a1/gpt", "GPT"),
+    GPT("https://genai.postech.ac.kr/agent/api/a11/gpt/responses", "GPT"),
     GEMINI("https://genai.postech.ac.kr/agent/api/a2/gemini", "Gemini"),
     CLAUDE("https://genai.postech.ac.kr/agent/api/a3/claude", "Claude")
 }
 
 /**
- * Request body for POSTECH GenAI API
+ * Request body — OpenAI Responses API format
  */
 @Serializable
 data class LLMRequest(
-    val message: String,
-    val stream: Boolean = false,
-    val files: List<FileAttachment> = emptyList()
+    val model: String = "default",
+    val input: String
 )
 
 /**
- * File attachment for future SSO-based file upload
- * (Not used in MVP - using text extraction instead)
+ * File attachment (not yet used — kept for future SSO-based upload)
  */
 @Serializable
 data class FileAttachment(
@@ -34,29 +35,33 @@ data class FileAttachment(
 )
 
 /**
- * Response from POSTECH GenAI API
- * Note: The API returns "replies" field, not "message"
+ * Response from POSTECH GenAI API (OpenAI Responses API format)
+ * output[].content[].text is the primary field.
+ * Legacy "replies"/"message" fields kept as fallback.
  */
 @Serializable
 data class LLMResponse(
+    val output: List<OutputItem>? = null,
+    // Legacy fields
     val replies: String? = null,
     val message: String? = null
 ) {
-    /**
-     * Get the response content (handles both "replies" and "message" fields)
-     * Also handles doubly-escaped JSON strings from backend
-     */
     fun getContent(): String {
-        val raw = replies ?: message ?: ""
+        // OpenAI Responses API: output[0].content[0].text
+        val fromOutput = output
+            ?.firstOrNull()
+            ?.content
+            ?.firstOrNull()
+            ?.resolvedText
+            ?.takeIf { it.isNotBlank() }
 
-        // Handle doubly-escaped JSON string (e.g., "\"actual content\"")
-        // This happens when backend returns JSON.stringify(JSON.stringify(content))
+        val raw = fromOutput ?: replies ?: message ?: ""
+
+        // Handle doubly-escaped JSON string
         return if (raw.startsWith("\"") && raw.endsWith("\"")) {
             try {
-                // Try to parse as JSON string to unescape
                 kotlinx.serialization.json.Json.decodeFromString<String>(raw)
             } catch (e: Exception) {
-                // If parsing fails, just remove surrounding quotes
                 raw.removeSurrounding("\"")
             }
         } else {
@@ -65,35 +70,29 @@ data class LLMResponse(
     }
 }
 
+@Serializable
+data class OutputItem(
+    val type: String? = null,
+    val content: List<ContentItem>? = null
+)
+
+@Serializable
+data class ContentItem(
+    val type: String? = null,
+    val text: String? = null,
+    @SerialName("output_text") val outputText: String? = null
+) {
+    val resolvedText: String? get() = text ?: outputText
+}
+
 /**
  * LLM Service interface for chat operations
  */
 interface LLMService {
-    /**
-     * Send a chat message and receive a response
-     */
     suspend fun chat(message: String): Result<String>
-
-    /**
-     * Send a chat message with file attachments
-     * Requires SSO authentication for file upload
-     */
     suspend fun chatWithFiles(message: String, files: List<FileAttachment>): Result<String>
-
-    /**
-     * Send a chat message with streaming response
-     * (If supported by the API)
-     */
     fun chatStream(message: String): Flow<String>
-
-    /**
-     * Get the current provider
-     */
     val provider: LLMProvider
-
-    /**
-     * Change the provider
-     */
     fun setProvider(provider: LLMProvider)
 }
 

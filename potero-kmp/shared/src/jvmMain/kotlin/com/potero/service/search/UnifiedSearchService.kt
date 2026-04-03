@@ -33,6 +33,7 @@ class UnifiedSearchService(
 
         // Hybrid search timeout per API
         private const val API_TIMEOUT_MS = 5000L
+        private const val DBLP_TIMEOUT_MS = 10000L
 
         // Source priority for metadata selection when deduplicating
         private val SOURCE_PRIORITY = listOf(
@@ -191,7 +192,7 @@ class UnifiedSearchService(
             async {
                 if (apiStatusProvider.isDBLPEnabled()) {
                     try {
-                        withTimeout(API_TIMEOUT_MS) {
+                        withTimeout(DBLP_TIMEOUT_MS) {
                             dblpResolver.search(query, limit)
                         }
                     } catch (e: Exception) {

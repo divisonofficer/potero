@@ -763,6 +763,10 @@ class ApiClient {
 		return this.request('GET', `/papers/${paperId}/narratives`);
 	}
 
+	async getQuickSummary(paperId: string): Promise<ApiResponse<QuickSummary>> {
+		return this.request('GET', `/papers/${paperId}/quick-summary`);
+	}
+
 	async getNarrative(
 		paperId: string,
 		style: NarrativeStyle,
@@ -1466,6 +1470,13 @@ export interface NarrativeConceptExplanation {
  * Note: Backend returns style as uppercase string (BLOG, NEWS, REDDIT)
  * and language as code (ko, en)
  */
+export interface QuickSummary {
+	paperId: string;
+	title: string;
+	summary: string;
+	estimatedReadTime: number;
+}
+
 export interface Narrative {
 	id: string;
 	paperId: string;
